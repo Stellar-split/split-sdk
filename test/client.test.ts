@@ -7,6 +7,7 @@ import {
   isExpired,
   truncateAddress,
 } from "../src/utils.js";
+import { TxQueue } from "../src/queue.js";
 
 describe("formatAmount", () => {
   it("formats whole units", () => {
@@ -96,5 +97,12 @@ describe("truncateAddress", () => {
     const addr = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN";
     const result = truncateAddress(addr, 6);
     expect(result).toBe("GAAZI4...KOCCWN");
+  });
+});
+
+describe("TxQueue", () => {
+  it("exports TxQueue class", () => {
+    // Type-only test - verifies TxQueue is exported
+    expect(typeof TxQueue).toBe("function");
   });
 });
