@@ -58,3 +58,15 @@ export interface PayParams {
   /** Amount to pay in stroops. */
   amount: bigint;
 }
+
+/** RPC endpoint health status. */
+export interface RPCHealth {
+  /** Health status: 'ok', 'degraded', or 'down'. */
+  status: "ok" | "degraded" | "down";
+  /** Round-trip latency in milliseconds. */
+  latencyMs: number;
+  /** Latest ledger block height. */
+  blockHeight: number;
+  /** Timestamp when health was checked. */
+  timestamp: number;
+}

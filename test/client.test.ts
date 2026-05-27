@@ -98,3 +98,42 @@ describe("truncateAddress", () => {
     expect(result).toBe("GAAZI4...KOCCWN");
   });
 });
+
+describe("checkRPCHealth", () => {
+  it("returns health status with ok status", async () => {
+    const { checkRPCHealth } = await import("../src/health.js");
+    const mockServer = {
+      getLatestLedger: async () => ({ sequence: 12345 }),
+    };
+    const health = await checkRPCHealth(mockServer as any);
+    expect(health.status).toBe("ok");
+    expect(health.blockHeight).toBe(12345);
+    expect(health.latencyMs).toBeGreaterThanOrEqual(0);
+    expect(health.timestamp).toBeGreaterThan(0);
+  });
+
+  it("returns degraded status when latency > 2000ms", async () => {
+    const { checkRPCHealth } = await import("../src/health.js");
+    const mockServer = {
+      getLatestLedger: async () => {
+        await new Promise((r) => setTimeout(r, 2100));
+        return { sequence: 12345 };
+      },
+    };
+    const health = await checkRPCHealth(mockServer as any);
+    expect(health.status).toBe("degraded");
+    expect(health.latencyMs).toBeGreaterThan(2000);
+  });
+
+  it("returns down status when RPC throws", async () => {
+    const { checkRPCHealth } = await import("../src/health.js");
+    const mockServer = {
+      getLatestLedger: async () => {
+        throw new Error("Connection failed");
+      },
+    };
+    const health = await checkRPCHealth(mockServer as any);
+    expect(health.status).toBe("down");
+    expect(health.blockHeight).toBe(0);
+  });
+});

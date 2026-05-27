@@ -14,6 +14,7 @@ import {
   xdr,
 } from "@stellar/stellar-sdk";
 import { signTransaction } from "./wallet.js";
+import { checkRPCHealth } from "./health.js";
 import type {
   CreateInvoiceParams,
   Invoice,
@@ -21,6 +22,7 @@ import type {
   Payment,
   PayParams,
   Recipient,
+  RPCHealth,
 } from "./types.js";
 
 /** Configuration for StellarSplitClient. */
@@ -139,6 +141,13 @@ export class StellarSplitClient {
   async getPayments(invoiceId: string): Promise<Payment[]> {
     const invoice = await this.getInvoice(invoiceId);
     return invoice.payments;
+  }
+
+  /**
+   * Check the health of the RPC endpoint.
+   */
+  async checkRPCHealth(): Promise<RPCHealth> {
+    return checkRPCHealth(this.server);
   }
 
   // ---------------------------------------------------------------------------
