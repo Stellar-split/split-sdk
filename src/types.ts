@@ -235,3 +235,18 @@ export interface TokenInfo {
   /** Number of decimal places. */
   decimals: number;
 }
+
+/** Event fired when an invoice is expiring or has expired. */
+export interface ExpiryEvent {
+  /** Invoice ID. */
+  invoiceId: string;
+  /** Unix timestamp deadline (seconds). */
+  deadline: number;
+  /** Seconds remaining until deadline. */
+  secondsRemaining: number;
+  /** True if deadline has passed. */
+  expired: boolean;
+}
+
+/** Callback function for expiry events. */
+export type ExpiryCallback = (event: ExpiryEvent) => void;

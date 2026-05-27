@@ -27,6 +27,8 @@ export { calculateFee } from "./fee.js";
 
 export { resolveToken } from "./token.js";
 
+export { watchExpiry } from "./watcher.js";
+
 export {
   formatAmount,
   parseAmount,
@@ -79,6 +81,8 @@ export type {
   SDKHealth,
   FeeBreakdown,
   TokenInfo,
+  ExpiryEvent,
+  ExpiryCallback,
 } from "./types.js";
 export { InvalidTransitionError } from "./types.js";
 
