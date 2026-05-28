@@ -1,4 +1,5 @@
 import TransportWebHID from "@ledgerhq/hw-transport-webhid";
+import type Transport from "@ledgerhq/hw-transport";
 import Str from "@ledgerhq/hw-app-str";
 import type { WalletAdapter } from "../types.js";
 
@@ -35,7 +36,7 @@ export class LedgerAdapter implements WalletAdapter {
     }
   }
 
-  private async openTransport(): Promise<InstanceType<typeof TransportWebHID>> {
+  private async openTransport(): Promise<Transport> {
     try {
       return await TransportWebHID.create();
     } catch {

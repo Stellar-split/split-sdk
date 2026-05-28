@@ -1,5 +1,63 @@
+/** Result of a dispute-related transaction. */
+export interface DisputeResult {
+  disputeId: string;
+  txHash: string;
+}
+
+/** Error thrown when an invoice is not found. */
+export class InvoiceNotFoundError extends Error {
+  constructor(invoiceId: string) {
+    super(`Invoice not found: ${invoiceId}`);
+    this.name = "InvoiceNotFoundError";
+  }
+}
+
+/** Result of an approval check. */
+export interface ApprovalResult {
+  approved: boolean;
+  reason?: string;
+}
+
+/** Result from calculateVesting. */
+export interface VestingSchedule {
+  cliffDate: number;
+  fullyVestedDate: number;
+  claimableAt: (timestamp: number) => bigint;
+}
+
+/** Parameters for an arbiter's vote on a dispute. */
+export interface ArbiterVote {
+  invoiceId: string;
+  arbiter: string;
+  approve: boolean;
+}
 /** Lifecycle status of an invoice. */
-export type InvoiceStatus = "Pending" | "Released" | "Refunded";
+export type InvoiceStatus = "Pending" | "Released" | "Refunded" | "Cancelled";
+
+/** Error thrown for invalid invoice state transitions. */
+export class InvalidTransitionError extends Error {
+  constructor(from: InvoiceStatus, to: InvoiceStatus) {
+    super(`Invalid transition from "${from}" to "${to}"`);
+    this.name = "InvalidTransitionError";
+  }
+}
+
+/** Result of comparing two invoices. */
+export interface InvoiceDiff {
+  changed: Array<{
+    field: string;
+    from: unknown;
+    to: unknown;
+  }>;
+}
+
+/** Aggregated SDK health metrics. */
+export interface SDKHealth {
+  rpcLatency: number;
+  cacheHitRate: number;
+  errorRate: number;
+  uptimeMs: number;
+}
 
 /** A single payment made toward an invoice. */
 export interface Payment {

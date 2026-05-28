@@ -561,5 +561,84 @@ describe("simulatePay", () => {
     await expect(
       client.simulatePay({ payer: PAYER_ADDR, invoiceId: "1", amount: 1000n })
     ).rejects.toThrow("Simulation error");
+import { Deduplicator } from "../src/dedup.js";
+
+describe("Deduplicator", () => {
+  it("returns the same promise for concurrent calls with the same key", () => {
+    const dedup = new Deduplicator<string>();
+    let callCount = 0;
+    const fn = () => {
+      callCount++;
+      return new Promise<string>((resolve) => setTimeout(() => resolve("ok"), 10));
+    };
+
+    const p1 = dedup.dedupe("1", fn);
+    const p2 = dedup.dedupe("1", fn);
+
+    expect(p1).toBe(p2);
+    expect(callCount).toBe(1);
+  });
+
+  it("clears the map after the promise settles", async () => {
+    const dedup = new Deduplicator<string>();
+    let callCount = 0;
+    const fn = () => {
+      callCount++;
+      return Promise.resolve("ok");
+    };
+
+    await dedup.dedupe("1", fn);
+    await dedup.dedupe("1", fn);
+
+    expect(callCount).toBe(2);
+  });
+
+  it("clears the map after rejection", async () => {
+    const dedup = new Deduplicator<string>();
+    let callCount = 0;
+    const fn = () => {
+      callCount++;
+      return Promise.reject(new Error("fail"));
+    };
+
+    await dedup.dedupe("1", fn).catch(() => {});
+    await dedup.dedupe("1", fn).catch(() => {});
+
+    expect(callCount).toBe(2);
+  });
+
+  it("deduplicates getInvoice() on StellarSplitClient", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://soroban-testnet.stellar.org",
+      networkPassphrase: "Test SDF Network ; September 2015",
+      contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+    });
+
+    let rpcCallCount = 0;
+    const fakeInvoice = {
+      id: "42",
+      creator: "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN",
+      recipients: [],
+      token: "USDC",
+      deadline: 9999999999,
+      funded: 0n,
+      status: "Pending" as const,
+      payments: [],
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(client as any, "_fetchInvoice").mockImplementation(async () => {
+      rpcCallCount++;
+      await new Promise((r) => setTimeout(r, 10));
+      return fakeInvoice;
+    });
+
+    const [inv1, inv2] = await Promise.all([
+      client.getInvoice("42"),
+      client.getInvoice("42"),
+    ]);
+
+    expect(rpcCallCount).toBe(1);
+    expect(inv1).toBe(inv2);
   });
 });
