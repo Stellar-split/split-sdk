@@ -16,6 +16,7 @@ import {
 } from "@stellar/stellar-sdk";
 import { signTransaction } from "./wallet.js";
 import { telemetry } from "./telemetry.js";
+import type { WalletAdapter } from "./adapters/types.js";
 import type {
   ApprovalResult,
   CreateInvoiceParams,
@@ -43,6 +44,8 @@ export interface StellarSplitClientConfig {
   };
   /** Fee multiplier applied when a transaction is stuck (default: 2). */
   feeBumpMultiplier?: number;
+  /** Optional wallet adapter for signing (e.g. WalletConnect). Defaults to Freighter. */
+  adapter?: WalletAdapter;
 }
 
 /** Result of a transaction submission. */
@@ -545,10 +548,9 @@ export class StellarSplitClient {
     }
 
     const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
-    const signedXdr = await signTransaction(
-      preparedTx.toXDR(),
-      this.config.networkPassphrase
-    );
+    const signedXdr = await (this.config.adapter
+      ? this.config.adapter.signTransaction(preparedTx.toXDR(), this.config.networkPassphrase)
+      : signTransaction(preparedTx.toXDR(), this.config.networkPassphrase));
 
     const sendResult = await this.server.sendTransaction(
       TransactionBuilder.fromXDR(signedXdr, this.config.networkPassphrase)
@@ -584,10 +586,9 @@ export class StellarSplitClient {
         innerTx,
         this.config.networkPassphrase
       );
-      const signedBumpXdr = await signTransaction(
-        feeBumpTx.toXDR(),
-        this.config.networkPassphrase
-      );
+      const signedBumpXdr = await (this.config.adapter
+        ? this.config.adapter.signTransaction(feeBumpTx.toXDR(), this.config.networkPassphrase)
+        : signTransaction(feeBumpTx.toXDR(), this.config.networkPassphrase));
       const bumpSendResult = await this.server.sendTransaction(
         TransactionBuilder.fromXDR(signedBumpXdr, this.config.networkPassphrase)
       );

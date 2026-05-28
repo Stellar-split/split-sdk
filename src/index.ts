@@ -20,6 +20,9 @@ export { pollUSDCBalance, initPoller } from "./poller.js";
 
 export { telemetry } from "./telemetry.js";
 
+export type { WalletAdapter } from "./adapters/types.js";
+export { WalletConnectAdapter } from "./adapters/walletconnect.js";
+
 export type {
   Invoice,
   Payment,
