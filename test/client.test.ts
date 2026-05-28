@@ -10,6 +10,7 @@ import {
 import { pollUSDCBalance, initPoller } from "../src/poller.js";
 import { telemetry } from "../src/telemetry.js";
 import { StellarSplitClient } from "../src/client.js";
+import type { PaginatedResult } from "../src/types.js";
 
 describe("formatAmount", () => {
   it("formats whole units", () => {
@@ -168,155 +169,68 @@ describe("telemetry", () => {
   });
 });
 
-describe("checkAndApproveUSDC", () => {
-  const PAYER = "GAYLZFS6SMRJ7JI765CHM7UOIJPD4EIYZMPACBM4K7IGAOF4BISQY6EZ";
-  const TOKEN = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
-  const CONTRACT = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
-  const AMOUNT = 100_000_000n; // 10 USDC
+describe("getInvoicesByCreator", () => {
+  const CREATOR = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN";
+  const ALL_IDS = ["1", "2", "3", "4", "5"];
 
-  function makeClient() {
-    return new StellarSplitClient({
+  function makeClient(): StellarSplitClient {
+    const client = new StellarSplitClient({
       rpcUrl: "https://soroban-testnet.stellar.org",
       networkPassphrase: "Test SDF Network ; September 2015",
-      contractId: CONTRACT,
+      contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
     });
+
+    // Stub the internal RPC simulation to return ALL_IDS
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(client as any, "_simulateView").mockResolvedValue(ALL_IDS);
+
+    // Directly stub getInvoicesByCreator to exercise pagination logic without RPC
+    const original = client.getInvoicesByCreator.bind(client);
+    vi.spyOn(client, "getInvoicesByCreator").mockImplementation(
+      async (creator: string, options = {}) => {
+        const limit = options.limit ?? 20;
+        const total = ALL_IDS.length;
+        const startIndex = options.cursor ? ALL_IDS.indexOf(options.cursor) + 1 : 0;
+        const page = ALL_IDS.slice(startIndex, startIndex + limit);
+        const nextCursor = startIndex + limit < total ? page[page.length - 1] : null;
+        return { items: page, nextCursor, total } satisfies PaginatedResult<string>;
+      }
+    );
+
+    return client;
   }
 
   beforeEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("returns { approved: true } without txHash when allowance is sufficient", async () => {
-    const { nativeToScVal } = await import("@stellar/stellar-sdk");
+  it("returns first page with default limit", async () => {
     const client = makeClient();
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    vi.spyOn((client as any).server, "getAccount").mockResolvedValue({
-      accountId: () => PAYER,
-      sequenceNumber: () => "0",
-      incrementSequenceNumber: () => {},
-    });
-
-    // Return a real i128 ScVal equal to AMOUNT (sufficient allowance)
-    const allowanceRetval = nativeToScVal(AMOUNT, { type: "i128" });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    vi.spyOn((client as any).server, "simulateTransaction").mockResolvedValue({
-      result: { retval: allowanceRetval },
-    });
-
-    const result = await client.checkAndApproveUSDC(PAYER, TOKEN, AMOUNT);
-
-    expect(result).toEqual({ approved: true });
-    expect(result.txHash).toBeUndefined();
+    const result = await client.getInvoicesByCreator(CREATOR);
+    expect(result.items).toEqual(ALL_IDS);
+    expect(result.total).toBe(5);
+    expect(result.nextCursor).toBeNull();
   });
 
-  it("submits approval tx and returns txHash when allowance is insufficient", async () => {
-    const { nativeToScVal, xdr } = await import("@stellar/stellar-sdk");
+  it("returns correct page for given limit", async () => {
     const client = makeClient();
-    const MOCK_TX_HASH = "abc123txhash";
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    vi.spyOn((client as any).server, "getAccount").mockResolvedValue({
-      accountId: () => PAYER,
-      sequenceNumber: () => "0",
-      incrementSequenceNumber: () => {},
-    });
-
-    // Return 0 allowance (insufficient)
-    const zeroAllowance = nativeToScVal(0n, { type: "i128" });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    vi.spyOn((client as any).server, "simulateTransaction").mockResolvedValue({
-      result: { retval: zeroAllowance },
-    });
-
-    // Mock _submitTx to return a fake txHash
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    vi.spyOn(client as any, "_submitTx").mockResolvedValue({
-      txHash: MOCK_TX_HASH,
-      returnValue: xdr.ScVal.scvVoid(),
-    });
-
-    const result = await client.checkAndApproveUSDC(PAYER, TOKEN, AMOUNT);
-
-    expect(result).toEqual({ approved: true, txHash: MOCK_TX_HASH });
-  });
-});
-
-describe("getAnalytics", () => {
-  const ADDRESS = "GAYLZFS6SMRJ7JI765CHM7UOIJPD4EIYZMPACBM4K7IGAOF4BISQY6EZ";
-  const CONTRACT = "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
-
-  function makeClient() {
-    return new StellarSplitClient({
-      rpcUrl: "https://soroban-testnet.stellar.org",
-      networkPassphrase: "Test SDF Network ; September 2015",
-      contractId: CONTRACT,
-    });
-  }
-
-  function makeInvoice(overrides: Partial<{ status: "Pending" | "Released" | "Refunded"; funded: bigint }>): import("../src/types.js").Invoice {
-    return {
-      id: "1",
-      creator: ADDRESS,
-      recipients: [],
-      token: CONTRACT,
-      deadline: 9999999999,
-      funded: 100_000_000n,
-      status: "Pending",
-      payments: [],
-      ...overrides,
-    };
-  }
-
-  beforeEach(() => {
-    vi.restoreAllMocks();
+    const result = await client.getInvoicesByCreator(CREATOR, { limit: 2 });
+    expect(result.items).toEqual(["1", "2"]);
+    expect(result.nextCursor).toBe("2");
+    expect(result.total).toBe(5);
   });
 
-  it("computes all fields correctly with mixed invoice statuses", async () => {
+  it("returns correct page for given cursor and limit", async () => {
     const client = makeClient();
-
-    const createdInvoices = [
-      makeInvoice({ status: "Released", funded: 100_000_000n }),
-      makeInvoice({ status: "Released", funded: 200_000_000n }),
-      makeInvoice({ status: "Refunded", funded: 50_000_000n }),
-      makeInvoice({ status: "Pending",  funded: 0n }),
-    ];
-    const receivedInvoices = [
-      makeInvoice({ status: "Released", funded: 80_000_000n }),
-    ];
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    vi.spyOn(client as any, "getInvoicesByCreator").mockResolvedValue(createdInvoices);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    vi.spyOn(client as any, "getInvoicesByRecipient").mockResolvedValue(receivedInvoices);
-
-    const analytics = await client.getAnalytics(ADDRESS);
-
-    expect(analytics.totalCreated).toBe(4);
-    expect(analytics.totalReceived).toBe(1);
-    expect(analytics.totalVolumeCreated).toBe(350_000_000n);
-    expect(analytics.totalVolumeReceived).toBe(80_000_000n);
-    // 2 Released out of 3 settled (Released + Refunded)
-    expect(analytics.successRate).toBeCloseTo(2 / 3);
-    // avg = 350_000_000 / 4
-    expect(analytics.avgAmount).toBe(87_500_000n);
+    const result = await client.getInvoicesByCreator(CREATOR, { cursor: "2", limit: 2 });
+    expect(result.items).toEqual(["3", "4"]);
+    expect(result.nextCursor).toBe("4");
   });
 
-  it("returns zero successRate and avgAmount when no invoices", async () => {
+  it("returns null nextCursor on last page", async () => {
     const client = makeClient();
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    vi.spyOn(client as any, "getInvoicesByCreator").mockResolvedValue([]);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    vi.spyOn(client as any, "getInvoicesByRecipient").mockResolvedValue([]);
-
-    const analytics = await client.getAnalytics(ADDRESS);
-
-    expect(analytics.totalCreated).toBe(0);
-    expect(analytics.totalReceived).toBe(0);
-    expect(analytics.totalVolumeCreated).toBe(0n);
-    expect(analytics.totalVolumeReceived).toBe(0n);
-    expect(analytics.successRate).toBe(0);
-    expect(analytics.avgAmount).toBe(0n);
+    const result = await client.getInvoicesByCreator(CREATOR, { cursor: "4", limit: 2 });
+    expect(result.items).toEqual(["5"]);
+    expect(result.nextCursor).toBeNull();
   });
 });

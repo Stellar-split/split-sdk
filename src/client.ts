@@ -16,17 +16,20 @@ import {
 } from "@stellar/stellar-sdk";
 import { signTransaction } from "./wallet.js";
 import { telemetry } from "./telemetry.js";
-import type { WalletAdapter } from "./adapters/types.js";
+import { checkRPCHealth } from "./health.js";
 import type {
   ApprovalResult,
   CreateInvoiceParams,
   Invoice,
-  InvoiceAnalytics,
+  InvoiceGroup,
   InvoiceStatus,
+  PaginatedResult,
+  PaginationOptions,
   Payment,
   PayParams,
   Recipient,
   InvoiceTemplate,
+  RPCHealth,
 } from "./types.js";
 
 /** Configuration for StellarSplitClient. */
@@ -48,10 +51,34 @@ export interface StellarSplitClientConfig {
   adapter?: WalletAdapter;
 }
 
+/** Network configuration. */
+export interface NetworkConfig {
+  /** Soroban RPC endpoint URL. */
+  rpcUrl: string;
+  /** Stellar network passphrase. */
+  networkPassphrase: string;
+  /** Deployed StellarSplit contract ID. */
+  contractId: string;
+}
+
 /** Result of a transaction submission. */
 export interface TxResult {
   txHash: string;
 }
+
+/** Built-in network presets. */
+const NETWORKS: Record<string, NetworkConfig> = {
+  testnet: {
+    rpcUrl: "https://soroban-testnet.stellar.org",
+    networkPassphrase: "Test SDF Network ; September 2015",
+    contractId: "",
+  },
+  mainnet: {
+    rpcUrl: "https://soroban-mainnet.stellar.org",
+    networkPassphrase: "Public Global Stellar Network ; September 2015",
+    contractId: "",
+  },
+};
 
 export class StellarSplitClient {
   private server: SorobanRpc.Server;
@@ -135,61 +162,62 @@ export class StellarSplitClient {
   }
 
   /**
-   * Check the payer's USDC allowance for the contract and submit an approve
-   * transaction if the allowance is insufficient.
+   * Create multiple invoices in a single transaction.
    *
-   * @param payer   - Stellar address of the payer.
-   * @param tokenId - USDC SAC contract address.
-   * @param amount  - Required allowance in stroops.
-   * @returns `{ approved: true }` when allowance is already sufficient, or
-   *          `{ approved: true, txHash }` after submitting an approval tx.
+   * @param params - Array of invoice creation parameters (1-5 items)
+   * @returns All created invoice IDs and the transaction hash
    */
-  async checkAndApproveUSDC(
-    payer: string,
-    tokenId: string,
-    amount: bigint
-  ): Promise<ApprovalResult> {
-    const tokenContract = new Contract(tokenId);
-
-    // Simulate allowance(payer, contractId) on the token SAC
-    const allowanceOp = tokenContract.call(
-      "allowance",
-      new Address(payer).toScVal(),
-      nativeToScVal(this.config.contractId, { type: "address" })
-    );
-
-    const account = await this.server.getAccount(payer);
-    const simTx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: this.config.networkPassphrase,
-    })
-      .addOperation(allowanceOp)
-      .setTimeout(30)
-      .build();
-
-    const simResult = await this.server.simulateTransaction(simTx);
-    if (SorobanRpc.Api.isSimulationError(simResult)) {
-      throw new Error(`Allowance simulation failed: ${simResult.error}`);
+  async batchCreateInvoices(
+    params: CreateInvoiceParams[]
+  ): Promise<{ invoiceIds: string[]; txHash: string }> {
+    if (params.length === 0 || params.length > 5) {
+      throw new Error("Batch size must be between 1 and 5 items");
     }
 
-    const retval = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
-    const allowance: bigint = retval ? BigInt(scValToNative(retval) as string | number) : 0n;
+    const invoiceParams = params.map((p) => {
+      const recipientAddresses = p.recipients.map((r) =>
+        nativeToScVal(r.address, { type: "address" })
+      );
+      const recipientAmounts = p.recipients.map((r) =>
+        nativeToScVal(r.amount, { type: "i128" })
+      );
 
-    if (allowance >= amount) {
-      return { approved: true };
-    }
+      const mapEntries: xdr.ScMapEntry[] = [
+        new xdr.ScMapEntry({
+          key: nativeToScVal("creator", { type: "symbol" }) as xdr.ScVal,
+          val: nativeToScVal(p.creator, { type: "address" }) as xdr.ScVal,
+        }),
+        new xdr.ScMapEntry({
+          key: nativeToScVal("recipients", { type: "symbol" }) as xdr.ScVal,
+          val: xdr.ScVal.scvVec(recipientAddresses),
+        }),
+        new xdr.ScMapEntry({
+          key: nativeToScVal("amounts", { type: "symbol" }) as xdr.ScVal,
+          val: xdr.ScVal.scvVec(recipientAmounts),
+        }),
+        new xdr.ScMapEntry({
+          key: nativeToScVal("token", { type: "symbol" }) as xdr.ScVal,
+          val: nativeToScVal(p.token, { type: "address" }) as xdr.ScVal,
+        }),
+        new xdr.ScMapEntry({
+          key: nativeToScVal("deadline", { type: "symbol" }) as xdr.ScVal,
+          val: nativeToScVal(p.deadline, { type: "u64" }) as xdr.ScVal,
+        }),
+      ];
 
-    // Submit approve(payer, contractId, amount)
-    const approveOp = tokenContract.call(
-      "approve",
-      new Address(payer).toScVal(),
-      nativeToScVal(this.config.contractId, { type: "address" }),
-      nativeToScVal(amount, { type: "i128" }),
-      nativeToScVal(0, { type: "u32" }) // expiration_ledger: 0 means no expiry
+      return xdr.ScVal.scvMap(mapEntries);
+    });
+
+    const operation = this.contract.call(
+      "create_batch",
+      xdr.ScVal.scvVec(invoiceParams)
     );
 
-    const result = await this._submitTx(payer, approveOp);
-    return { approved: true, txHash: result.txHash };
+    const result = await this._submitTx(params[0].creator, operation);
+    const invoiceIds = (scValToNative(result.returnValue) as (string | number)[]).map(
+      (id) => id.toString()
+    );
+    return { invoiceIds, txHash: result.txHash };
   }
 
   /**
@@ -359,7 +387,8 @@ export class StellarSplitClient {
   async getRecurringInvoices(creator: string): Promise<Invoice[]> {
     const startTime = Date.now();
     try {
-      const invoices = await this.getInvoicesByCreator(creator);
+      const page = await this.getInvoicesByCreator(creator);
+      const invoices = await Promise.all(page.items.map((id) => this.getInvoice(id)));
       const recurring = invoices.filter((inv) => inv.recurring === true);
       telemetry.recordMethod("getRecurringInvoices", true, Date.now() - startTime);
       return recurring;
@@ -423,37 +452,18 @@ export class StellarSplitClient {
   }
 
   /**
-   * Get aggregate analytics for an address (as creator and recipient).
+   * Get invoices created by an address, with cursor-based pagination.
+   *
+   * @param creator - Stellar address of the creator.
+   * @param options - Optional pagination options (cursor, limit). Default page size is 20.
+   * @returns A page of invoice IDs with a nextCursor for subsequent pages.
    */
-  async getAnalytics(address: string): Promise<InvoiceAnalytics> {
-    const [created, received] = await Promise.all([
-      this.getInvoicesByCreator(address),
-      this.getInvoicesByRecipient(address),
-    ]);
+  async getInvoicesByCreator(
+    creator: string,
+    options: PaginationOptions = {}
+  ): Promise<PaginatedResult<string>> {
+    const limit = options.limit ?? 20;
 
-    const totalVolumeCreated = created.reduce((sum, inv) => sum + inv.funded, 0n);
-    const totalVolumeReceived = received.reduce((sum, inv) => sum + inv.funded, 0n);
-
-    const settled = created.filter((inv) => inv.status === "Released" || inv.status === "Refunded");
-    const released = settled.filter((inv) => inv.status === "Released").length;
-    const successRate = settled.length > 0 ? released / settled.length : 0;
-
-    const avgAmount = created.length > 0 ? totalVolumeCreated / BigInt(created.length) : 0n;
-
-    return {
-      totalCreated: created.length,
-      totalReceived: received.length,
-      totalVolumeCreated,
-      totalVolumeReceived,
-      successRate,
-      avgAmount,
-    };
-  }
-
-  /**
-   * Get all invoices created by an address.
-   */
-  private async getInvoicesByCreator(creator: string): Promise<Invoice[]> {
     const operation = this.contract.call(
       "get_invoices_by_creator",
       nativeToScVal(creator, { type: "address" })
@@ -479,12 +489,128 @@ export class StellarSplitClient {
     const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
     if (!returnVal) throw new Error("No return value from get_invoices_by_creator");
 
-    const invoices = scValToNative(returnVal);
-    if (!Array.isArray(invoices)) return [];
+    const raw = scValToNative(returnVal);
+    const allIds: string[] = Array.isArray(raw)
+      ? raw.map((id: unknown) => String(id))
+      : [];
 
-    return invoices.map((inv: Record<string, unknown>, idx: number) =>
-      this._parseInvoice(idx.toString(), inv)
+    const total = allIds.length;
+    const startIndex = options.cursor
+      ? allIds.indexOf(options.cursor) + 1
+      : 0;
+    const page = allIds.slice(startIndex, startIndex + limit);
+    const nextCursor = startIndex + limit < total ? page[page.length - 1] : null;
+
+    return { items: page, nextCursor, total };
+  }
+
+  /**
+   * Check the health of the RPC endpoint.
+   */
+  async checkRPCHealth(): Promise<RPCHealth> {
+    return checkRPCHealth(this.server);
+  }
+
+  /**
+   * Create a group of linked invoices.
+   *
+   * @returns The new group ID and transaction hash.
+   */
+  async createGroup(
+    creator: string,
+    invoiceIds: string[]
+  ): Promise<{ groupId: string; txHash: string }> {
+    const invoiceIdsBigInt = invoiceIds.map((id) =>
+      nativeToScVal(BigInt(id), { type: "u64" })
     );
+
+    const operation = this.contract.call(
+      "create_invoice_group",
+      nativeToScVal(creator, { type: "address" }),
+      xdr.ScVal.scvVec(invoiceIdsBigInt)
+    );
+
+    const result = await this._submitTx(creator, operation);
+    const groupId = scValToNative(result.returnValue).toString();
+    return { groupId, txHash: result.txHash };
+  }
+
+  /**
+   * Get the status of an invoice group.
+   */
+  async getGroupStatus(groupId: string): Promise<InvoiceGroup> {
+    const operation = this.contract.call(
+      "get_invoice_group",
+      nativeToScVal(BigInt(groupId), { type: "u64" })
+    );
+
+    const account = await this.server.getAccount(this.config.contractId).catch(() => null);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sourceAccount = account ?? ({ accountId: () => this.config.contractId, sequenceNumber: () => "0", incrementSequenceNumber: () => {} } as any);
+
+    const tx = new TransactionBuilder(sourceAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: this.config.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(30)
+      .build();
+
+    const simResult = await this.server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(simResult)) {
+      throw new Error(`Simulation failed: ${simResult.error}`);
+    }
+
+    const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
+    if (!returnVal) throw new Error("No return value from get_invoice_group");
+
+    const raw = scValToNative(returnVal) as Record<string, unknown>;
+    return {
+      groupId,
+      invoiceIds: (raw.invoiceIds as (string | number)[]).map((id) => String(id)),
+      allFunded: Boolean(raw.allFunded),
+    };
+  }
+
+  /**
+   * Release all invoices in a group.
+   *
+   * @returns The transaction hash.
+   */
+  async releaseGroup(creator: string, groupId: string): Promise<TxResult> {
+    const operation = this.contract.call(
+      "release_invoice_group",
+      nativeToScVal(creator, { type: "address" }),
+      nativeToScVal(BigInt(groupId), { type: "u64" })
+    );
+
+    const result = await this._submitTx(creator, operation);
+    return { txHash: result.txHash };
+  }
+
+  /**
+   * Switch to a different network.
+   *
+   * @param network - Network name ('testnet', 'mainnet') or custom NetworkConfig
+   */
+  switchNetwork(network: string | NetworkConfig): void {
+    let config: NetworkConfig;
+
+    if (typeof network === "string") {
+      const preset = NETWORKS[network];
+      if (!preset) {
+        throw new Error(`Unknown network: ${network}`);
+      }
+      config = { ...preset, contractId: this.config.contractId };
+    } else {
+      config = network;
+    }
+
+    this.config = config;
+    this.server = new SorobanRpc.Server(config.rpcUrl, {
+      allowHttp: config.rpcUrl.startsWith("http://"),
+    });
+    this.contract = new Contract(config.contractId);
   }
 
   /**

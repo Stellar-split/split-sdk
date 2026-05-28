@@ -51,6 +51,20 @@ export interface CreateInvoiceParams {
   deadline: number;
 }
 
+/** Generic hardware/software wallet adapter interface. */
+export interface WalletAdapter {
+  /** Return the Stellar public key (G... address) from the device. */
+  getAddress(): Promise<string>;
+  /**
+   * Sign a Stellar transaction XDR string.
+   *
+   * @param xdr     - Base64-encoded transaction XDR.
+   * @param network - Network passphrase.
+   * @returns Signed transaction XDR.
+   */
+  signTransaction(xdr: string, network: string): Promise<string>;
+}
+
 /** Parameters for paying toward an invoice. */
 export interface PayParams {
   /** Stellar address of the payer (must sign). */
@@ -61,28 +75,26 @@ export interface PayParams {
   amount: bigint;
 }
 
-/** Result of a USDC approval check/submission. */
-export interface ApprovalResult {
-  /** Whether the allowance was already sufficient (no tx) or approval was submitted. */
-  approved: boolean;
-  /** Transaction hash, present only when an approval tx was submitted. */
-  txHash?: string;
+/** Options for paginated queries. */
+export interface PaginationOptions {
+  /** Cursor (invoice ID) to start after. */
+  cursor?: string;
+  /** Maximum number of items to return. Defaults to 20. */
+  limit?: number;
 }
 
-/** Aggregate analytics for an address across all invoices. */
-export interface InvoiceAnalytics {
-  /** Number of invoices created by this address. */
-  totalCreated: number;
-  /** Number of invoices where this address is a recipient. */
-  totalReceived: number;
-  /** Total funded volume across created invoices in stroops. */
-  totalVolumeCreated: bigint;
-  /** Total funded volume across received invoices in stroops. */
-  totalVolumeReceived: bigint;
-  /** Ratio of Released / (Released + Refunded) across created invoices (0 if none settled). */
-  successRate: number;
-  /** Average funded amount across created invoices in stroops (0n if none). */
-  avgAmount: bigint;
+/** A page of results with a cursor for the next page. */
+export interface PaginatedResult<T> {
+  items: T[];
+  nextCursor: string | null;
+  total: number;
+}
+
+/** A group of linked invoices. */
+export interface InvoiceGroup {
+  groupId: string;
+  invoiceIds: string[];
+  allFunded: boolean;
 }
 
 /** An invoice template for reuse. */
@@ -93,4 +105,19 @@ export interface InvoiceTemplate {
   recipients: Recipient[];
   /** USDC token contract address. */
   token: string;
+}
+
+/** Health status of the RPC endpoint. */
+export interface RPCHealth {
+  status: "ok" | "degraded" | "down";
+  latencyMs: number;
+  blockHeight: number;
+  timestamp: number;
+}
+
+/** Event emitted when a contract WASM upgrade is detected. */
+export interface UpgradeEvent {
+  previousHash: string;
+  newHash: string;
+  detectedAt: number;
 }
