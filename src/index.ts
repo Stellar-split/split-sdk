@@ -3,7 +3,13 @@
  */
 
 export { StellarSplitClient } from "./client.js";
-export type { StellarSplitClientConfig, TxResult } from "./client.js";
+export type { StellarSplitClientConfig, NetworkConfig, TxResult } from "./client.js";
+
+export { TxQueue } from "./queue.js";
+
+export { exportInvoice } from "./export.js";
+
+export { replayEvents } from "./events.js";
 
 export { connectWallet, getPublicKey, signTransaction } from "./wallet.js";
 

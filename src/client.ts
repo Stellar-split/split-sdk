@@ -41,10 +41,34 @@ export interface StellarSplitClientConfig {
   };
 }
 
+/** Network configuration. */
+export interface NetworkConfig {
+  /** Soroban RPC endpoint URL. */
+  rpcUrl: string;
+  /** Stellar network passphrase. */
+  networkPassphrase: string;
+  /** Deployed StellarSplit contract ID. */
+  contractId: string;
+}
+
 /** Result of a transaction submission. */
 export interface TxResult {
   txHash: string;
 }
+
+/** Built-in network presets. */
+const NETWORKS: Record<string, NetworkConfig> = {
+  testnet: {
+    rpcUrl: "https://soroban-testnet.stellar.org",
+    networkPassphrase: "Test SDF Network ; September 2015",
+    contractId: "",
+  },
+  mainnet: {
+    rpcUrl: "https://soroban-mainnet.stellar.org",
+    networkPassphrase: "Public Global Stellar Network ; September 2015",
+    contractId: "",
+  },
+};
 
 export class StellarSplitClient {
   private server: SorobanRpc.Server;
@@ -535,6 +559,31 @@ export class StellarSplitClient {
 
     const result = await this._submitTx(creator, operation);
     return { txHash: result.txHash };
+  }
+
+  /**
+   * Switch to a different network.
+   *
+   * @param network - Network name ('testnet', 'mainnet') or custom NetworkConfig
+   */
+  switchNetwork(network: string | NetworkConfig): void {
+    let config: NetworkConfig;
+
+    if (typeof network === "string") {
+      const preset = NETWORKS[network];
+      if (!preset) {
+        throw new Error(`Unknown network: ${network}`);
+      }
+      config = { ...preset, contractId: this.config.contractId };
+    } else {
+      config = network;
+    }
+
+    this.config = config;
+    this.server = new SorobanRpc.Server(config.rpcUrl, {
+      allowHttp: config.rpcUrl.startsWith("http://"),
+    });
+    this.contract = new Contract(config.contractId);
   }
 
   // ---------------------------------------------------------------------------
