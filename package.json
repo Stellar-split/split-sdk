@@ -22,7 +22,8 @@
     "test": "vitest run test/client.test.ts",
     "test:e2e": "vitest run test/e2e",
     "test:watch": "vitest",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "changelog": "vite-node scripts/changelog.ts"
   },
   "dependencies": {
     "@ledgerhq/hw-app-str": "^6.29.0",
