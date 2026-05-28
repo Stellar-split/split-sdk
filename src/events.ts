@@ -65,7 +65,8 @@ function parseContractEvent(
   const topic = event.topic as unknown;
   if (!Array.isArray(topic) || topic.length === 0) return null;
 
-  const eventType = parseEventType(topic[0] as unknown);
+  const firstTopic: unknown = topic[0];
+  const eventType = parseEventType(firstTopic);
   if (!eventType) return null;
 
   const invoiceId = extractInvoiceId(event);

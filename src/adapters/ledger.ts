@@ -1,4 +1,5 @@
 import TransportWebHID from "@ledgerhq/hw-transport-webhid";
+import Transport from "@ledgerhq/hw-transport";
 import Str from "@ledgerhq/hw-app-str";
 import type { WalletAdapter } from "../types.js";
 
@@ -25,17 +26,19 @@ export class LedgerAdapter implements WalletAdapter {
     const transport = await this.openTransport();
     try {
       const str = new Str(transport);
+      const txBytes = Uint8Array.from(atob(xdr), (c) => c.charCodeAt(0));
       const { signature } = await str.signTransaction(
         this.path,
-        Buffer.from(xdr, "base64")
+        txBytes as unknown as Buffer
       );
-      return Buffer.from(signature).toString("base64");
+      const sigBytes = signature as unknown as Uint8Array;
+      return btoa(String.fromCharCode(...sigBytes));
     } finally {
       await transport.close();
     }
   }
 
-  private async openTransport(): Promise<InstanceType<typeof TransportWebHID>> {
+  private async openTransport(): Promise<Transport> {
     try {
       return await TransportWebHID.create();
     } catch {
