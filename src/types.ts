@@ -69,6 +69,22 @@ export interface ApprovalResult {
   txHash?: string;
 }
 
+/** Aggregate analytics for an address across all invoices. */
+export interface InvoiceAnalytics {
+  /** Number of invoices created by this address. */
+  totalCreated: number;
+  /** Number of invoices where this address is a recipient. */
+  totalReceived: number;
+  /** Total funded volume across created invoices in stroops. */
+  totalVolumeCreated: bigint;
+  /** Total funded volume across received invoices in stroops. */
+  totalVolumeReceived: bigint;
+  /** Ratio of Released / (Released + Refunded) across created invoices (0 if none settled). */
+  successRate: number;
+  /** Average funded amount across created invoices in stroops (0n if none). */
+  avgAmount: bigint;
+}
+
 /** An invoice template for reuse. */
 export interface InvoiceTemplate {
   /** Template name. */

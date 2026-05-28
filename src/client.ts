@@ -20,6 +20,7 @@ import type {
   ApprovalResult,
   CreateInvoiceParams,
   Invoice,
+  InvoiceAnalytics,
   InvoiceStatus,
   Payment,
   PayParams,
@@ -417,6 +418,34 @@ export class StellarSplitClient {
   }
 
   /**
+   * Get aggregate analytics for an address (as creator and recipient).
+   */
+  async getAnalytics(address: string): Promise<InvoiceAnalytics> {
+    const [created, received] = await Promise.all([
+      this.getInvoicesByCreator(address),
+      this.getInvoicesByRecipient(address),
+    ]);
+
+    const totalVolumeCreated = created.reduce((sum, inv) => sum + inv.funded, 0n);
+    const totalVolumeReceived = received.reduce((sum, inv) => sum + inv.funded, 0n);
+
+    const settled = created.filter((inv) => inv.status === "Released" || inv.status === "Refunded");
+    const released = settled.filter((inv) => inv.status === "Released").length;
+    const successRate = settled.length > 0 ? released / settled.length : 0;
+
+    const avgAmount = created.length > 0 ? totalVolumeCreated / BigInt(created.length) : 0n;
+
+    return {
+      totalCreated: created.length,
+      totalReceived: received.length,
+      totalVolumeCreated,
+      totalVolumeReceived,
+      successRate,
+      avgAmount,
+    };
+  }
+
+  /**
    * Get all invoices created by an address.
    */
   private async getInvoicesByCreator(creator: string): Promise<Invoice[]> {
@@ -444,6 +473,42 @@ export class StellarSplitClient {
 
     const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
     if (!returnVal) throw new Error("No return value from get_invoices_by_creator");
+
+    const invoices = scValToNative(returnVal);
+    if (!Array.isArray(invoices)) return [];
+
+    return invoices.map((inv: Record<string, unknown>, idx: number) =>
+      this._parseInvoice(idx.toString(), inv)
+    );
+  }
+
+  /**
+   * Get all invoices where an address is a recipient.
+   */
+  private async getInvoicesByRecipient(recipient: string): Promise<Invoice[]> {
+    const operation = this.contract.call(
+      "get_invoices_by_recipient",
+      nativeToScVal(recipient, { type: "address" })
+    );
+
+    const account = await this.server.getAccount(this.config.contractId).catch(() => null);
+    const sourceAccount = account ?? ({ accountId: () => this.config.contractId, sequenceNumber: () => "0", incrementSequenceNumber: () => {} } as { accountId: () => string; sequenceNumber: () => string; incrementSequenceNumber: () => void });
+
+    const tx = new TransactionBuilder(sourceAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: this.config.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(30)
+      .build();
+
+    const simResult = await this.server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(simResult)) {
+      throw new Error(`Simulation failed: ${simResult.error}`);
+    }
+
+    const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
+    if (!returnVal) return [];
 
     const invoices = scValToNative(returnVal);
     if (!Array.isArray(invoices)) return [];

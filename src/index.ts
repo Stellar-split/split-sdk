@@ -29,4 +29,5 @@ export type {
   PayParams,
   InvoiceTemplate,
   ApprovalResult,
+  InvoiceAnalytics,
 } from "./types.js";
