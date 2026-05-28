@@ -41,3 +41,5 @@ export type {
   PayParams,
   InvoiceTemplate,
 } from "./types.js";
+
+export { LedgerAdapter } from "./adapters/ledger.js";

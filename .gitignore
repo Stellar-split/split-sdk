@@ -5,3 +5,4 @@ dist/
 *.tsbuildinfo
 .DS_Store
 Thumbs.db
+task1.md

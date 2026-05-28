@@ -24,6 +24,8 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@ledgerhq/hw-app-str": "^6.29.0",
+    "@ledgerhq/hw-transport-webhid": "^6.29.0",
     "@stellar/freighter-api": "^3.0.0",
     "@stellar/stellar-sdk": "^13.0.0"
   },
