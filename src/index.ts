@@ -3,9 +3,21 @@
  */
 
 export { StellarSplitClient } from "./client.js";
-export type { StellarSplitClientConfig, TxResult } from "./client.js";
+export type { StellarSplitClientConfig, NetworkConfig, TxResult } from "./client.js";
+
+export { TxQueue } from "./queue.js";
+
+export { exportInvoice } from "./export.js";
+
+export { replayEvents } from "./events.js";
 
 export { connectWallet, getPublicKey, signTransaction } from "./wallet.js";
+
+export { checkRPCHealth } from "./health.js";
+
+export { getOptimisticInvoice } from "./optimistic.js";
+
+export { watchContractUpgrade } from "./upgrade.js";
 
 export {
   formatAmount,
@@ -29,3 +41,5 @@ export type {
   PayParams,
   InvoiceTemplate,
 } from "./types.js";
+
+export { LedgerAdapter } from "./adapters/ledger.js";
