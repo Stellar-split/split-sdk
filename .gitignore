@@ -5,3 +5,5 @@ dist/
 *.tsbuildinfo
 .DS_Store
 Thumbs.db
+task1.md
+test/e2e/.env.e2e
