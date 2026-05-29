@@ -180,12 +180,7 @@ describe("getInvoicesByCreator", () => {
       contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
     });
 
-    // Stub the internal RPC simulation to return ALL_IDS
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    vi.spyOn(client as any, "_simulateView").mockResolvedValue(ALL_IDS);
-
     // Directly stub getInvoicesByCreator to exercise pagination logic without RPC
-    const original = client.getInvoicesByCreator.bind(client);
     vi.spyOn(client, "getInvoicesByCreator").mockImplementation(
       async (creator: string, options = {}) => {
         const limit = options.limit ?? 20;
@@ -235,6 +230,337 @@ describe("getInvoicesByCreator", () => {
   });
 });
 
+// =============================================================================
+// Issue #1 — batchPay
+// =============================================================================
+
+describe("batchPay", () => {
+  // Valid Stellar keypair addresses
+  const PAYER = "GC2INE2SCMAKA44QEZQWTKDYW2344JECBPLRC75MTJWUVZVSET62UD23";
+  const CONTRACT = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+
+  function makeClient() {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://soroban-testnet.stellar.org",
+      networkPassphrase: "Test SDF Network ; September 2015",
+      contractId: CONTRACT,
+    });
+    // Mock _submitTx so no real RPC calls are made
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(client as any, "_submitTx").mockResolvedValue({
+      txHash: "abc123",
+      returnValue: { type: "void" },
+    });
+    return client;
+  }
+
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("throws when payments array is empty", async () => {
+    const client = makeClient();
+    await expect(client.batchPay(PAYER, [])).rejects.toThrow(
+      "payments array must not be empty"
+    );
+  });
+
+  it("throws when an invoiceId is invalid", async () => {
+    const client = makeClient();
+    await expect(
+      client.batchPay(PAYER, [{ invoiceId: "bad-id", amount: 100n }])
+    ).rejects.toThrow("Invalid invoiceId");
+  });
+
+  it("submits a single transaction for a batch of 3 payments", async () => {
+    const client = makeClient();
+    const payments = [
+      { invoiceId: "1", amount: 100n },
+      { invoiceId: "2", amount: 200n },
+      { invoiceId: "3", amount: 300n },
+    ];
+    const result = await client.batchPay(PAYER, payments);
+    expect(result.txHash).toBe("abc123");
+    // _submitTx called exactly once — single transaction regardless of batch size
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((client as any)._submitTx).toHaveBeenCalledTimes(1);
+  });
+});
+
+// =============================================================================
+// Issue #2 — subscribeToInvoice
+// =============================================================================
+
+describe("subscribeToInvoice", () => {
+  const PAYER_ADDR = "GC2INE2SCMAKA44QEZQWTKDYW2344JECBPLRC75MTJWUVZVSET62UD23";
+
+  function makeClient() {
+    return new StellarSplitClient({
+      rpcUrl: "https://soroban-testnet.stellar.org",
+      networkPassphrase: "Test SDF Network ; September 2015",
+      contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+    });
+  }
+
+  // Helper to get the internal server and mock its event methods
+  function mockServer(client: StellarSplitClient, events: unknown[] = []) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const server = (client as any).server;
+    vi.spyOn(server, "getLatestLedger").mockResolvedValue({ sequence: 1 });
+    const getEventsSpy = vi.spyOn(server, "getEvents").mockResolvedValue({ events });
+    return getEventsSpy;
+  }
+
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("returns an unsubscribe function", () => {
+    const client = makeClient();
+    mockServer(client);
+    const unsub = client.subscribeToInvoice("42", {});
+    expect(typeof unsub).toBe("function");
+    unsub();
+  });
+
+  it("fires onPayment callback when a payment event is received", async () => {
+    const client = makeClient();
+    mockServer(client, [
+      {
+        ledger: 2,
+        topic: ["payment", "42"],
+        value: { payer: PAYER_ADDR, amount: "500" },
+      },
+    ]);
+
+    const received: { payer: string; amount: bigint }[] = [];
+    const unsub = client.subscribeToInvoice("42", {
+      onPayment: (p) => received.push(p),
+    }, 50);
+
+    await new Promise((r) => setTimeout(r, 120));
+    unsub();
+
+    expect(received.length).toBeGreaterThanOrEqual(1);
+    expect(received[0].payer).toBe(PAYER_ADDR);
+    expect(received[0].amount).toBe(500n);
+  });
+
+  it("fires onReleased callback when a released event is received", async () => {
+    const client = makeClient();
+    mockServer(client, [
+      { ledger: 2, topic: ["released", "42"], value: {} },
+    ]);
+
+    let released = false;
+    const unsub = client.subscribeToInvoice("42", {
+      onReleased: () => { released = true; },
+    }, 50);
+
+    await new Promise((r) => setTimeout(r, 120));
+    unsub();
+
+    expect(released).toBe(true);
+  });
+
+  it("unsubscribe stops the stream", async () => {
+    const client = makeClient();
+    const getEventsSpy = mockServer(client);
+
+    const unsub = client.subscribeToInvoice("42", {}, 50);
+    await new Promise((r) => setTimeout(r, 80));
+    const callsBefore = getEventsSpy.mock.calls.length;
+    unsub();
+    await new Promise((r) => setTimeout(r, 120));
+    expect(getEventsSpy.mock.calls.length).toBe(callsBefore);
+  });
+});
+
+// =============================================================================
+// Issue #3 — buildTransaction / submitTransaction
+// =============================================================================
+
+describe("buildTransaction / submitTransaction", () => {
+  const CONTRACT = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+  const SOURCE = "GC2INE2SCMAKA44QEZQWTKDYW2344JECBPLRC75MTJWUVZVSET62UD23";
+
+  function makeClient() {
+    return new StellarSplitClient({
+      rpcUrl: "https://soroban-testnet.stellar.org",
+      networkPassphrase: "Test SDF Network ; September 2015",
+      contractId: CONTRACT,
+    });
+  }
+
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("buildTransaction returns a valid base64 XDR string", async () => {
+    const { Account, Contract, nativeToScVal, TransactionBuilder, rpc: SorobanRpc, xdr: stellarXdr } =
+      await import("@stellar/stellar-sdk");
+
+    const client = makeClient();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const server = (client as any).server;
+
+    // Use a real Account object so TransactionBuilder.build() succeeds
+    const realAccount = new Account(SOURCE, "100");
+    vi.spyOn(server, "getAccount").mockResolvedValue(realAccount);
+
+    // Minimal valid SorobanTransactionData XDR
+    const txData = new stellarXdr.SorobanTransactionData({
+      ext: new stellarXdr.ExtensionPoint(0),
+      resources: new stellarXdr.SorobanResources({
+        footprint: new stellarXdr.LedgerFootprint({ readOnly: [], readWrite: [] }),
+        instructions: 0,
+        readBytes: 0,
+        writeBytes: 0,
+      }),
+      resourceFee: BigInt(1000),
+    });
+
+    vi.spyOn(server, "simulateTransaction").mockResolvedValue({
+      results: [{ xdr: stellarXdr.ScVal.scvVoid().toXDR("base64"), auth: [] }],
+      minResourceFee: "1000",
+      transactionData: txData.toXDR("base64"),
+    } as unknown);
+
+    const contract = new Contract(CONTRACT);
+    const op = contract.call("get_invoice", nativeToScVal(BigInt("1"), { type: "u64" }));
+
+    const xdrStr = await client.buildTransaction(SOURCE, op);
+    expect(typeof xdrStr).toBe("string");
+    expect(xdrStr.length).toBeGreaterThan(0);
+    // Confirm it round-trips as valid XDR
+    expect(() =>
+      TransactionBuilder.fromXDR(xdrStr, "Test SDF Network ; September 2015")
+    ).not.toThrow();
+  });
+
+  it("submitTransaction throws on ERROR status", async () => {
+    const { TransactionBuilder } = await import("@stellar/stellar-sdk");
+    const client = makeClient();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const server = (client as any).server;
+
+    vi.spyOn(server, "sendTransaction").mockResolvedValue({
+      status: "ERROR",
+      errorResult: { message: "bad tx" },
+    });
+    vi.spyOn(TransactionBuilder, "fromXDR").mockReturnValue(
+      {} as ReturnType<typeof TransactionBuilder.fromXDR>
+    );
+
+    await expect(client.submitTransaction("AAAA")).rejects.toThrow("Transaction failed");
+  });
+});
+
+// =============================================================================
+// Issue #4 — simulateCreateInvoice / simulatePay
+// =============================================================================
+
+describe("simulateCreateInvoice", () => {
+  // Use contract addresses for creator/token/recipient (valid for nativeToScVal "address")
+  const CONTRACT = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+  const RECIPIENT = "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWFEIE3USCIHMXQDAMA";
+  // Valid G-address to use as the transaction source account
+  const SOURCE = "GC2INE2SCMAKA44QEZQWTKDYW2344JECBPLRC75MTJWUVZVSET62UD23";
+
+  function makeClient() {
+    return new StellarSplitClient({
+      rpcUrl: "https://soroban-testnet.stellar.org",
+      networkPassphrase: "Test SDF Network ; September 2015",
+      contractId: CONTRACT,
+    });
+  }
+
+  // Mock server: return a real Account so TransactionBuilder.build() succeeds
+  async function mockSim(client: StellarSplitClient, response: unknown) {
+    const { Account } = await import("@stellar/stellar-sdk");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const server = (client as any).server;
+    vi.spyOn(server, "getAccount").mockResolvedValue(new Account(SOURCE, "0"));
+    vi.spyOn(server, "simulateTransaction").mockResolvedValue(response);
+  }
+
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("returns invoiceId and fee on successful simulation", async () => {
+    const { nativeToScVal } = await import("@stellar/stellar-sdk");
+    const client = makeClient();
+    await mockSim(client, {
+      result: { retval: nativeToScVal(BigInt(99), { type: "u64" }) },
+      minResourceFee: "1234",
+      transactionData: "",
+    });
+
+    const result = await client.simulateCreateInvoice({
+      creator: CONTRACT,
+      recipients: [{ address: RECIPIENT, amount: 1000n }],
+      token: CONTRACT,
+      deadline: Math.floor(Date.now() / 1000) + 86400,
+    });
+
+    expect(result.invoiceId).toBe("99");
+    expect(result.fee).toBe("1234");
+  });
+
+  it("throws on simulation error", async () => {
+    const client = makeClient();
+    await mockSim(client, { error: "contract trap" });
+
+    await expect(
+      client.simulateCreateInvoice({
+        creator: CONTRACT,
+        recipients: [{ address: RECIPIENT, amount: 1000n }],
+        token: CONTRACT,
+        deadline: Math.floor(Date.now() / 1000) + 86400,
+      })
+    ).rejects.toThrow("Simulation error");
+  });
+});
+
+describe("simulatePay", () => {
+  const CONTRACT = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+  const PAYER_ADDR = "GC2INE2SCMAKA44QEZQWTKDYW2344JECBPLRC75MTJWUVZVSET62UD23";
+
+  function makeClient() {
+    return new StellarSplitClient({
+      rpcUrl: "https://soroban-testnet.stellar.org",
+      networkPassphrase: "Test SDF Network ; September 2015",
+      contractId: CONTRACT,
+    });
+  }
+
+  async function mockSim(client: StellarSplitClient, response: unknown) {
+    const { Account } = await import("@stellar/stellar-sdk");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const server = (client as any).server;
+    vi.spyOn(server, "getAccount").mockResolvedValue(new Account(PAYER_ADDR, "0"));
+    vi.spyOn(server, "simulateTransaction").mockResolvedValue(response);
+  }
+
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("returns fee on successful simulation", async () => {
+    const client = makeClient();
+    await mockSim(client, {
+      result: { retval: null },
+      minResourceFee: "500",
+      transactionData: "",
+    });
+
+    const result = await client.simulatePay({
+      payer: PAYER_ADDR,
+      invoiceId: "1",
+      amount: 1000n,
+    });
+
+    expect(result.fee).toBe("500");
+  });
+
+  it("throws on simulation error", async () => {
+    const client = makeClient();
+    await mockSim(client, { error: "insufficient balance" });
+
+    await expect(
+      client.simulatePay({ payer: PAYER_ADDR, invoiceId: "1", amount: 1000n })
+    ).rejects.toThrow("Simulation error");
 import { Deduplicator } from "../src/dedup.js";
 
 describe("Deduplicator", () => {

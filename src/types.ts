@@ -4,6 +4,27 @@ export interface DisputeResult {
   txHash: string;
 }
 
+/** Error thrown when an invoice is not found. */
+export class InvoiceNotFoundError extends Error {
+  constructor(invoiceId: string) {
+    super(`Invoice not found: ${invoiceId}`);
+    this.name = "InvoiceNotFoundError";
+  }
+}
+
+/** Result of an approval check. */
+export interface ApprovalResult {
+  approved: boolean;
+  reason?: string;
+}
+
+/** Result from calculateVesting. */
+export interface VestingSchedule {
+  cliffDate: number;
+  fullyVestedDate: number;
+  claimableAt: (timestamp: number) => bigint;
+}
+
 /** Parameters for an arbiter's vote on a dispute. */
 export interface ArbiterVote {
   invoiceId: string;
@@ -11,7 +32,32 @@ export interface ArbiterVote {
   approve: boolean;
 }
 /** Lifecycle status of an invoice. */
-export type InvoiceStatus = "Pending" | "Released" | "Refunded";
+export type InvoiceStatus = "Pending" | "Released" | "Refunded" | "Cancelled";
+
+/** Error thrown for invalid invoice state transitions. */
+export class InvalidTransitionError extends Error {
+  constructor(from: InvoiceStatus, to: InvoiceStatus) {
+    super(`Invalid transition from "${from}" to "${to}"`);
+    this.name = "InvalidTransitionError";
+  }
+}
+
+/** Result of comparing two invoices. */
+export interface InvoiceDiff {
+  changed: Array<{
+    field: string;
+    from: unknown;
+    to: unknown;
+  }>;
+}
+
+/** Aggregated SDK health metrics. */
+export interface SDKHealth {
+  rpcLatency: number;
+  cacheHitRate: number;
+  errorRate: number;
+  uptimeMs: number;
+}
 
 /** A single payment made toward an invoice. */
 export interface Payment {
@@ -142,4 +188,36 @@ export interface UpgradeEvent {
   previousHash: string;
   newHash: string;
   detectedAt: number;
+}
+
+/** A single payment in a batch pay operation. */
+export interface BatchPayment {
+  /** Invoice ID to pay toward. */
+  invoiceId: string;
+  /** Amount to pay in stroops. */
+  amount: bigint;
+}
+
+/** Callbacks for invoice event streaming. */
+export interface InvoiceEventCallbacks {
+  /** Fired when a payment event is detected. */
+  onPayment?: (payment: Payment) => void;
+  /** Fired when the invoice status changes to Released. */
+  onReleased?: () => void;
+  /** Fired when the invoice status changes to Refunded. */
+  onRefunded?: () => void;
+}
+
+/** Result of a dry-run simulation for createInvoice. */
+export interface SimulateCreateInvoiceResult {
+  /** The invoice ID that would be created. */
+  invoiceId: string;
+  /** Estimated fee in stroops. */
+  fee: string;
+}
+
+/** Result of a dry-run simulation for pay. */
+export interface SimulatePayResult {
+  /** Estimated fee in stroops. */
+  fee: string;
 }

@@ -38,6 +38,21 @@ export { telemetry } from "./telemetry.js";
 
 export type { WalletAdapter } from "./adapters/types.js";
 export { WalletConnectAdapter } from "./adapters/walletconnect.js";
+export { LedgerAdapter } from "./adapters/ledger.js";
+
+export { subscribeToInvoice } from "./stream.js";
+
+export { validateTransition } from "./stateMachineValidator.js";
+
+export {
+  addRequestInterceptor,
+  addResponseInterceptor,
+} from "./interceptors.js";
+export type { RequestInterceptor, ResponseInterceptor, RPCRequest, RPCResponse } from "./interceptors.js";
+
+export { diffInvoice } from "./diff.js";
+
+export { getSDKHealth, resetSDKHealth } from "./healthDashboard.js";
 
 export type {
   Invoice,
@@ -49,6 +64,14 @@ export type {
   InvoiceTemplate,
   PaginatedResult,
   PaginationOptions,
+  BatchPayment,
+  InvoiceEventCallbacks,
+  SimulateCreateInvoiceResult,
+  SimulatePayResult,
 } from "./types.js";
+  InvoiceDiff,
+  SDKHealth,
+} from "./types.js";
+export { InvalidTransitionError } from "./types.js";
 
 export { LedgerAdapter } from "./adapters/ledger.js";

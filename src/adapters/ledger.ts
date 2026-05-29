@@ -1,5 +1,5 @@
 import TransportWebHID from "@ledgerhq/hw-transport-webhid";
-import Transport from "@ledgerhq/hw-transport";
+import type Transport from "@ledgerhq/hw-transport";
 import Str from "@ledgerhq/hw-app-str";
 import type { WalletAdapter } from "../types.js";
 

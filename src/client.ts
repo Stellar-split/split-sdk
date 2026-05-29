@@ -19,12 +19,21 @@ import { signTransaction } from "./wallet.js";
 import { telemetry } from "./telemetry.js";
 import { checkRPCHealth } from "./health.js";
 import { Deduplicator } from "./dedup.js";
+import { initHealthDashboard, recordCall } from "./healthDashboard.js";
+import {
+  runRequestInterceptors,
+  runResponseInterceptors,
+} from "./interceptors.js";
+import { InvoiceNotFoundError } from "./types.js";
 import type {
-  DisputeResult,
+  ApprovalResult,
+  BatchPayment,
   ArbiterVote,
   CreateInvoiceParams,
+  DisputeResult,
   Invoice,
   InvoiceGroup,
+  InvoiceEventCallbacks,
   InvoiceStatus,
   PaginatedResult,
   PaginationOptions,
@@ -33,8 +42,11 @@ import type {
   Recipient,
   InvoiceTemplate,
   RPCHealth,
+  SimulateCreateInvoiceResult,
+  SimulatePayResult,
   WalletAdapter,
 } from "./types.js";
+import { subscribeToInvoice as _subscribeToInvoice } from "./stream.js";
 
 /** Thrown when an invoice ID does not exist on-chain. */
 export class InvoiceNotFoundError extends Error {
@@ -117,6 +129,8 @@ export class StellarSplitClient {
     if (config.telemetry) {
       telemetry.init(config.telemetry);
     }
+
+    initHealthDashboard(this.server, this._dedup);
   }
 
   // ---------------------------------------------------------------------------
@@ -133,6 +147,80 @@ export class StellarSplitClient {
     }
     this._plugins.add(plugin.name);
     plugin.install(this);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Dispute management
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Dispute an invoice by ID.
+   * @param invoiceId - The ID of the invoice to dispute.
+   * @returns The dispute ID and transaction hash.
+   */
+  async disputeInvoice(invoiceId: string): Promise<DisputeResult> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "dispute_invoice",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+      // Assuming the creator is the one calling dispute
+      // You may want to pass the creator as a parameter if needed
+      const result = await this._submitTx(this.config.contractId, operation);
+      const disputeId = scValToNative(result.returnValue).toString();
+      telemetry.recordMethod("disputeInvoice", true, Date.now() - startTime);
+      return { disputeId, txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("disputeInvoice", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
+   * Submit an arbiter's vote for a dispute.
+   * @param vote - The arbiter vote parameters.
+   * @returns The dispute ID and transaction hash.
+   */
+  async submitArbiterVote(vote: ArbiterVote): Promise<DisputeResult> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "submit_arbiter_vote",
+        nativeToScVal(BigInt(vote.invoiceId), { type: "u64" }),
+        nativeToScVal(vote.arbiter, { type: "address" }),
+        nativeToScVal(vote.approve, { type: "bool" })
+      );
+      const result = await this._submitTx(vote.arbiter, operation);
+      const disputeId = scValToNative(result.returnValue).toString();
+      telemetry.recordMethod("submitArbiterVote", true, Date.now() - startTime);
+      return { disputeId, txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("submitArbiterVote", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
+   * Resolve a dispute for an invoice.
+   * @param invoiceId - The ID of the invoice to resolve dispute for.
+   * @returns The dispute ID and transaction hash.
+   */
+  async resolveDispute(invoiceId: string): Promise<DisputeResult> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "resolve_dispute",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+      const result = await this._submitTx(this.config.contractId, operation);
+      const disputeId = scValToNative(result.returnValue).toString();
+      telemetry.recordMethod("resolveDispute", true, Date.now() - startTime);
+      return { disputeId, txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("resolveDispute", false, Date.now() - startTime);
+      throw error;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -304,6 +392,8 @@ export class StellarSplitClient {
 
   private async _fetchInvoice(invoiceId: string): Promise<Invoice> {
     const startTime = Date.now();
+    const req = { method: "getInvoice", params: [invoiceId] };
+    await runRequestInterceptors(req);
     try {
       const operation = this.contract.call(
         "get_invoice",
@@ -313,9 +403,15 @@ export class StellarSplitClient {
       const raw = await this._simulateView(operation);
       const invoice = this._parseInvoice(invoiceId, raw as Record<string, unknown>);
       telemetry.recordMethod("getInvoice", true, Date.now() - startTime);
+      const durationMs = Date.now() - startTime;
+      await runResponseInterceptors({ method: "getInvoice", result: invoice, durationMs });
+      recordCall(true);
       return invoice;
     } catch (error) {
       telemetry.recordMethod("getInvoice", false, Date.now() - startTime);
+      const durationMs = Date.now() - startTime;
+      await runResponseInterceptors({ method: "getInvoice", result: undefined, durationMs });
+      recordCall(false);
       throw error;
     }
   }
@@ -525,6 +621,55 @@ export class StellarSplitClient {
   }
 
   /**
+   * Get invoices where an address is a recipient, with cursor-based pagination.
+   *
+   * @param recipient - Stellar address of the recipient.
+   * @param options   - Optional pagination options (cursor, limit). Default page size is 20.
+   * @returns A page of invoice IDs with a nextCursor for subsequent pages.
+   */
+  async getInvoicesByRecipient(
+    recipient: string,
+    options: PaginationOptions = {}
+  ): Promise<PaginatedResult<string>> {
+    const limit = options.limit ?? 20;
+
+    const operation = this.contract.call(
+      "get_invoices_by_recipient",
+      nativeToScVal(recipient, { type: "address" })
+    );
+
+    const account = await this.server.getAccount(this.config.contractId).catch(() => null);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sourceAccount = account ?? ({ accountId: () => this.config.contractId, sequenceNumber: () => "0", incrementSequenceNumber: () => {} } as any);
+
+    const tx = new TransactionBuilder(sourceAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: this.config.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(30)
+      .build();
+
+    const simResult = await this.server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(simResult)) {
+      throw new Error(`Simulation failed: ${simResult.error}`);
+    }
+
+    const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
+    if (!returnVal) throw new Error("No return value from get_invoices_by_recipient");
+
+    const raw = scValToNative(returnVal);
+    const allIds: string[] = Array.isArray(raw) ? raw.map((id: unknown) => String(id)) : [];
+
+    const total = allIds.length;
+    const startIndex = options.cursor ? allIds.indexOf(options.cursor) + 1 : 0;
+    const page = allIds.slice(startIndex, startIndex + limit);
+    const nextCursor = startIndex + limit < total ? page[page.length - 1] : null;
+
+    return { items: page, nextCursor, total };
+  }
+
+  /**
    * Check the health of the RPC endpoint.
    */
   async checkRPCHealth(): Promise<RPCHealth> {
@@ -586,6 +731,253 @@ export class StellarSplitClient {
 
     const result = await this._submitTx(creator, operation);
     return { txHash: result.txHash };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #1 — batchPay
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Pay toward multiple invoices in a single transaction.
+   *
+   * @param payments - Array of { invoiceId, amount } (must be non-empty)
+   * @returns The transaction hash.
+   */
+  /**
+   * Pay toward multiple invoices in a single transaction.
+   *
+   * @param payer    - Stellar address of the payer (must sign).
+   * @param payments - Array of { invoiceId, amount } (must be non-empty).
+   * @returns The transaction hash.
+   */
+  async batchPay(payer: string, payments: BatchPayment[]): Promise<TxResult> {
+    if (payments.length === 0) {
+      throw new Error("payments array must not be empty");
+    }
+
+    for (const p of payments) {
+      if (!p.invoiceId || isNaN(Number(p.invoiceId))) {
+        throw new Error(`Invalid invoiceId: ${p.invoiceId}`);
+      }
+    }
+
+    const paymentVals = payments.map((p) => {
+      const entries: xdr.ScMapEntry[] = [
+        new xdr.ScMapEntry({
+          key: nativeToScVal("invoice_id", { type: "symbol" }) as xdr.ScVal,
+          val: nativeToScVal(BigInt(p.invoiceId), { type: "u64" }) as xdr.ScVal,
+        }),
+        new xdr.ScMapEntry({
+          key: nativeToScVal("amount", { type: "symbol" }) as xdr.ScVal,
+          val: nativeToScVal(p.amount, { type: "i128" }) as xdr.ScVal,
+        }),
+      ];
+      return xdr.ScVal.scvMap(entries);
+    });
+
+    const operation = this.contract.call(
+      "batch_pay",
+      nativeToScVal(payer, { type: "address" }),
+      xdr.ScVal.scvVec(paymentVals)
+    );
+
+    const result = await this._submitTx(payer, operation);
+    return { txHash: result.txHash };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #2 — subscribeToInvoice
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Subscribe to live invoice events via Soroban RPC event polling.
+   *
+   * @param invoiceId - The invoice ID to watch.
+   * @param callbacks - Typed event callbacks.
+   * @param intervalMs - Poll interval in milliseconds (default: 5000).
+   * @returns Unsubscribe function that stops the stream.
+   */
+  subscribeToInvoice(
+    invoiceId: string,
+    callbacks: InvoiceEventCallbacks,
+    intervalMs?: number
+  ): () => void {
+    return _subscribeToInvoice(
+      this.server,
+      this.config.contractId,
+      invoiceId,
+      callbacks,
+      intervalMs
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #3 — offline signing flow
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Build a transaction and return it as a base64 XDR string.
+   * The transaction is simulated and assembled (resource fees injected) but
+   * NOT signed or submitted — suitable for air-gapped / offline signing.
+   *
+   * @param sourceAddress - Stellar address of the transaction source.
+   * @param operation     - The contract operation to include.
+   * @returns Base64-encoded XDR of the prepared (unsigned) transaction.
+   */
+  async buildTransaction(
+    sourceAddress: string,
+    operation: xdr.Operation
+  ): Promise<string> {
+    const account = await this.server.getAccount(sourceAddress);
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.config.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(30)
+      .build();
+
+    const simResult = await this.server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(simResult)) {
+      throw new Error(`Simulation failed: ${simResult.error}`);
+    }
+
+    const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+    return preparedTx.toXDR();
+  }
+
+  /**
+   * Submit a signed transaction XDR and wait for confirmation.
+   *
+   * @param signedXdr - Base64-encoded signed transaction XDR.
+   * @returns The transaction hash.
+   */
+  async submitTransaction(signedXdr: string): Promise<TxResult> {
+    const tx = TransactionBuilder.fromXDR(signedXdr, this.config.networkPassphrase);
+    const sendResult = await this.server.sendTransaction(tx);
+
+    if (sendResult.status === "ERROR") {
+      throw new Error(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
+    }
+
+    const txHash = sendResult.hash;
+    let getResult = await this.server.getTransaction(txHash);
+    let attempts = 0;
+
+    while (
+      getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND &&
+      attempts < 20
+    ) {
+      await new Promise((r) => setTimeout(r, 1500));
+      getResult = await this.server.getTransaction(txHash);
+      attempts++;
+    }
+
+    if (getResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+      throw new Error(`Transaction not confirmed: ${getResult.status}`);
+    }
+
+    return { txHash };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #4 — dry-run simulation
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Simulate a createInvoice call without submitting a transaction.
+   *
+   * @returns The expected invoice ID and estimated fee in stroops.
+   * @throws StellarSplitError with the simulation error message on failure.
+   */
+  async simulateCreateInvoice(
+    params: CreateInvoiceParams
+  ): Promise<SimulateCreateInvoiceResult> {
+    const recipientAddresses = params.recipients.map((r) =>
+      nativeToScVal(r.address, { type: "address" })
+    );
+    const recipientAmounts = params.recipients.map((r) =>
+      nativeToScVal(r.amount, { type: "i128" })
+    );
+
+    const operation = this.contract.call(
+      "create_invoice",
+      nativeToScVal(params.creator, { type: "address" }),
+      xdr.ScVal.scvVec(recipientAddresses),
+      xdr.ScVal.scvVec(recipientAmounts),
+      nativeToScVal(params.token, { type: "address" }),
+      nativeToScVal(params.deadline, { type: "u64" })
+    );
+
+    const account = await this.server.getAccount(params.creator).catch(() => null);
+    const sourceAccount = account ?? ({
+      accountId: () => params.creator,
+      sequenceNumber: () => "0",
+      incrementSequenceNumber: () => {},
+    } as Parameters<typeof TransactionBuilder>[0]);
+
+    const tx = new TransactionBuilder(sourceAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: this.config.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(30)
+      .build();
+
+    const simResult = await this.server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(simResult)) {
+      throw new Error(`Simulation error: ${simResult.error}`);
+    }
+
+    const success = simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+    const returnVal = success.result?.retval;
+    if (!returnVal) throw new Error("No return value from simulate create_invoice");
+
+    const invoiceId = scValToNative(returnVal).toString();
+    const fee = success.minResourceFee ?? "0";
+
+    return { invoiceId, fee: fee.toString() };
+  }
+
+  /**
+   * Simulate a pay call without submitting a transaction.
+   *
+   * @returns The estimated fee in stroops.
+   * @throws StellarSplitError with the simulation error message on failure.
+   */
+  async simulatePay(params: PayParams): Promise<SimulatePayResult> {
+    const operation = this.contract.call(
+      "pay",
+      nativeToScVal(params.payer, { type: "address" }),
+      nativeToScVal(BigInt(params.invoiceId), { type: "u64" }),
+      nativeToScVal(params.amount, { type: "i128" })
+    );
+
+    const account = await this.server.getAccount(params.payer).catch(() => null);
+    const sourceAccount = account ?? ({
+      accountId: () => params.payer,
+      sequenceNumber: () => "0",
+      incrementSequenceNumber: () => {},
+    } as Parameters<typeof TransactionBuilder>[0]);
+
+    const tx = new TransactionBuilder(sourceAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: this.config.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(30)
+      .build();
+
+    const simResult = await this.server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(simResult)) {
+      throw new Error(`Simulation error: ${simResult.error}`);
+    }
+
+    const success = simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+    const fee = success.minResourceFee ?? "0";
+
+    return { fee: fee.toString() };
   }
 
   /**
@@ -663,14 +1055,16 @@ export class StellarSplitClient {
     return scValToNative(returnVal);
   }
 
-  /** Build, simulate, sign, and submit a transaction. */
-  private async _submitTx(
-    sourceAddress: string,
-    operation: xdr.Operation
-  ): Promise<{ txHash: string; returnValue: xdr.ScVal }> {
-    const account = await this.server.getAccount(sourceAddress);
+  // ---------------------------------------------------------------------------
+  // Internal helpers
+  // ---------------------------------------------------------------------------
 
-    const tx = new TransactionBuilder(account, {
+  /** Simulate a view-only (read) contract call. */
+  private async _simulateView<T>(operation: xdr.Operation, parseFn: (val: unknown) => T): Promise<T> {
+    const account = await this.server.getAccount(this.config.contractId).catch(() => null);
+    const sourceAccount = account ?? ({ accountId: () => this.config.contractId, sequenceNumber: () => "0", incrementSequenceNumber: () => {} } as { accountId: () => string; sequenceNumber: () => string; incrementSequenceNumber: () => void });
+
+    const tx = new TransactionBuilder(sourceAccount, {
       fee: BASE_FEE,
       networkPassphrase: this.config.networkPassphrase,
     })
@@ -683,82 +1077,127 @@ export class StellarSplitClient {
       throw new Error(`Simulation failed: ${simResult.error}`);
     }
 
-    const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
-    const signedXdr = await (this.config.adapter
-      ? this.config.adapter.signTransaction(preparedTx.toXDR(), this.config.networkPassphrase)
-      : signTransaction(preparedTx.toXDR(), this.config.networkPassphrase));
+    const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
+    if (!returnVal) throw new Error("No return value from view call");
 
-    const sendResult = await this.server.sendTransaction(
-      TransactionBuilder.fromXDR(signedXdr, this.config.networkPassphrase)
-    );
+    return parseFn(scValToNative(returnVal));
+  }
 
-    if (sendResult.status === "ERROR") {
-      throw new Error(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
-    }
+  /** Build, simulate, sign, and submit a transaction. */
+  private async _submitTx(
+    sourceAddress: string,
+    operation: xdr.Operation
+  ): Promise<{ txHash: string; returnValue: xdr.ScVal }> {
+    const req = { method: "_submitTx", params: [sourceAddress] };
+    await runRequestInterceptors(req);
 
-    const txHash = sendResult.hash;
-    let getResult = await this.server.getTransaction(txHash);
-    let attempts = 0;
-    while (
-      getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND &&
-      attempts < 20
-    ) {
-      await new Promise((r) => setTimeout(r, 1500));
-      getResult = await this.server.getTransaction(txHash);
-      attempts++;
-    }
+    const startTime = Date.now();
+    try {
+      const account = await this.server.getAccount(sourceAddress);
 
-    // If still not confirmed, submit a fee-bump transaction with a higher fee
-    if (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
-      const multiplier = this.config.feeBumpMultiplier ?? 2;
-      const innerTx = TransactionBuilder.fromXDR(
-        signedXdr,
-        this.config.networkPassphrase
-      ) as Parameters<typeof TransactionBuilder.buildFeeBumpTransaction>[2];
-      const bumpedFee = String(Math.ceil(Number(BASE_FEE) * multiplier));
-      const feeBumpTx = TransactionBuilder.buildFeeBumpTransaction(
-        sourceAddress,
-        bumpedFee,
-        innerTx,
-        this.config.networkPassphrase
-      );
-      const signedBumpXdr = await (this.config.adapter
-        ? this.config.adapter.signTransaction(feeBumpTx.toXDR(), this.config.networkPassphrase)
-        : signTransaction(feeBumpTx.toXDR(), this.config.networkPassphrase));
-      const bumpSendResult = await this.server.sendTransaction(
-        TransactionBuilder.fromXDR(signedBumpXdr, this.config.networkPassphrase)
-      );
-      if (bumpSendResult.status === "ERROR") {
-        throw new Error(`Fee-bump transaction failed: ${JSON.stringify(bumpSendResult.errorResult)}`);
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.config.networkPassphrase,
+      })
+        .addOperation(operation)
+        .setTimeout(30)
+        .build();
+
+      const simResult = await this.server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(simResult)) {
+        throw new Error(`Simulation failed: ${simResult.error}`);
       }
-      const bumpHash = bumpSendResult.hash;
-      let bumpResult = await this.server.getTransaction(bumpHash);
-      let bumpAttempts = 0;
+
+      const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+      const signedXdr = await (this.config.adapter
+        ? this.config.adapter.signTransaction(preparedTx.toXDR(), this.config.networkPassphrase)
+        : signTransaction(preparedTx.toXDR(), this.config.networkPassphrase));
+
+      const sendResult = await this.server.sendTransaction(
+        TransactionBuilder.fromXDR(signedXdr, this.config.networkPassphrase)
+      );
+
+      if (sendResult.status === "ERROR") {
+        throw new Error(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
+      }
+
+      const txHash = sendResult.hash;
+      let getResult = await this.server.getTransaction(txHash);
+      let attempts = 0;
       while (
-        bumpResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND &&
-        bumpAttempts < 20
+        getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND &&
+        attempts < 20
       ) {
         await new Promise((r) => setTimeout(r, 1500));
-        bumpResult = await this.server.getTransaction(bumpHash);
-        bumpAttempts++;
+        getResult = await this.server.getTransaction(txHash);
+        attempts++;
       }
-      if (bumpResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-        throw new Error(`Fee-bump transaction not confirmed: ${bumpResult.status}`);
+
+      // If still not confirmed, submit a fee-bump transaction with a higher fee
+      if (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND) {
+        const multiplier = this.config.feeBumpMultiplier ?? 2;
+        const innerTx = TransactionBuilder.fromXDR(
+          signedXdr,
+          this.config.networkPassphrase
+        ) as Parameters<typeof TransactionBuilder.buildFeeBumpTransaction>[2];
+        const bumpedFee = String(Math.ceil(Number(BASE_FEE) * multiplier));
+        const feeBumpTx = TransactionBuilder.buildFeeBumpTransaction(
+          sourceAddress,
+          bumpedFee,
+          innerTx,
+          this.config.networkPassphrase
+        );
+        const signedBumpXdr = await (this.config.adapter
+          ? this.config.adapter.signTransaction(feeBumpTx.toXDR(), this.config.networkPassphrase)
+          : signTransaction(feeBumpTx.toXDR(), this.config.networkPassphrase));
+        const bumpSendResult = await this.server.sendTransaction(
+          TransactionBuilder.fromXDR(signedBumpXdr, this.config.networkPassphrase)
+        );
+        if (bumpSendResult.status === "ERROR") {
+          throw new Error(`Fee-bump transaction failed: ${JSON.stringify(bumpSendResult.errorResult)}`);
+        }
+        const bumpHash = bumpSendResult.hash;
+        let bumpResult = await this.server.getTransaction(bumpHash);
+        let bumpAttempts = 0;
+        while (
+          bumpResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND &&
+          bumpAttempts < 20
+        ) {
+          await new Promise((r) => setTimeout(r, 1500));
+          bumpResult = await this.server.getTransaction(bumpHash);
+          bumpAttempts++;
+        }
+        if (bumpResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+          throw new Error(`Fee-bump transaction not confirmed: ${bumpResult.status}`);
+        }
+        const bumpReturnValue =
+          (bumpResult as SorobanRpc.Api.GetSuccessfulTransactionResponse).returnValue ??
+          xdr.ScVal.scvVoid();
+
+        const durationMs = Date.now() - startTime;
+        await runResponseInterceptors({ method: "_submitTx", result: { txHash: bumpHash, returnValue: bumpReturnValue }, durationMs });
+        recordCall(true);
+        return { txHash: bumpHash, returnValue: bumpReturnValue };
       }
-      const bumpReturnValue =
-        (bumpResult as SorobanRpc.Api.GetSuccessfulTransactionResponse).returnValue ??
+
+      if (getResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+        throw new Error(`Transaction not confirmed: ${getResult.status}`);
+      }
+
+      const returnValue =
+        (getResult as SorobanRpc.Api.GetSuccessfulTransactionResponse).returnValue ??
         xdr.ScVal.scvVoid();
-      return { txHash: bumpHash, returnValue: bumpReturnValue };
-    }
 
-    if (getResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-      throw new Error(`Transaction not confirmed: ${getResult.status}`);
+      const durationMs = Date.now() - startTime;
+      await runResponseInterceptors({ method: "_submitTx", result: { txHash, returnValue }, durationMs });
+      recordCall(true);
+      return { txHash, returnValue };
+    } catch (error) {
+      const durationMs = Date.now() - startTime;
+      await runResponseInterceptors({ method: "_submitTx", result: undefined, durationMs });
+      recordCall(false);
+      throw error;
     }
-
-    const returnValue =
-      (getResult as SorobanRpc.Api.GetSuccessfulTransactionResponse).returnValue ??
-      xdr.ScVal.scvVoid();
-    return { txHash, returnValue };
   }
 
   /** Parse a raw contract map into a typed Invoice. */
