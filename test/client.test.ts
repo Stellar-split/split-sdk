@@ -9,7 +9,9 @@ import {
 } from "../src/utils.js";
 import { pollUSDCBalance, initPoller } from "../src/poller.js";
 import { telemetry } from "../src/telemetry.js";
+import { registerWebhook, triggerWebhook } from "../src/webhook.js";
 import { StellarSplitClient } from "../src/client.js";
+import { Deduplicator } from "../src/dedup.js";
 import type { PaginatedResult } from "../src/types.js";
 
 describe("formatAmount", () => {
@@ -168,6 +170,47 @@ describe("telemetry", () => {
     expect(true).toBe(true);
   });
 });
+
+describe("webhooks", () => {
+  const invoiceId = "invoice-123";
+  const url = "https://example.com/webhook";
+  const data = { amount: 100, status: "paid" };
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("posts the expected webhook payload for a registered event", async () => {
+    const mockFetch = vi.fn(() => Promise.resolve({ ok: true } as Response)) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", mockFetch);
+
+    registerWebhook(invoiceId, url, ["payment"]);
+    await triggerWebhook(invoiceId, "payment", data);
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [calledUrl, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(calledUrl).toBe(url);
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({ "Content-Type": "application/json" });
+    expect(JSON.parse(init.body as string)).toEqual({
+      invoiceId,
+      event: "payment",
+      timestamp: expect.any(String),
+      data,
+    });
+  });
+
+  it("does not post when the event is not registered for the invoice", async () => {
+    const mockFetch = vi.fn(() => Promise.resolve({ ok: true } as Response)) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", mockFetch);
+
+    registerWebhook(invoiceId, url, ["payment"]);
+    await triggerWebhook(invoiceId, "refunded", data);
+
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
 
 describe("getInvoicesByCreator", () => {
   const CREATOR = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN";
@@ -561,7 +604,8 @@ describe("simulatePay", () => {
     await expect(
       client.simulatePay({ payer: PAYER_ADDR, invoiceId: "1", amount: 1000n })
     ).rejects.toThrow("Simulation error");
-import { Deduplicator } from "../src/dedup.js";
+  });
+});
 
 describe("Deduplicator", () => {
   it("returns the same promise for concurrent calls with the same key", () => {
