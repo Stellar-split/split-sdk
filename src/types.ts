@@ -18,13 +18,6 @@ export interface ApprovalResult {
   reason?: string;
 }
 
-/** Result from calculateVesting. */
-export interface VestingSchedule {
-  cliffDate: number;
-  fullyVestedDate: number;
-  claimableAt: (timestamp: number) => bigint;
-}
-
 /** Parameters for an arbiter's vote on a dispute. */
 export interface ArbiterVote {
   invoiceId: string;
@@ -65,6 +58,16 @@ export interface Payment {
   payer: string;
   /** Amount paid in stroops (1 XLM = 10_000_000 stroops). */
   amount: bigint;
+  /** Unix timestamp in seconds when the payment was made (optional). */
+  timestamp?: number;
+}
+
+/** An archived invoice record. */
+export interface ArchivedInvoice {
+  /** Invoice ID. */
+  invoiceId: string;
+  /** Unix timestamp in seconds when the invoice was archived. */
+  archivedAt: number;
 }
 
 /** A recipient and their owed share. */
@@ -95,6 +98,12 @@ export interface Invoice {
   payments: Payment[];
   /** Whether this is a recurring invoice. */
   recurring?: boolean;
+  /** Optional memo / description attached to the invoice. */
+  memo?: string;
+  /** ID of the source invoice this was cloned from. */
+  clonedFrom?: string;
+  /** ID of the group this invoice belongs to. */
+  groupId?: string;
 }
 
 /** Parameters for creating an invoice. */
@@ -173,16 +182,6 @@ export interface RPCHealth {
   timestamp: number;
 }
 
-/** Vesting schedule for an invoice with cliff and drip. */
-export interface VestingSchedule {
-  /** Unix timestamp of the cliff date. */
-  cliffDate: number;
-  /** Unix timestamp when fully vested. */
-  fullyVestedDate: number;
-  /** Returns the claimable amount at a given Unix timestamp. */
-  claimableAt(timestamp: number): bigint;
-}
-
 /** Event emitted when a contract WASM upgrade is detected. */
 export interface UpgradeEvent {
   previousHash: string;
@@ -222,9 +221,57 @@ export interface SimulatePayResult {
   fee: string;
 }
 
-/** Result of a cross-network invoice sync. */
-export interface SyncResult {
-  invoice: Invoice;
-  source: string;
+/** Fee breakdown for a payment amount. */
+export interface FeeBreakdown {
+  /** Gross amount before fee deduction. */
+  gross: bigint;
+  /** Protocol fee amount. */
+  fee: bigint;
+  /** Net amount recipient receives. */
+  net: bigint;
+  /** Fee basis points (1 bps = 0.01%). */
+  feeBps: number;
+}
+
+/** Token metadata information. */
+export interface TokenInfo {
+  /** Token contract address. */
+  address: string;
+  /** Token symbol (e.g., "USDC"). */
+  symbol: string;
+  /** Token name (e.g., "USD Coin"). */
+  name: string;
+  /** Number of decimal places. */
+  decimals: number;
+}
+
+/** Event fired when an invoice is expiring or has expired. */
+export interface ExpiryEvent {
+  /** Invoice ID. */
+  invoiceId: string;
+  /** Unix timestamp deadline (seconds). */
+  deadline: number;
+  /** Seconds remaining until deadline. */
+  secondsRemaining: number;
+  /** True if deadline has passed. */
+  expired: boolean;
+}
+
+/** Callback function for expiry events. */
+export type ExpiryCallback = (event: ExpiryEvent) => void;
+
+/** Cryptographic proof of a payment. */
+export interface PaymentProof {
+  /** Transaction hash. */
+  txHash: string;
+  /** Payer's Stellar address. */
+  payer: string;
+  /** Invoice ID. */
+  invoiceId: string;
+  /** Amount paid in stroops. */
+  amount: bigint;
+  /** Ledger sequence number. */
   ledger: number;
+  /** SHA-256 hash of proof fields. */
+  proofHash: string;
 }

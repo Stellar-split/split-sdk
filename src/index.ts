@@ -3,7 +3,7 @@
  */
 
 export { StellarSplitClient } from "./client.js";
-export type { StellarSplitClientConfig, NetworkConfig, TxResult, StellarSplitPlugin } from "./client.js";
+export type { StellarSplitClientConfig, NetworkConfig, TxResult } from "./client.js";
 
 export { Deduplicator } from "./dedup.js";
 
@@ -21,6 +21,14 @@ export { getOptimisticInvoice } from "./optimistic.js";
 
 export { watchContractUpgrade } from "./upgrade.js";
 
+export { calculateFee } from "./fee.js";
+
+export { resolveToken } from "./token.js";
+
+export { watchExpiry } from "./watcher.js";
+
+export { generatePaymentProof } from "./proof.js";
+
 export {
   formatAmount,
   parseAmount,
@@ -34,6 +42,9 @@ export { pollUSDCBalance, initPoller } from "./poller.js";
 
 export { telemetry } from "./telemetry.js";
 
+export { registerWebhook, triggerWebhook } from "./webhook.js";
+export type { WebhookConfig, WebhookEvent } from "./webhook.js";
+
 export type { WalletAdapter } from "./adapters/types.js";
 export { WalletConnectAdapter } from "./adapters/walletconnect.js";
 export { LedgerAdapter } from "./adapters/ledger.js";
@@ -46,21 +57,30 @@ export {
   addRequestInterceptor,
   addResponseInterceptor,
 } from "./interceptors.js";
-export type { RequestInterceptor, ResponseInterceptor, RPCRequest, RPCResponse } from "./interceptors.js";
+export type {
+  RequestInterceptor,
+  ResponseInterceptor,
+  RPCRequest,
+  RPCResponse,
+} from "./interceptors.js";
 
 export { diffInvoice } from "./diff.js";
 
 export { getSDKHealth, resetSDKHealth } from "./healthDashboard.js";
 
-export { isFeatureEnabled } from "./flags.js";
-export type { FeatureFlags } from "./flags.js";
+export { subscribeToInvoice } from "./stream.js";
 
 export {
-  saveTemplate,
-  loadTemplate,
-  listTemplates,
-  deleteTemplate,
-} from "./templateManager.js";
+  StellarSplitError,
+  InvoiceNotFoundError,
+  InvoiceNotPendingError,
+  DeadlinePassedError,
+  PaymentExceedsRemainingError,
+  InvoiceFrozenError,
+  parseSorobanError,
+} from "./errors.js";
+
+export { SimpleCache } from "./cache.js";
 
 export type {
   Invoice,
@@ -78,6 +98,11 @@ export type {
   SimulatePayResult,
   InvoiceDiff,
   SDKHealth,
-  SyncResult,
+  FeeBreakdown,
+  TokenInfo,
+  ExpiryEvent,
+  ExpiryCallback,
+  PaymentProof,
 } from "./types.js";
 export { InvalidTransitionError } from "./types.js";
+

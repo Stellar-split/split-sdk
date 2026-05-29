@@ -6,8 +6,8 @@
 
 import {
   Account,
-  Address,
   Contract,
+  Transaction,
   rpc as SorobanRpc,
   TransactionBuilder,
   BASE_FEE,
@@ -26,14 +26,20 @@ import {
   runRequestInterceptors,
   runResponseInterceptors,
 } from "./interceptors.js";
-import { InvoiceNotFoundError } from "./types.js";
+import { calculateFee } from "./fee.js";
+import { resolveToken } from "./token.js";
+import { generatePaymentProof } from "./proof.js";
 import type {
-  ApprovalResult,
+  ArchivedInvoice,
   BatchPayment,
+  BatchResolveResult,
   ArbiterVote,
+  BatchPayment,
   CreateInvoiceParams,
   DisputeResult,
+  FeeBreakdown,
   Invoice,
+  InvoiceEventCallbacks,
   InvoiceGroup,
   InvoiceEventCallbacks,
   InvoiceStatus,
@@ -41,23 +47,30 @@ import type {
   PaginationOptions,
   Payment,
   PayParams,
+  PaymentProof,
   Recipient,
+  SimulateCreateInvoiceResult,
+  SimulatePayResult,
   InvoiceTemplate,
   RPCHealth,
   SimulateCreateInvoiceResult,
   SimulatePayResult,
   SyncResult,
   WalletAdapter,
+  TokenInfo,
 } from "./types.js";
+import { InvoiceNotFoundError } from "./types.js";
 import { subscribeToInvoice as _subscribeToInvoice } from "./stream.js";
-
-/** Thrown when an invoice ID does not exist on-chain. */
-export class InvoiceNotFoundError extends Error {
-  constructor(invoiceId: string) {
-    super(`Invoice not found: ${invoiceId}`);
-    this.name = "InvoiceNotFoundError";
-  }
-}
+import { ConnectionPool } from "./connectionPool.js";
+import { snapshotInvoice as _snapshotInvoice } from "./snapshot.js";
+import type { InvoiceSnapshot } from "./snapshot.js";
+import { AuditLogger } from "./auditLogger.js";
+import type { AuditEntry } from "./auditLogger.js";
+import { WarmStandby } from "./standby.js";
+import { computePrediction } from "./predictor.js";
+import type { CompletionPrediction } from "./predictor.js";
+import { PriorityQueue } from "./priorityQueue.js";
+import type { RequestPriority } from "./priorityQueue.js";
 
 /** A plugin that extends StellarSplitClient with new methods at runtime. */
 export interface StellarSplitPlugin {
@@ -69,7 +82,7 @@ export interface StellarSplitPlugin {
 
 /** Configuration for StellarSplitClient. */
 export interface StellarSplitClientConfig {
-  /** Soroban RPC endpoint URL or array of URLs for multi-endpoint sync. */
+  /** Soroban RPC endpoint URL. Pass an array to enable warm-standby failover. */
   rpcUrl: string | string[];
   /** Stellar network passphrase. */
   networkPassphrase: string;
@@ -84,8 +97,8 @@ export interface StellarSplitClientConfig {
   feeBumpMultiplier?: number;
   /** Optional wallet adapter for signing (e.g. WalletConnect). Defaults to Freighter. */
   adapter?: WalletAdapter;
-  /** Optional feature flags for experimental features. All default to false. */
-  flags?: FeatureFlags;
+  /** Optional in-memory cache configuration. Disabled by default. */
+  cache?: { ttlMs: number };
 }
 
 /** Network configuration. */
@@ -118,25 +131,56 @@ const NETWORKS: Record<string, NetworkConfig> = {
 };
 
 export class StellarSplitClient {
-  private server: SorobanRpc.Server;
+  private _mainServer!: SorobanRpc.Server;
+  private _standby: WarmStandby | null = null;
+  private _queue = new PriorityQueue();
   private contract: Contract;
   private config: StellarSplitClientConfig;
   private _plugins = new Set<string>();
   private _dedup = new Deduplicator<Invoice>();
+  private _cache: SimpleCache<Invoice> | null = null;
+
+  private get server(): SorobanRpc.Server {
+    return this._standby?.server ?? this._mainServer;
+  }
+  private set server(s: SorobanRpc.Server) {
+    this._mainServer = s;
+  }
 
   constructor(config: StellarSplitClientConfig) {
     this.config = config;
-    const primaryUrl = (Array.isArray(config.rpcUrl) ? config.rpcUrl[0] : config.rpcUrl) ?? "";
-    this.server = new SorobanRpc.Server(primaryUrl, {
+    const primaryUrl = Array.isArray(config.rpcUrl) ? config.rpcUrl[0]! : config.rpcUrl;
+    this._mainServer = new SorobanRpc.Server(primaryUrl, {
       allowHttp: primaryUrl.startsWith("http://"),
     });
+
+    if (Array.isArray(config.rpcUrl) && config.rpcUrl.length > 1) {
+      this._standby = new WarmStandby(config.rpcUrl);
+      this._standby.start();
+    }
+
     this.contract = new Contract(config.contractId);
 
     if (config.telemetry) {
       telemetry.init(config.telemetry);
     }
 
+    if (config.cache) {
+      this._cache = new SimpleCache<Invoice>(config.cache.ttlMs);
+    }
+
     initHealthDashboard(this.server, this._dedup);
+  }
+
+  private _logAudit(method: string, params: Record<string, unknown>, success: boolean, durationMs: number): void {
+    if (!this._auditLogger) return;
+    this._auditLogger.log({
+      timestamp: Date.now(),
+      method,
+      params: this._auditLogger.sanitize(params),
+      success,
+      durationMs,
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -261,10 +305,14 @@ export class StellarSplitClient {
 
       const result = await this._submitTx(params.creator, operation);
       const invoiceId = scValToNative(result.returnValue).toString();
-      telemetry.recordMethod("createInvoice", true, Date.now() - startTime);
+      const durationMs = Date.now() - startTime;
+      telemetry.recordMethod("createInvoice", true, durationMs);
+      this._logAudit("createInvoice", { creator: params.creator, token: params.token, deadline: params.deadline }, true, durationMs);
       return { invoiceId, txHash: result.txHash };
     } catch (error) {
-      telemetry.recordMethod("createInvoice", false, Date.now() - startTime);
+      const durationMs = Date.now() - startTime;
+      telemetry.recordMethod("createInvoice", false, durationMs);
+      this._logAudit("createInvoice", { creator: params.creator, token: params.token, deadline: params.deadline }, false, durationMs);
       throw error;
     }
   }
@@ -320,6 +368,7 @@ export class StellarSplitClient {
       );
 
       const result = await this._submitTx(params.payer, operation);
+      this._cache?.invalidate(params.invoiceId);
       telemetry.recordMethod("pay", true, Date.now() - startTime);
       return { txHash: result.txHash };
     } catch (error) {
@@ -390,24 +439,64 @@ export class StellarSplitClient {
   }
 
   /**
-   * Fetch an invoice by ID.
+   * Fetch an invoice by ID. Returns cached result if within TTL.
    */
   async getInvoice(invoiceId: string): Promise<Invoice> {
-    return this._dedup.dedupe(invoiceId, () => this._fetchInvoice(invoiceId));
+    if (this._cache) {
+      const cached = this._cache.get(invoiceId);
+      if (cached) return cached;
+    }
+    const invoice = await this._dedup.dedupe(invoiceId, () => this._fetchInvoice(invoiceId));
+    if (this._cache) {
+      this._cache.set(invoiceId, invoice);
+    }
+    return invoice;
   }
 
   private async _fetchInvoice(invoiceId: string): Promise<Invoice> {
     const startTime = Date.now();
     const req = { method: "getInvoice", params: [invoiceId] };
     await runRequestInterceptors(req);
-    try {
+
+    const fetchFn = async (): Promise<Invoice> => {
       const operation = this.contract.call(
         "get_invoice",
         nativeToScVal(BigInt(invoiceId), { type: "u64" })
       );
 
+      const account = await this.server.getAccount(this.config.contractId).catch(() => null);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sourceAccount = account ?? ({ accountId: () => this.config.contractId, sequenceNumber: () => "0", incrementSequenceNumber: () => {} } as any);
+
+      const tx = new TransactionBuilder(sourceAccount, {
+        fee: BASE_FEE,
+        networkPassphrase: this.config.networkPassphrase,
+      })
+        .addOperation(operation)
+        .setTimeout(30)
+        .build();
+
+      const simResult = await this.server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(simResult)) {
+        throw parseSorobanError(simResult.error, invoiceId);
+      }
+
+      const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
+      if (!returnVal) throw new InvoiceNotFoundError(invoiceId);
+
+      const invoice = this._parseInvoice(invoiceId, scValToNative(returnVal));
       const raw = await this._simulateView(operation);
-      const invoice = this._parseInvoice(invoiceId, raw as Record<string, unknown>);
+      return this._parseInvoice(invoiceId, raw as Record<string, unknown>);
+    };
+
+    try {
+      let invoice: Invoice;
+      if (this._degradation) {
+        const result = await this._degradation.wrapRead(invoiceId, fetchFn);
+        invoice = result.data;
+      } else {
+        invoice = await fetchFn();
+      }
       telemetry.recordMethod("getInvoice", true, Date.now() - startTime);
       const durationMs = Date.now() - startTime;
       await runResponseInterceptors({ method: "getInvoice", result: invoice, durationMs });
@@ -435,6 +524,38 @@ export class StellarSplitClient {
       telemetry.recordMethod("getPayments", false, Date.now() - startTime);
       throw error;
     }
+  }
+
+  /**
+   * Capture a point-in-time snapshot of an invoice including all payments.
+   *
+   * @param invoiceId - The invoice ID to snapshot.
+   * @returns An immutable, timestamped snapshot object.
+   */
+  async snapshotInvoice(invoiceId: string): Promise<InvoiceSnapshot> {
+    const invoice = await this.getInvoice(invoiceId);
+    return _snapshotInvoice(invoice);
+  }
+
+  /**
+   * Fetch multiple invoices in parallel with per-item error isolation.
+   *
+   * @param ids - Invoice IDs to resolve.
+   * @returns Results in the same order as the input IDs.
+   */
+  async resolveBatch(ids: string[]): Promise<BatchResolveResult[]> {
+    const settled = await Promise.allSettled(ids.map((id) => this.getInvoice(id)));
+    return settled.map((result, i) => {
+      const invoiceId = ids[i]!;
+      if (result.status === "fulfilled") {
+        return { invoiceId, success: true as const, invoice: result.value };
+      }
+      return {
+        invoiceId,
+        success: false as const,
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      };
+    });
   }
 
   /**
@@ -645,8 +766,7 @@ export class StellarSplitClient {
     );
 
     const account = await this.server.getAccount(this.config.contractId).catch(() => null);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const sourceAccount = account ?? ({ accountId: () => this.config.contractId, sequenceNumber: () => "0", incrementSequenceNumber: () => {} } as any);
+    const sourceAccount = account ?? new Account(this.config.contractId, "0");
 
     const tx = new TransactionBuilder(sourceAccount, {
       fee: BASE_FEE,
@@ -670,7 +790,7 @@ export class StellarSplitClient {
     const total = allIds.length;
     const startIndex = options.cursor ? allIds.indexOf(options.cursor) + 1 : 0;
     const page = allIds.slice(startIndex, startIndex + limit);
-    const nextCursor = startIndex + limit < total ? page[page.length - 1] : null;
+    const nextCursor = startIndex + limit < total ? (page[page.length - 1] ?? null) : null;
 
     return { items: page, nextCursor, total };
   }
@@ -737,6 +857,36 @@ export class StellarSplitClient {
 
     const result = await this._submitTx(creator, operation);
     return { txHash: result.txHash };
+  }
+
+  /**
+   * Calculate the protocol fee for a given amount.
+   *
+   * @param amount - Gross amount in stroops
+   * @returns Fee breakdown with gross, fee, net, and feeBps
+   */
+  async calculateFee(amount: bigint): Promise<FeeBreakdown> {
+    return calculateFee(amount, this.config);
+  }
+
+  /**
+   * Resolve token metadata from a SAC contract address.
+   *
+   * @param address - Token contract address
+   * @returns Token metadata (symbol, name, decimals)
+   */
+  async resolveToken(address: string): Promise<TokenInfo> {
+    return resolveToken(address, this.config);
+  }
+
+  /**
+   * Generate a cryptographic proof of payment.
+   *
+   * @param txHash - Transaction hash
+   * @returns Payment proof with deterministic SHA-256 hash
+   */
+  async generatePaymentProof(txHash: string): Promise<PaymentProof> {
+    return generatePaymentProof(txHash, this.config);
   }
 
   // ---------------------------------------------------------------------------
@@ -921,7 +1071,7 @@ export class StellarSplitClient {
       accountId: () => params.creator,
       sequenceNumber: () => "0",
       incrementSequenceNumber: () => {},
-    } as Parameters<typeof TransactionBuilder>[0]);
+    } as unknown as Account);
 
     const tx = new TransactionBuilder(sourceAccount, {
       fee: BASE_FEE,
@@ -965,7 +1115,7 @@ export class StellarSplitClient {
       accountId: () => params.payer,
       sequenceNumber: () => "0",
       incrementSequenceNumber: () => {},
-    } as Parameters<typeof TransactionBuilder>[0]);
+    } as unknown as Account);
 
     const tx = new TransactionBuilder(sourceAccount, {
       fee: BASE_FEE,
@@ -984,6 +1134,98 @@ export class StellarSplitClient {
     const fee = success.minResourceFee ?? "0";
 
     return { fee: fee.toString() };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #5 — fee estimator
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Estimate the fee for a contract operation without submitting.
+   *
+   * @param operation - The contract operation to estimate fees for.
+   * @returns FeeEstimate with fee in stroops and a congestion indicator.
+   */
+  async estimateFee(operation: xdr.Operation): Promise<FeeEstimate> {
+    return _estimateFee(
+      this.server,
+      this.config.networkPassphrase,
+      this.config.contractId,
+      operation
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #6 — multi-signature collection
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Collect signatures from multiple signers sequentially and return a
+   * fully signed XDR string ready for submitTransaction().
+   *
+   * @param xdrStr  - Base64-encoded unsigned (or partially signed) transaction XDR.
+   * @param signers - Ordered list of signer addresses.
+   * @returns Fully signed transaction XDR.
+   * @throws If any signer fails to sign.
+   */
+  async collectSignatures(xdrStr: string, signers: string[]): Promise<string> {
+    if (signers.length === 0) {
+      throw new Error("signers array must not be empty");
+    }
+
+    let current = xdrStr;
+    for (const signer of signers) {
+      try {
+        current = await (this.config.adapter
+          ? this.config.adapter.signTransaction(current, this.config.networkPassphrase)
+          : signTransaction(current, this.config.networkPassphrase));
+      } catch (err) {
+        throw new Error(
+          `Signer ${signer} failed to sign: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
+    return current;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #7 — cache invalidation helpers (public)
+  // ---------------------------------------------------------------------------
+
+  /** Manually invalidate a cached invoice entry. */
+  invalidateCache(invoiceId: string): void {
+    this._cache?.invalidate(invoiceId);
+  }
+
+  /** Clear the entire invoice cache. */
+  clearCache(): void {
+    this._cache?.clear();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #2 — subscribeToInvoice (streaming)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Subscribe to live invoice events via Soroban RPC event polling.
+   *
+   * @param invoiceId  - The invoice ID to watch.
+   * @param callbacks  - Typed event callbacks.
+   * @param intervalMs - Poll interval in milliseconds (default: 5000).
+   * @returns Unsubscribe function that stops the stream.
+   */
+  subscribeToInvoice(
+    invoiceId: string,
+    callbacks: InvoiceEventCallbacks,
+    intervalMs?: number
+  ): () => void {
+    return _subscribeToInvoice(
+      this.server,
+      this.config.contractId,
+      invoiceId,
+      callbacks,
+      intervalMs
+    );
   }
 
   /**
@@ -1011,26 +1253,103 @@ export class StellarSplitClient {
     this.contract = new Contract(config.contractId);
   }
 
+  // ---------------------------------------------------------------------------
+  // Issue #94 — co-signer workflow
+  // ---------------------------------------------------------------------------
+
   /**
-   * Get all invoices where an address is a recipient.
+   * Build an unsigned transaction XDR for a multi-sig invoice operation.
+   * Each signer in the provided list must independently sign this XDR and
+   * return a CoSignature for use with submitWithCoSignatures.
+   *
+   * @param invoiceId - The invoice requiring multiple signatures.
+   * @param signers   - Stellar addresses of all required co-signers.
+   * @returns Base64-encoded unsigned transaction XDR.
    */
-  private async getInvoicesByRecipient(recipient: string): Promise<Invoice[]> {
+  async collectCoSignatures(invoiceId: string, signers: string[]): Promise<string> {
+    if (signers.length === 0) throw new Error("At least one signer required");
+
+    const firstSigner = signers[0]!;
     const operation = this.contract.call(
-      "get_invoices_by_recipient",
-      nativeToScVal(recipient, { type: "address" })
+      "release_invoice",
+      nativeToScVal(BigInt(invoiceId), { type: "u64" })
     );
 
-    let invoices: unknown;
-    try {
-      invoices = await this._simulateView(operation);
-    } catch {
-      return [];
+    const account = await this.server.getAccount(firstSigner);
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.config.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(30)
+      .build();
+
+    const simResult = await this.server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(simResult)) {
+      throw new Error(`Simulation failed: ${simResult.error}`);
     }
-    if (!Array.isArray(invoices)) return [];
 
-    return invoices.map((inv: Record<string, unknown>, idx: number) =>
-      this._parseInvoice(idx.toString(), inv)
-    );
+    const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+    return preparedTx.toXDR();
+  }
+
+  /**
+   * Merge all collected co-signatures and submit the combined transaction.
+   *
+   * @param invoiceId  - The invoice being released.
+   * @param signatures - Array of CoSignature objects (one per signer).
+   * @returns The transaction hash.
+   * @throws If fewer signatures are provided than the invoice requires.
+   */
+  async submitWithCoSignatures(invoiceId: string, signatures: CoSignature[]): Promise<TxResult> {
+    const invoice = await this.getInvoice(invoiceId);
+    const requiredCount = invoice.recipients.length;
+
+    if (signatures.length < requiredCount) {
+      throw new Error(
+        `Insufficient signatures: ${signatures.length} provided, ${requiredCount} required`
+      );
+    }
+
+    const firstSig = signatures[0]!;
+    const mergedTx = TransactionBuilder.fromXDR(
+      firstSig.signedXdr,
+      this.config.networkPassphrase
+    ) as Transaction;
+
+    for (let i = 1; i < signatures.length; i++) {
+      const sig = signatures[i]!;
+      const otherTx = TransactionBuilder.fromXDR(
+        sig.signedXdr,
+        this.config.networkPassphrase
+      ) as Transaction;
+      for (const decoratedSig of otherTx.signatures) {
+        mergedTx.addDecoratedSignature(decoratedSig);
+      }
+    }
+
+    const sendResult = await this.server.sendTransaction(mergedTx);
+    if (sendResult.status === "ERROR") {
+      throw new Error(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
+    }
+
+    const txHash = sendResult.hash;
+    let getResult = await this.server.getTransaction(txHash);
+    let attempts = 0;
+    while (
+      getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND &&
+      attempts < 20
+    ) {
+      await new Promise((r) => setTimeout(r, 1500));
+      getResult = await this.server.getTransaction(txHash);
+      attempts++;
+    }
+
+    if (getResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+      throw new Error(`Transaction not confirmed: ${getResult.status}`);
+    }
+
+    return { txHash };
   }
 
   // ---------------------------------------------------------------------------
@@ -1061,39 +1380,30 @@ export class StellarSplitClient {
     return scValToNative(returnVal);
   }
 
-  // ---------------------------------------------------------------------------
-  // Internal helpers
-  // ---------------------------------------------------------------------------
-
-  /** Simulate a view-only (read) contract call. */
-  private async _simulateView<T>(operation: xdr.Operation, parseFn: (val: unknown) => T): Promise<T> {
-    const account = await this.server.getAccount(this.config.contractId).catch(() => null);
-    const sourceAccount = account ?? ({ accountId: () => this.config.contractId, sequenceNumber: () => "0", incrementSequenceNumber: () => {} } as { accountId: () => string; sequenceNumber: () => string; incrementSequenceNumber: () => void });
-
-    const tx = new TransactionBuilder(sourceAccount, {
-      fee: BASE_FEE,
-      networkPassphrase: this.config.networkPassphrase,
-    })
-      .addOperation(operation)
-      .setTimeout(30)
-      .build();
-
-    const simResult = await this.server.simulateTransaction(tx);
-    if (SorobanRpc.Api.isSimulationError(simResult)) {
-      throw new Error(`Simulation failed: ${simResult.error}`);
-    }
-
-    const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
-    if (!returnVal) throw new Error("No return value from view call");
-
-    return parseFn(scValToNative(returnVal));
+  /** Build, simulate, sign, and submit a transaction — routed through the priority queue. */
+  private _submitTx(
+    sourceAddress: string,
+    operation: xdr.Operation,
+    priority: RequestPriority = "normal"
+  ): Promise<{ txHash: string; returnValue: xdr.ScVal }> {
+    return this._queue.enqueue(priority, async () => {
+      try {
+        return await this._doSubmitTx(sourceAddress, operation);
+      } catch (error) {
+        if (this._standby) {
+          this._standby.failover();
+          return await this._doSubmitTx(sourceAddress, operation);
+        }
+        throw error;
+      }
+    });
   }
 
-  /** Build, simulate, sign, and submit a transaction. */
-  private async _submitTx(
+  private async _doSubmitTx(
     sourceAddress: string,
     operation: xdr.Operation
   ): Promise<{ txHash: string; returnValue: xdr.ScVal }> {
+    await this._rateLimiter?.acquire();
     const req = { method: "_submitTx", params: [sourceAddress] };
     await runRequestInterceptors(req);
 
@@ -1111,7 +1421,7 @@ export class StellarSplitClient {
 
       const simResult = await this.server.simulateTransaction(tx);
       if (SorobanRpc.Api.isSimulationError(simResult)) {
-        throw new Error(`Simulation failed: ${simResult.error}`);
+        throw parseSorobanError(simResult.error);
       }
 
       const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
@@ -1246,76 +1556,10 @@ export class StellarSplitClient {
       status: statusMap[raw.status as string] ?? "Pending",
       payments,
       recurring: raw.recurring as boolean | undefined,
+      memo: raw.memo as string | undefined,
+      clonedFrom: raw.clonedFrom as string | undefined,
+      groupId: raw.groupId as string | undefined,
     };
-  }
-  /**
-   * Dispute an invoice by ID.
-   * @param invoiceId - The ID of the invoice to dispute.
-   * @returns The dispute ID and transaction hash.
-   */
-  async disputeInvoice(invoiceId: string): Promise<DisputeResult> {
-    const startTime = Date.now();
-    try {
-      const operation = this.contract.call(
-        "dispute_invoice",
-        nativeToScVal(BigInt(invoiceId), { type: "u64" })
-      );
-      // Assuming the creator is the one calling dispute
-      // You may want to pass the creator as a parameter if needed
-      const result = await this._submitTx(this.config.contractId, operation);
-      const disputeId = scValToNative(result.returnValue).toString();
-      telemetry.recordMethod("disputeInvoice", true, Date.now() - startTime);
-      return { disputeId, txHash: result.txHash };
-    } catch (error) {
-      telemetry.recordMethod("disputeInvoice", false, Date.now() - startTime);
-      throw error;
-    }
-  }
-
-  /**
-   * Submit an arbiter's vote for a dispute.
-   * @param vote - The arbiter vote parameters.
-   * @returns The dispute ID and transaction hash.
-   */
-  async submitArbiterVote(vote: ArbiterVote): Promise<DisputeResult> {
-    const startTime = Date.now();
-    try {
-      const operation = this.contract.call(
-        "submit_arbiter_vote",
-        nativeToScVal(BigInt(vote.invoiceId), { type: "u64" }),
-        nativeToScVal(vote.arbiter, { type: "address" }),
-        nativeToScVal(vote.approve, { type: "bool" })
-      );
-      const result = await this._submitTx(vote.arbiter, operation);
-      const disputeId = scValToNative(result.returnValue).toString();
-      telemetry.recordMethod("submitArbiterVote", true, Date.now() - startTime);
-      return { disputeId, txHash: result.txHash };
-    } catch (error) {
-      telemetry.recordMethod("submitArbiterVote", false, Date.now() - startTime);
-      throw error;
-    }
-  }
-
-  /**
-   * Resolve a dispute for an invoice.
-   * @param invoiceId - The ID of the invoice to resolve dispute for.
-   * @returns The dispute ID and transaction hash.
-   */
-  async resolveDispute(invoiceId: string): Promise<DisputeResult> {
-    const startTime = Date.now();
-    try {
-      const operation = this.contract.call(
-        "resolve_dispute",
-        nativeToScVal(BigInt(invoiceId), { type: "u64" })
-      );
-      const result = await this._submitTx(this.config.contractId, operation);
-      const disputeId = scValToNative(result.returnValue).toString();
-      telemetry.recordMethod("resolveDispute", true, Date.now() - startTime);
-      return { disputeId, txHash: result.txHash };
-    } catch (error) {
-      telemetry.recordMethod("resolveDispute", false, Date.now() - startTime);
-      throw error;
-    }
   }
 
   // ---------------------------------------------------------------------------
