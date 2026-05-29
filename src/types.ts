@@ -179,3 +179,35 @@ export interface UpgradeEvent {
   newHash: string;
   detectedAt: number;
 }
+
+/** A single payment in a batch pay operation. */
+export interface BatchPayment {
+  /** Invoice ID to pay toward. */
+  invoiceId: string;
+  /** Amount to pay in stroops. */
+  amount: bigint;
+}
+
+/** Callbacks for invoice event streaming. */
+export interface InvoiceEventCallbacks {
+  /** Fired when a payment event is detected. */
+  onPayment?: (payment: Payment) => void;
+  /** Fired when the invoice status changes to Released. */
+  onReleased?: () => void;
+  /** Fired when the invoice status changes to Refunded. */
+  onRefunded?: () => void;
+}
+
+/** Result of a dry-run simulation for createInvoice. */
+export interface SimulateCreateInvoiceResult {
+  /** The invoice ID that would be created. */
+  invoiceId: string;
+  /** Estimated fee in stroops. */
+  fee: string;
+}
+
+/** Result of a dry-run simulation for pay. */
+export interface SimulatePayResult {
+  /** Estimated fee in stroops. */
+  fee: string;
+}
