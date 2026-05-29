@@ -231,3 +231,11 @@ export interface SimulatePayResult {
   /** Estimated fee in stroops. */
   fee: string;
 }
+
+/** Fee estimate returned by estimateFee(). */
+export interface FeeEstimate {
+  /** Estimated transaction fee in stroops. */
+  fee: bigint;
+  /** Network congestion level derived from recent fee statistics. */
+  congestion: "low" | "medium" | "high";
+}

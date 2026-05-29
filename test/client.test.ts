@@ -9,7 +9,9 @@ import {
 } from "../src/utils.js";
 import { pollUSDCBalance, initPoller } from "../src/poller.js";
 import { telemetry } from "../src/telemetry.js";
+import { registerWebhook, triggerWebhook } from "../src/webhook.js";
 import { StellarSplitClient } from "../src/client.js";
+import { Deduplicator } from "../src/dedup.js";
 import type { PaginatedResult } from "../src/types.js";
 
 describe("formatAmount", () => {
@@ -168,6 +170,47 @@ describe("telemetry", () => {
     expect(true).toBe(true);
   });
 });
+
+describe("webhooks", () => {
+  const invoiceId = "invoice-123";
+  const url = "https://example.com/webhook";
+  const data = { amount: 100, status: "paid" };
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("posts the expected webhook payload for a registered event", async () => {
+    const mockFetch = vi.fn(() => Promise.resolve({ ok: true } as Response)) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", mockFetch);
+
+    registerWebhook(invoiceId, url, ["payment"]);
+    await triggerWebhook(invoiceId, "payment", data);
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [calledUrl, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(calledUrl).toBe(url);
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({ "Content-Type": "application/json" });
+    expect(JSON.parse(init.body as string)).toEqual({
+      invoiceId,
+      event: "payment",
+      timestamp: expect.any(String),
+      data,
+    });
+  });
+
+  it("does not post when the event is not registered for the invoice", async () => {
+    const mockFetch = vi.fn(() => Promise.resolve({ ok: true } as Response)) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", mockFetch);
+
+    registerWebhook(invoiceId, url, ["payment"]);
+    await triggerWebhook(invoiceId, "refunded", data);
+
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
 
 describe("getInvoicesByCreator", () => {
   const CREATOR = "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN";
@@ -561,7 +604,8 @@ describe("simulatePay", () => {
     await expect(
       client.simulatePay({ payer: PAYER_ADDR, invoiceId: "1", amount: 1000n })
     ).rejects.toThrow("Simulation error");
-import { Deduplicator } from "../src/dedup.js";
+  });
+});
 
 describe("Deduplicator", () => {
   it("returns the same promise for concurrent calls with the same key", () => {
@@ -640,5 +684,381 @@ describe("Deduplicator", () => {
 
     expect(rpcCallCount).toBe(1);
     expect(inv1).toBe(inv2);
+  });
+});
+
+// =============================================================================
+// Issue #8 — typed Soroban error parser
+// =============================================================================
+
+import {
+  StellarSplitError,
+  InvoiceNotFoundError,
+  InvoiceNotPendingError,
+  DeadlinePassedError,
+  PaymentExceedsRemainingError,
+  InvoiceFrozenError,
+  parseSorobanError,
+} from "../src/errors.js";
+
+describe("parseSorobanError", () => {
+  it("returns InvoiceNotFoundError for 'not found' messages", () => {
+    const err = parseSorobanError("invoice not found", "42");
+    expect(err).toBeInstanceOf(InvoiceNotFoundError);
+    expect(err).toBeInstanceOf(StellarSplitError);
+    expect((err as InvoiceNotFoundError).invoiceId).toBe("42");
+  });
+
+  it("returns InvoiceNotPendingError for status mismatch messages", () => {
+    const err = parseSorobanError("invoice is not pending", "1");
+    expect(err).toBeInstanceOf(InvoiceNotPendingError);
+  });
+
+  it("returns DeadlinePassedError for deadline messages", () => {
+    const err = parseSorobanError("deadline passed", "2");
+    expect(err).toBeInstanceOf(DeadlinePassedError);
+  });
+
+  it("returns PaymentExceedsRemainingError for overpayment messages", () => {
+    const err = parseSorobanError("amount exceeds remaining balance", "3");
+    expect(err).toBeInstanceOf(PaymentExceedsRemainingError);
+  });
+
+  it("returns InvoiceFrozenError for frozen/disputed messages", () => {
+    const err = parseSorobanError("invoice is frozen", "4");
+    expect(err).toBeInstanceOf(InvoiceFrozenError);
+  });
+
+  it("wraps unknown errors in generic StellarSplitError", () => {
+    const err = parseSorobanError("some unknown contract panic");
+    expect(err).toBeInstanceOf(StellarSplitError);
+    expect(err.constructor.name).toBe("StellarSplitError");
+    expect(err.raw).toBe("some unknown contract panic");
+  });
+
+  it("_submitTx throws typed error on simulation failure", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://soroban-testnet.stellar.org",
+      networkPassphrase: "Test SDF Network ; September 2015",
+      contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const server = (client as any).server;
+    vi.spyOn(server, "getAccount").mockResolvedValue({
+      accountId: () => "GC2INE2SCMAKA44QEZQWTKDYW2344JECBPLRC75MTJWUVZVSET62UD23",
+      sequenceNumber: () => "0",
+      incrementSequenceNumber: () => {},
+    });
+    vi.spyOn(server, "simulateTransaction").mockResolvedValue({
+      error: "invoice not found",
+    });
+
+    const { Contract, nativeToScVal } = await import("@stellar/stellar-sdk");
+    const contract = new Contract("CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM");
+    const op = contract.call("get_invoice", nativeToScVal(BigInt(99), { type: "u64" }));
+
+    await expect(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (client as any)._submitTx("GC2INE2SCMAKA44QEZQWTKDYW2344JECBPLRC75MTJWUVZVSET62UD23", op)
+    ).rejects.toBeInstanceOf(InvoiceNotFoundError);
+
+    vi.restoreAllMocks();
+  });
+});
+
+// =============================================================================
+// Issue #7 — in-memory caching layer
+// =============================================================================
+
+import { SimpleCache } from "../src/cache.js";
+
+describe("SimpleCache", () => {
+  it("returns undefined for missing keys", () => {
+    const cache = new SimpleCache<string>(1000);
+    expect(cache.get("x")).toBeUndefined();
+  });
+
+  it("returns cached value within TTL", () => {
+    const cache = new SimpleCache<string>(5000);
+    cache.set("k", "hello");
+    expect(cache.get("k")).toBe("hello");
+  });
+
+  it("returns undefined after TTL expires", async () => {
+    const cache = new SimpleCache<string>(50);
+    cache.set("k", "hello");
+    await new Promise((r) => setTimeout(r, 80));
+    expect(cache.get("k")).toBeUndefined();
+  });
+
+  it("invalidate removes a specific entry", () => {
+    const cache = new SimpleCache<string>(5000);
+    cache.set("a", "1");
+    cache.set("b", "2");
+    cache.invalidate("a");
+    expect(cache.get("a")).toBeUndefined();
+    expect(cache.get("b")).toBe("2");
+  });
+
+  it("clear removes all entries", () => {
+    const cache = new SimpleCache<string>(5000);
+    cache.set("a", "1");
+    cache.set("b", "2");
+    cache.clear();
+    expect(cache.get("a")).toBeUndefined();
+    expect(cache.get("b")).toBeUndefined();
+  });
+});
+
+describe("StellarSplitClient cache", () => {
+  const CONTRACT = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+
+  function makeInvoice(id: string) {
+    return {
+      id,
+      creator: CONTRACT,
+      recipients: [],
+      token: CONTRACT,
+      deadline: 9999999999,
+      funded: 0n,
+      status: "Pending" as const,
+      payments: [],
+    };
+  }
+
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("returns cached result on second call without hitting RPC", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://soroban-testnet.stellar.org",
+      networkPassphrase: "Test SDF Network ; September 2015",
+      contractId: CONTRACT,
+      cache: { ttlMs: 5000 },
+    });
+
+    const fetchSpy = vi
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .spyOn(client as any, "_fetchInvoice")
+      .mockResolvedValue(makeInvoice("1"));
+
+    await client.getInvoice("1");
+    await client.getInvoice("1");
+
+    // RPC fetch called only once despite two getInvoice calls
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("hits RPC again after cache is invalidated by pay()", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://soroban-testnet.stellar.org",
+      networkPassphrase: "Test SDF Network ; September 2015",
+      contractId: CONTRACT,
+      cache: { ttlMs: 5000 },
+    });
+
+    const fetchSpy = vi
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .spyOn(client as any, "_fetchInvoice")
+      .mockResolvedValue(makeInvoice("1"));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.spyOn(client as any, "_submitTx").mockResolvedValue({
+      txHash: "tx1",
+      returnValue: { type: "void" },
+    });
+
+    await client.getInvoice("1");
+    // pay() should invalidate the cache for invoice "1"
+    await client.pay({
+      payer: "GC2INE2SCMAKA44QEZQWTKDYW2344JECBPLRC75MTJWUVZVSET62UD23",
+      invoiceId: "1",
+      amount: 100n,
+    });
+    await client.getInvoice("1");
+
+    // Should have fetched twice: once before pay, once after invalidation
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache when cache option is not set", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://soroban-testnet.stellar.org",
+      networkPassphrase: "Test SDF Network ; September 2015",
+      contractId: CONTRACT,
+      // no cache config
+    });
+
+    const fetchSpy = vi
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .spyOn(client as any, "_fetchInvoice")
+      .mockResolvedValue(makeInvoice("1"));
+
+    await client.getInvoice("1");
+    await client.getInvoice("1");
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
+// =============================================================================
+// Issue #6 — multi-signature collection
+// =============================================================================
+
+describe("collectSignatures", () => {
+  const CONTRACT = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+
+  function makeClient(adapter?: { getAddress: () => Promise<string>; signTransaction: (xdr: string, net: string) => Promise<string> }) {
+    return new StellarSplitClient({
+      rpcUrl: "https://soroban-testnet.stellar.org",
+      networkPassphrase: "Test SDF Network ; September 2015",
+      contractId: CONTRACT,
+      adapter,
+    });
+  }
+
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("throws when signers array is empty", async () => {
+    const client = makeClient();
+    await expect(client.collectSignatures("AAAA", [])).rejects.toThrow(
+      "signers array must not be empty"
+    );
+  });
+
+  it("calls signTransaction once per signer and returns final XDR", async () => {
+    const signer1 = "GC2INE2SCMAKA44QEZQWTKDYW2344JECBPLRC75MTJWUVZVSET62UD23";
+    const signer2 = "GCUIRB52WKU5I6XVM5UKADTJUV5BXJIHKCLUIQ7ZF5E75BNSLIPAL4OO";
+
+    let callCount = 0;
+    const adapter = {
+      getAddress: async () => signer1,
+      signTransaction: async (xdr: string) => {
+        callCount++;
+        return `signed-${callCount}-${xdr}`;
+      },
+    };
+
+    const client = makeClient(adapter);
+    const result = await client.collectSignatures("BASE_XDR", [signer1, signer2]);
+
+    expect(callCount).toBe(2);
+    // Each signer's output is fed into the next
+    expect(result).toBe("signed-2-signed-1-BASE_XDR");
+  });
+
+  it("throws with signer identity when a signer fails", async () => {
+    const signer1 = "GC2INE2SCMAKA44QEZQWTKDYW2344JECBPLRC75MTJWUVZVSET62UD23";
+    const signer2 = "GCUIRB52WKU5I6XVM5UKADTJUV5BXJIHKCLUIQ7ZF5E75BNSLIPAL4OO";
+
+    let callCount = 0;
+    const adapter = {
+      getAddress: async () => signer1,
+      signTransaction: async (_xdr: string) => {
+        callCount++;
+        if (callCount === 2) throw new Error("user rejected");
+        return `signed-${_xdr}`;
+      },
+    };
+
+    const client = makeClient(adapter);
+    await expect(
+      client.collectSignatures("BASE_XDR", [signer1, signer2])
+    ).rejects.toThrow(`Signer ${signer2} failed to sign`);
+  });
+});
+
+// =============================================================================
+// Issue #5 — fee estimator
+// =============================================================================
+
+describe("estimateFee", () => {
+  const CONTRACT = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+  const SOURCE = "GC2INE2SCMAKA44QEZQWTKDYW2344JECBPLRC75MTJWUVZVSET62UD23";
+
+  function makeClient() {
+    return new StellarSplitClient({
+      rpcUrl: "https://soroban-testnet.stellar.org",
+      networkPassphrase: "Test SDF Network ; September 2015",
+      contractId: CONTRACT,
+    });
+  }
+
+  async function mockServerForFee(
+    client: StellarSplitClient,
+    simResponse: unknown,
+    feeStatsResponse: unknown
+  ) {
+    const { Account } = await import("@stellar/stellar-sdk");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const server = (client as any).server;
+    vi.spyOn(server, "getAccount").mockResolvedValue(new Account(SOURCE, "0"));
+    vi.spyOn(server, "simulateTransaction").mockResolvedValue(simResponse);
+    vi.spyOn(server, "getFeeStats").mockResolvedValue(feeStatsResponse);
+  }
+
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("returns fee and low congestion when p50/p99 ratio is high", async () => {
+    const client = makeClient();
+    await mockServerForFee(
+      client,
+      { result: { retval: null }, minResourceFee: "2000", transactionData: "" },
+      { sorobanInclusionFee: { p50: "900", p99: "1000" } }
+    );
+
+    const { Contract, nativeToScVal } = await import("@stellar/stellar-sdk");
+    const contract = new Contract(CONTRACT);
+    const op = contract.call("get_invoice", nativeToScVal(BigInt(1), { type: "u64" }));
+
+    const result = await client.estimateFee(op);
+    expect(result.fee).toBe(2000n);
+    expect(result.congestion).toBe("low");
+  });
+
+  it("returns medium congestion when p50/p99 ratio is mid-range", async () => {
+    const client = makeClient();
+    await mockServerForFee(
+      client,
+      { result: { retval: null }, minResourceFee: "500", transactionData: "" },
+      { sorobanInclusionFee: { p50: "500", p99: "1000" } }
+    );
+
+    const { Contract, nativeToScVal } = await import("@stellar/stellar-sdk");
+    const contract = new Contract(CONTRACT);
+    const op = contract.call("get_invoice", nativeToScVal(BigInt(1), { type: "u64" }));
+
+    const result = await client.estimateFee(op);
+    expect(result.congestion).toBe("medium");
+  });
+
+  it("returns high congestion when p50/p99 ratio is low", async () => {
+    const client = makeClient();
+    await mockServerForFee(
+      client,
+      { result: { retval: null }, minResourceFee: "100", transactionData: "" },
+      { sorobanInclusionFee: { p50: "100", p99: "10000" } }
+    );
+
+    const { Contract, nativeToScVal } = await import("@stellar/stellar-sdk");
+    const contract = new Contract(CONTRACT);
+    const op = contract.call("get_invoice", nativeToScVal(BigInt(1), { type: "u64" }));
+
+    const result = await client.estimateFee(op);
+    expect(result.congestion).toBe("high");
+  });
+
+  it("throws on simulation error", async () => {
+    const client = makeClient();
+    await mockServerForFee(
+      client,
+      { error: "contract trap" },
+      { sorobanInclusionFee: { p50: "100", p99: "200" } }
+    );
+
+    const { Contract, nativeToScVal } = await import("@stellar/stellar-sdk");
+    const contract = new Contract(CONTRACT);
+    const op = contract.call("get_invoice", nativeToScVal(BigInt(1), { type: "u64" }));
+
+    await expect(client.estimateFee(op)).rejects.toThrow("Fee estimation failed");
   });
 });

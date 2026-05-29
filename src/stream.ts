@@ -8,6 +8,11 @@ import type { InvoiceEventCallbacks, Payment } from "./types.js";
 /**
  * Subscribe to live invoice events using Soroban RPC event polling.
  *
+ * @param server      - Soroban RPC server instance
+ * @param contractId  - The deployed StellarSplit contract ID
+ * @param invoiceId   - The invoice ID to watch
+ * @param callbacks   - Typed event callbacks
+ * @param intervalMs  - Poll interval in milliseconds (default: 5000)
  * Polls for new contract events and fires typed callbacks when payments,
  * releases, or refunds are detected for the given invoice.
  *
@@ -40,6 +45,7 @@ export function subscribeToInvoice(
 
       const response = await server.getEvents({
         startLedger: lastLedger,
+        filters: [{ type: "contract", contractIds: [contractId] }],
         filters: [
           {
             type: "contract",
@@ -51,6 +57,7 @@ export function subscribeToInvoice(
       let maxLedger = lastLedger;
 
       for (const event of response.events) {
+        if (event.ledger > maxLedger) maxLedger = event.ledger;
         if (event.ledger > maxLedger) {
           maxLedger = event.ledger;
         }
@@ -74,6 +81,18 @@ export function subscribeToInvoice(
           callbacks.onRefunded();
         }
       }
+
+      lastLedger = maxLedger + 1;
+    } catch {
+      // Silently continue on network errors
+    }
+
+    if (!stopped) setTimeout(poll, intervalMs);
+  };
+
+  poll();
+  return () => { stopped = true; };
+}
 
       // Advance past processed ledgers
       lastLedger = maxLedger + 1;
@@ -106,6 +125,16 @@ function extractInvoiceId(event: SorobanRpc.Api.EventResponse): string | null {
   const id = value?.invoiceId;
   if (typeof id === "string") return id;
   if (typeof id === "number" || typeof id === "bigint") return String(id);
+  return null;
+}
+
+function extractPayment(event: SorobanRpc.Api.EventResponse): Payment | null {
+  const value = event.value as Record<string, unknown> | undefined;
+  if (!value) return null;
+  const { payer, amount } = value;
+  if (typeof payer !== "string") return null;
+  if (typeof amount !== "string" && typeof amount !== "number" && typeof amount !== "bigint") return null;
+  return { payer, amount: BigInt(amount as string | number) };
 
   return null;
 }

@@ -4,8 +4,6 @@
 
 export { StellarSplitClient } from "./client.js";
 export type { StellarSplitClientConfig, NetworkConfig, TxResult } from "./client.js";
-// Dispute management methods (for clarity, these are instance methods on StellarSplitClient)
-// Types exported below
 
 export { Deduplicator } from "./dedup.js";
 
@@ -36,6 +34,9 @@ export { pollUSDCBalance, initPoller } from "./poller.js";
 
 export { telemetry } from "./telemetry.js";
 
+export { registerWebhook, triggerWebhook } from "./webhook.js";
+export type { WebhookConfig, WebhookEvent } from "./webhook.js";
+
 export type { WalletAdapter } from "./adapters/types.js";
 export { WalletConnectAdapter } from "./adapters/walletconnect.js";
 export { LedgerAdapter } from "./adapters/ledger.js";
@@ -54,6 +55,20 @@ export { diffInvoice } from "./diff.js";
 
 export { getSDKHealth, resetSDKHealth } from "./healthDashboard.js";
 
+export { subscribeToInvoice } from "./stream.js";
+
+export {
+  StellarSplitError,
+  InvoiceNotFoundError,
+  InvoiceNotPendingError,
+  DeadlinePassedError,
+  PaymentExceedsRemainingError,
+  InvoiceFrozenError,
+  parseSorobanError,
+} from "./errors.js";
+
+export { SimpleCache } from "./cache.js";
+
 export type {
   Invoice,
   Payment,
@@ -70,10 +85,11 @@ export type {
   SimulatePayResult,
   InvoiceDiff,
   SDKHealth,
-  ArchivedInvoice,
+  BatchPayment,
+  InvoiceEventCallbacks,
+  SimulateCreateInvoiceResult,
+  SimulatePayResult,
+  FeeEstimate,
 } from "./types.js";
 export { InvalidTransitionError } from "./types.js";
 
-export type { CompletionPrediction } from "./predictor.js";
-
-export type { RequestPriority } from "./priorityQueue.js";
