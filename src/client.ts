@@ -116,7 +116,6 @@ export interface NetworkConfig {
   contractId: string;
 }
 
-/** Result of a transaction submission. */
 export interface TxResult {
   txHash: string;
 }

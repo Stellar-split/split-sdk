@@ -18,7 +18,7 @@ interface TelemetryConfig {
 class Telemetry {
   private config: TelemetryConfig | null = null;
   private events: TelemetryEvent[] = [];
-  private flushInterval: NodeJS.Timeout | null = null;
+  private flushInterval: ReturnType<typeof setInterval> | null = null;
   private readonly FLUSH_INTERVAL_MS = 60000;
 
   /**

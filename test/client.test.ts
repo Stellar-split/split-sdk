@@ -107,6 +107,134 @@ describe("truncateAddress", () => {
   });
 });
 
+describe("generateReceipt", () => {
+  it("generates a receipt for a released invoice", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    const releasedInvoice = {
+      id: "123",
+      creator: "GCREATORXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      recipients: [
+        {
+          address: "GRECIPIENTXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+          amount: 5_000_000n,
+        },
+      ],
+      token: "GUSDCXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      deadline: 1_700_000_000,
+      funded: 5_000_000n,
+      status: "Released" as const,
+      payments: [
+        {
+          payer: "GPAYERXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+          amount: 5_000_000n,
+        },
+      ],
+    };
+
+    vi.spyOn(client, "getInvoice").mockResolvedValue(releasedInvoice as any);
+
+    const receipt = await client.generateReceipt("123");
+
+    expect(receipt.invoiceId).toBe("123");
+    expect(receipt.creator).toBe(releasedInvoice.creator);
+    expect(receipt.recipients).toEqual(releasedInvoice.recipients);
+    expect(receipt.payments).toEqual(releasedInvoice.payments);
+    expect(receipt.totalAmount).toBe(5_000_000n);
+    expect(typeof receipt.receiptId).toBe("string");
+    expect(receipt.receiptId.length).toBe(64);
+    expect(receipt.releasedAt).toBeGreaterThan(0);
+
+    const secondReceipt = await client.generateReceipt("123");
+    expect(secondReceipt.receiptId).toBe(receipt.receiptId);
+  });
+
+  it("throws when invoice is not released", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    vi.spyOn(client, "getInvoice").mockResolvedValue({
+      id: "123",
+      creator: "GCREATORXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      recipients: [],
+      token: "GUSDCXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      deadline: 1_700_000_000,
+      funded: 0n,
+      status: "Pending" as const,
+      payments: [],
+    } as any);
+
+    await expect(client.generateReceipt("123")).rejects.toThrow(
+      "Invoice must be Released to generate a receipt"
+    );
+  });
+});
+
+
+describe("pay", () => {
+  it("retries transient network failures and returns the final transaction", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    const submitSpy = vi.spyOn(client as any, "_submitTx")
+      .mockRejectedValueOnce(new Error("network timeout"))
+      .mockRejectedValueOnce(new Error("failed to fetch"))
+      .mockResolvedValueOnce({ txHash: "tx-success", returnValue: {} } as any);
+
+    vi.useFakeTimers();
+    const payer = Keypair.random().publicKey();
+    const payPromise = client.pay({
+      payer,
+      invoiceId: "123",
+      amount: 10_000_000n,
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(2000);
+      const result = await payPromise;
+      expect(result.txHash).toBe("tx-success");
+      expect(submitSpy).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry contract logic failures", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+      maxRetries: 5,
+    });
+
+    const submitSpy = vi.spyOn(client as any, "_submitTx").mockRejectedValue(
+      new Error("DeadlinePassedError")
+    );
+
+    const payer = Keypair.random().publicKey();
+    await expect(
+      client.pay({
+        payer,
+        invoiceId: "123",
+        amount: 10_000_000n,
+      })
+    ).rejects.toThrow("DeadlinePassedError");
+
+    expect(submitSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("pollUSDCBalance", () => {
   it("throws error if poller not initialized", () => {
     const callback = (balance: bigint) => {
