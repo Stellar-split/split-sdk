@@ -58,6 +58,16 @@ export interface Payment {
   payer: string;
   /** Amount paid in stroops (1 XLM = 10_000_000 stroops). */
   amount: bigint;
+  /** Unix timestamp in seconds when the payment was made (optional). */
+  timestamp?: number;
+}
+
+/** An archived invoice record. */
+export interface ArchivedInvoice {
+  /** Invoice ID. */
+  invoiceId: string;
+  /** Unix timestamp in seconds when the invoice was archived. */
+  archivedAt: number;
 }
 
 /** A recipient and their owed share. */
@@ -172,16 +182,6 @@ export interface RPCHealth {
   timestamp: number;
 }
 
-/** Vesting schedule for an invoice with cliff and drip. */
-export interface VestingSchedule {
-  /** Unix timestamp of the cliff date. */
-  cliffDate: number;
-  /** Unix timestamp when fully vested. */
-  fullyVestedDate: number;
-  /** Returns the claimable amount at a given Unix timestamp. */
-  claimableAt(timestamp: number): bigint;
-}
-
 /** Event emitted when a contract WASM upgrade is detected. */
 export interface UpgradeEvent {
   previousHash: string;
@@ -221,10 +221,57 @@ export interface SimulatePayResult {
   fee: string;
 }
 
-/** Fee estimate returned by estimateFee(). */
-export interface FeeEstimate {
-  /** Estimated transaction fee in stroops. */
+/** Fee breakdown for a payment amount. */
+export interface FeeBreakdown {
+  /** Gross amount before fee deduction. */
+  gross: bigint;
+  /** Protocol fee amount. */
   fee: bigint;
-  /** Network congestion level derived from recent fee statistics. */
-  congestion: "low" | "medium" | "high";
+  /** Net amount recipient receives. */
+  net: bigint;
+  /** Fee basis points (1 bps = 0.01%). */
+  feeBps: number;
+}
+
+/** Token metadata information. */
+export interface TokenInfo {
+  /** Token contract address. */
+  address: string;
+  /** Token symbol (e.g., "USDC"). */
+  symbol: string;
+  /** Token name (e.g., "USD Coin"). */
+  name: string;
+  /** Number of decimal places. */
+  decimals: number;
+}
+
+/** Event fired when an invoice is expiring or has expired. */
+export interface ExpiryEvent {
+  /** Invoice ID. */
+  invoiceId: string;
+  /** Unix timestamp deadline (seconds). */
+  deadline: number;
+  /** Seconds remaining until deadline. */
+  secondsRemaining: number;
+  /** True if deadline has passed. */
+  expired: boolean;
+}
+
+/** Callback function for expiry events. */
+export type ExpiryCallback = (event: ExpiryEvent) => void;
+
+/** Cryptographic proof of a payment. */
+export interface PaymentProof {
+  /** Transaction hash. */
+  txHash: string;
+  /** Payer's Stellar address. */
+  payer: string;
+  /** Invoice ID. */
+  invoiceId: string;
+  /** Amount paid in stroops. */
+  amount: bigint;
+  /** Ledger sequence number. */
+  ledger: number;
+  /** SHA-256 hash of proof fields. */
+  proofHash: string;
 }
