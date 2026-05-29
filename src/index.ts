@@ -68,10 +68,12 @@ export type {
   InvoiceEventCallbacks,
   SimulateCreateInvoiceResult,
   SimulatePayResult,
-} from "./types.js";
   InvoiceDiff,
   SDKHealth,
+  ArchivedInvoice,
 } from "./types.js";
 export { InvalidTransitionError } from "./types.js";
 
-export { LedgerAdapter } from "./adapters/ledger.js";
+export type { CompletionPrediction } from "./predictor.js";
+
+export type { RequestPriority } from "./priorityQueue.js";

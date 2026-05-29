@@ -65,6 +65,16 @@ export interface Payment {
   payer: string;
   /** Amount paid in stroops (1 XLM = 10_000_000 stroops). */
   amount: bigint;
+  /** Unix timestamp in seconds when the payment was made (optional). */
+  timestamp?: number;
+}
+
+/** An archived invoice record. */
+export interface ArchivedInvoice {
+  /** Invoice ID. */
+  invoiceId: string;
+  /** Unix timestamp in seconds when the invoice was archived. */
+  archivedAt: number;
 }
 
 /** A recipient and their owed share. */
