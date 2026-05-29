@@ -18,13 +18,6 @@ export interface ApprovalResult {
   reason?: string;
 }
 
-/** Result from calculateVesting. */
-export interface VestingSchedule {
-  cliffDate: number;
-  fullyVestedDate: number;
-  claimableAt: (timestamp: number) => bigint;
-}
-
 /** Parameters for an arbiter's vote on a dispute. */
 export interface ArbiterVote {
   invoiceId: string;
@@ -105,6 +98,12 @@ export interface Invoice {
   payments: Payment[];
   /** Whether this is a recurring invoice. */
   recurring?: boolean;
+  /** Optional memo / description attached to the invoice. */
+  memo?: string;
+  /** ID of the source invoice this was cloned from. */
+  clonedFrom?: string;
+  /** ID of the group this invoice belongs to. */
+  groupId?: string;
 }
 
 /** Parameters for creating an invoice. */

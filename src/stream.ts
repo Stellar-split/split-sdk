@@ -121,7 +121,7 @@ function extractInvoiceId(event: SorobanRpc.Api.EventResponse): string | null {
     if (typeof id === "number" || typeof id === "bigint") return String(id);
   }
 
-  const value = event.value as Record<string, unknown> | undefined;
+  const value = (event.value as unknown) as Record<string, unknown> | undefined;
   const id = value?.invoiceId;
   if (typeof id === "string") return id;
   if (typeof id === "number" || typeof id === "bigint") return String(id);
@@ -141,7 +141,7 @@ function extractPayment(event: SorobanRpc.Api.EventResponse): Payment | null {
 
 /** Extract a Payment from a payment event. */
 function extractPayment(event: SorobanRpc.Api.EventResponse): Payment | null {
-  const value = event.value as Record<string, unknown> | undefined;
+  const value = (event.value as unknown) as Record<string, unknown> | undefined;
   if (!value) return null;
 
   const payer = value.payer;

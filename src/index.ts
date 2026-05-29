@@ -57,7 +57,12 @@ export {
   addRequestInterceptor,
   addResponseInterceptor,
 } from "./interceptors.js";
-export type { RequestInterceptor, ResponseInterceptor, RPCRequest, RPCResponse } from "./interceptors.js";
+export type {
+  RequestInterceptor,
+  ResponseInterceptor,
+  RPCRequest,
+  RPCResponse,
+} from "./interceptors.js";
 
 export { diffInvoice } from "./diff.js";
 

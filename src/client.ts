@@ -433,7 +433,8 @@ export class StellarSplitClient {
     const startTime = Date.now();
     const req = { method: "getInvoice", params: [invoiceId] };
     await runRequestInterceptors(req);
-    try {
+
+    const fetchFn = async (): Promise<Invoice> => {
       const operation = this.contract.call(
         "get_invoice",
         nativeToScVal(BigInt(invoiceId), { type: "u64" })
@@ -461,7 +462,17 @@ export class StellarSplitClient {
 
       const invoice = this._parseInvoice(invoiceId, scValToNative(returnVal));
       const raw = await this._simulateView(operation);
-      const invoice = this._parseInvoice(invoiceId, raw as Record<string, unknown>);
+      return this._parseInvoice(invoiceId, raw as Record<string, unknown>);
+    };
+
+    try {
+      let invoice: Invoice;
+      if (this._degradation) {
+        const result = await this._degradation.wrapRead(invoiceId, fetchFn);
+        invoice = result.data;
+      } else {
+        invoice = await fetchFn();
+      }
       telemetry.recordMethod("getInvoice", true, Date.now() - startTime);
       const durationMs = Date.now() - startTime;
       await runResponseInterceptors({ method: "getInvoice", result: invoice, durationMs });
@@ -724,7 +735,7 @@ export class StellarSplitClient {
     const total = allIds.length;
     const startIndex = options.cursor ? allIds.indexOf(options.cursor) + 1 : 0;
     const page = allIds.slice(startIndex, startIndex + limit);
-    const nextCursor = startIndex + limit < total ? page[page.length - 1] : null;
+    const nextCursor = startIndex + limit < total ? (page[page.length - 1] ?? null) : null;
 
     return { items: page, nextCursor, total };
   }
@@ -1005,7 +1016,7 @@ export class StellarSplitClient {
       accountId: () => params.creator,
       sequenceNumber: () => "0",
       incrementSequenceNumber: () => {},
-    } as Parameters<typeof TransactionBuilder>[0]);
+    } as unknown as Account);
 
     const tx = new TransactionBuilder(sourceAccount, {
       fee: BASE_FEE,
@@ -1049,7 +1060,7 @@ export class StellarSplitClient {
       accountId: () => params.payer,
       sequenceNumber: () => "0",
       incrementSequenceNumber: () => {},
-    } as Parameters<typeof TransactionBuilder>[0]);
+    } as unknown as Account);
 
     const tx = new TransactionBuilder(sourceAccount, {
       fee: BASE_FEE,
@@ -1185,28 +1196,6 @@ export class StellarSplitClient {
       allowHttp: config.rpcUrl.startsWith("http://"),
     });
     this.contract = new Contract(config.contractId);
-  }
-
-  /**
-   * Get all invoices where an address is a recipient.
-   */
-  private async getInvoicesByRecipient(recipient: string): Promise<Invoice[]> {
-    const operation = this.contract.call(
-      "get_invoices_by_recipient",
-      nativeToScVal(recipient, { type: "address" })
-    );
-
-    let invoices: unknown;
-    try {
-      invoices = await this._simulateView(operation);
-    } catch {
-      return [];
-    }
-    if (!Array.isArray(invoices)) return [];
-
-    return invoices.map((inv: Record<string, unknown>, idx: number) =>
-      this._parseInvoice(idx.toString(), inv)
-    );
   }
 
   // ---------------------------------------------------------------------------
@@ -1359,6 +1348,7 @@ export class StellarSplitClient {
     sourceAddress: string,
     operation: xdr.Operation
   ): Promise<{ txHash: string; returnValue: xdr.ScVal }> {
+    await this._rateLimiter?.acquire();
     const req = { method: "_submitTx", params: [sourceAddress] };
     await runRequestInterceptors(req);
 
@@ -1511,6 +1501,9 @@ export class StellarSplitClient {
       status: statusMap[raw.status as string] ?? "Pending",
       payments,
       recurring: raw.recurring as boolean | undefined,
+      memo: raw.memo as string | undefined,
+      clonedFrom: raw.clonedFrom as string | undefined,
+      groupId: raw.groupId as string | undefined,
     };
   }
 
