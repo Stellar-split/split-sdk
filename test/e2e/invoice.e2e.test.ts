@@ -7,10 +7,18 @@
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
+import { spawnSync } from "node:child_process";
 import { Keypair, TransactionBuilder } from "@stellar/stellar-sdk";
 import { StellarSplitClient } from "../../src/client.js";
 import { setupE2E, TESTNET_RPC, TESTNET_PASSPHRASE } from "./setup.js";
 import type { E2EEnv } from "./setup.js";
+
+function isStellarAvailable(): boolean {
+  const result = spawnSync("stellar", ["--version"], { stdio: "ignore" });
+  return result.status === 0 && result.error === undefined;
+}
+
+const describeIfStellar = isStellarAvailable() ? describe : describe.skip;
 
 // ---------------------------------------------------------------------------
 // Mock wallet.ts so signTransaction uses a raw keypair instead of Freighter.
@@ -43,7 +51,7 @@ vi.mock("../../src/wallet.js", () => ({
 // Test suite
 // ---------------------------------------------------------------------------
 
-describe("StellarSplit E2E", () => {
+describeIfStellar("StellarSplit E2E", () => {
   let env: E2EEnv;
   let client: StellarSplitClient;
 
