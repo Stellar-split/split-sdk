@@ -48,14 +48,6 @@ import type {
 } from "./types.js";
 import { subscribeToInvoice as _subscribeToInvoice } from "./stream.js";
 
-/** Thrown when an invoice ID does not exist on-chain. */
-export class InvoiceNotFoundError extends Error {
-  constructor(invoiceId: string) {
-    super(`Invoice not found: ${invoiceId}`);
-    this.name = "InvoiceNotFoundError";
-  }
-}
-
 /** A plugin that extends StellarSplitClient with new methods at runtime. */
 export interface StellarSplitPlugin {
   /** Unique plugin name — duplicate registrations throw. */
@@ -639,8 +631,7 @@ export class StellarSplitClient {
     );
 
     const account = await this.server.getAccount(this.config.contractId).catch(() => null);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const sourceAccount = account ?? ({ accountId: () => this.config.contractId, sequenceNumber: () => "0", incrementSequenceNumber: () => {} } as any);
+    const sourceAccount = account ?? new Account(this.config.contractId, "0");
 
     const tx = new TransactionBuilder(sourceAccount, {
       fee: BASE_FEE,
@@ -911,11 +902,7 @@ export class StellarSplitClient {
     );
 
     const account = await this.server.getAccount(params.creator).catch(() => null);
-    const sourceAccount = account ?? ({
-      accountId: () => params.creator,
-      sequenceNumber: () => "0",
-      incrementSequenceNumber: () => {},
-    } as Parameters<typeof TransactionBuilder>[0]);
+    const sourceAccount = account ?? new Account(params.creator, "0");
 
     const tx = new TransactionBuilder(sourceAccount, {
       fee: BASE_FEE,
@@ -955,11 +942,7 @@ export class StellarSplitClient {
     );
 
     const account = await this.server.getAccount(params.payer).catch(() => null);
-    const sourceAccount = account ?? ({
-      accountId: () => params.payer,
-      sequenceNumber: () => "0",
-      incrementSequenceNumber: () => {},
-    } as Parameters<typeof TransactionBuilder>[0]);
+    const sourceAccount = account ?? new Account(params.payer, "0");
 
     const tx = new TransactionBuilder(sourceAccount, {
       fee: BASE_FEE,
@@ -1005,28 +988,6 @@ export class StellarSplitClient {
     this.contract = new Contract(config.contractId);
   }
 
-  /**
-   * Get all invoices where an address is a recipient.
-   */
-  private async getInvoicesByRecipient(recipient: string): Promise<Invoice[]> {
-    const operation = this.contract.call(
-      "get_invoices_by_recipient",
-      nativeToScVal(recipient, { type: "address" })
-    );
-
-    let invoices: unknown;
-    try {
-      invoices = await this._simulateView(operation);
-    } catch {
-      return [];
-    }
-    if (!Array.isArray(invoices)) return [];
-
-    return invoices.map((inv: Record<string, unknown>, idx: number) =>
-      this._parseInvoice(idx.toString(), inv)
-    );
-  }
-
   // ---------------------------------------------------------------------------
   // Internal helpers
   // ---------------------------------------------------------------------------
@@ -1053,34 +1014,6 @@ export class StellarSplitClient {
     if (!returnVal) throw new Error("No return value from simulation");
 
     return scValToNative(returnVal);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Internal helpers
-  // ---------------------------------------------------------------------------
-
-  /** Simulate a view-only (read) contract call. */
-  private async _simulateView<T>(operation: xdr.Operation, parseFn: (val: unknown) => T): Promise<T> {
-    const account = await this.server.getAccount(this.config.contractId).catch(() => null);
-    const sourceAccount = account ?? ({ accountId: () => this.config.contractId, sequenceNumber: () => "0", incrementSequenceNumber: () => {} } as { accountId: () => string; sequenceNumber: () => string; incrementSequenceNumber: () => void });
-
-    const tx = new TransactionBuilder(sourceAccount, {
-      fee: BASE_FEE,
-      networkPassphrase: this.config.networkPassphrase,
-    })
-      .addOperation(operation)
-      .setTimeout(30)
-      .build();
-
-    const simResult = await this.server.simulateTransaction(tx);
-    if (SorobanRpc.Api.isSimulationError(simResult)) {
-      throw new Error(`Simulation failed: ${simResult.error}`);
-    }
-
-    const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
-    if (!returnVal) throw new Error("No return value from view call");
-
-    return parseFn(scValToNative(returnVal));
   }
 
   /** Build, simulate, sign, and submit a transaction. */
@@ -1242,74 +1175,4 @@ export class StellarSplitClient {
       recurring: raw.recurring as boolean | undefined,
     };
   }
-  /**
-   * Dispute an invoice by ID.
-   * @param invoiceId - The ID of the invoice to dispute.
-   * @returns The dispute ID and transaction hash.
-   */
-  async disputeInvoice(invoiceId: string): Promise<DisputeResult> {
-    const startTime = Date.now();
-    try {
-      const operation = this.contract.call(
-        "dispute_invoice",
-        nativeToScVal(BigInt(invoiceId), { type: "u64" })
-      );
-      // Assuming the creator is the one calling dispute
-      // You may want to pass the creator as a parameter if needed
-      const result = await this._submitTx(this.config.contractId, operation);
-      const disputeId = scValToNative(result.returnValue).toString();
-      telemetry.recordMethod("disputeInvoice", true, Date.now() - startTime);
-      return { disputeId, txHash: result.txHash };
-    } catch (error) {
-      telemetry.recordMethod("disputeInvoice", false, Date.now() - startTime);
-      throw error;
-    }
-  }
-
-  /**
-   * Submit an arbiter's vote for a dispute.
-   * @param vote - The arbiter vote parameters.
-   * @returns The dispute ID and transaction hash.
-   */
-  async submitArbiterVote(vote: ArbiterVote): Promise<DisputeResult> {
-    const startTime = Date.now();
-    try {
-      const operation = this.contract.call(
-        "submit_arbiter_vote",
-        nativeToScVal(BigInt(vote.invoiceId), { type: "u64" }),
-        nativeToScVal(vote.arbiter, { type: "address" }),
-        nativeToScVal(vote.approve, { type: "bool" })
-      );
-      const result = await this._submitTx(vote.arbiter, operation);
-      const disputeId = scValToNative(result.returnValue).toString();
-      telemetry.recordMethod("submitArbiterVote", true, Date.now() - startTime);
-      return { disputeId, txHash: result.txHash };
-    } catch (error) {
-      telemetry.recordMethod("submitArbiterVote", false, Date.now() - startTime);
-      throw error;
-    }
-  }
-
-  /**
-   * Resolve a dispute for an invoice.
-   * @param invoiceId - The ID of the invoice to resolve dispute for.
-   * @returns The dispute ID and transaction hash.
-   */
-  async resolveDispute(invoiceId: string): Promise<DisputeResult> {
-    const startTime = Date.now();
-    try {
-      const operation = this.contract.call(
-        "resolve_dispute",
-        nativeToScVal(BigInt(invoiceId), { type: "u64" })
-      );
-      const result = await this._submitTx(this.config.contractId, operation);
-      const disputeId = scValToNative(result.returnValue).toString();
-      telemetry.recordMethod("resolveDispute", true, Date.now() - startTime);
-      return { disputeId, txHash: result.txHash };
-    } catch (error) {
-      telemetry.recordMethod("resolveDispute", false, Date.now() - startTime);
-      throw error;
-    }
-  }
-
 }

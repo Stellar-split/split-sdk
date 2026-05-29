@@ -18,13 +18,6 @@ export interface ApprovalResult {
   reason?: string;
 }
 
-/** Result from calculateVesting. */
-export interface VestingSchedule {
-  cliffDate: number;
-  fullyVestedDate: number;
-  claimableAt: (timestamp: number) => bigint;
-}
-
 /** Parameters for an arbiter's vote on a dispute. */
 export interface ArbiterVote {
   invoiceId: string;
