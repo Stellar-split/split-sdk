@@ -4,6 +4,10 @@
 
 export { StellarSplitClient } from "./client.js";
 export type { StellarSplitClientConfig, NetworkConfig, TxResult } from "./client.js";
+// Dispute management methods (for clarity, these are instance methods on StellarSplitClient)
+// Types exported below
+
+export { Deduplicator } from "./dedup.js";
 
 export { TxQueue } from "./queue.js";
 
@@ -32,6 +36,24 @@ export { pollUSDCBalance, initPoller } from "./poller.js";
 
 export { telemetry } from "./telemetry.js";
 
+export type { WalletAdapter } from "./adapters/types.js";
+export { WalletConnectAdapter } from "./adapters/walletconnect.js";
+export { LedgerAdapter } from "./adapters/ledger.js";
+
+export { subscribeToInvoice } from "./stream.js";
+
+export { validateTransition } from "./stateMachineValidator.js";
+
+export {
+  addRequestInterceptor,
+  addResponseInterceptor,
+} from "./interceptors.js";
+export type { RequestInterceptor, ResponseInterceptor, RPCRequest, RPCResponse } from "./interceptors.js";
+
+export { diffInvoice } from "./diff.js";
+
+export { getSDKHealth, resetSDKHealth } from "./healthDashboard.js";
+
 export type {
   Invoice,
   Payment,
@@ -42,6 +64,14 @@ export type {
   InvoiceTemplate,
   PaginatedResult,
   PaginationOptions,
+  BatchPayment,
+  InvoiceEventCallbacks,
+  SimulateCreateInvoiceResult,
+  SimulatePayResult,
 } from "./types.js";
+  InvoiceDiff,
+  SDKHealth,
+} from "./types.js";
+export { InvalidTransitionError } from "./types.js";
 
 export { LedgerAdapter } from "./adapters/ledger.js";
