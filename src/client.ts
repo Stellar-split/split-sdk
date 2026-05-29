@@ -35,9 +35,11 @@ import type {
   ArbiterVote,
   BatchPayment,
   BatchResolveResult,
+  CoSignature,
   CreateInvoiceParams,
   DisputeResult,
   FeeBreakdown,
+  FeeEstimate,
   Invoice,
   InvoiceEventCallbacks,
   InvoiceGroup,
@@ -62,8 +64,11 @@ import { subscribeToInvoice as _subscribeToInvoice } from "./stream.js";
 import { ConnectionPool } from "./connectionPool.js";
 import { snapshotInvoice as _snapshotInvoice } from "./snapshot.js";
 import type { InvoiceSnapshot } from "./snapshot.js";
+import { SimpleCache } from "./cache.js";
+import { parseSorobanError } from "./errors.js";
+import { RateLimiter } from "./rateLimiter.js";
+import { DegradationManager } from "./degradation.js";
 import { AuditLogger } from "./auditLogger.js";
-import type { AuditEntry } from "./auditLogger.js";
 import { WarmStandby } from "./standby.js";
 import { computePrediction } from "./predictor.js";
 import type { CompletionPrediction } from "./predictor.js";
@@ -139,6 +144,9 @@ export class StellarSplitClient {
   private _plugins = new Set<string>();
   private _dedup = new Deduplicator<Invoice>();
   private _cache: SimpleCache<Invoice> | null = null;
+  private _auditLogger: AuditLogger | null = null;
+  private _degradation: DegradationManager | null = null;
+  private _rateLimiter: RateLimiter | null = null;
 
   private get server(): SorobanRpc.Server {
     return this._standby?.server ?? this._mainServer;
@@ -1185,12 +1193,18 @@ export class StellarSplitClient {
    * @returns FeeEstimate with fee in stroops and a congestion indicator.
    */
   async estimateFee(operation: xdr.Operation): Promise<FeeEstimate> {
-    return _estimateFee(
-      this.server,
-      this.config.networkPassphrase,
-      this.config.contractId,
-      operation
-    );
+    const simResult = await this._simulateView(operation) as { minResourceFee?: string; error?: string };
+    if (simResult.error) throw new Error(`Fee estimation failed: ${simResult.error}`);
+    const fee = BigInt(simResult.minResourceFee ?? "0");
+    let congestion: FeeEstimate["congestion"] = "low";
+    try {
+      const stats = await this.server.getFeeStats() as { sorobanInclusionFee?: { p50?: string; p99?: string } };
+      const p50 = Number(stats.sorobanInclusionFee?.p50 ?? "1");
+      const p99 = Number(stats.sorobanInclusionFee?.p99 ?? "1");
+      const ratio = p99 > 0 ? p50 / p99 : 1;
+      congestion = ratio >= 0.9 ? "low" : ratio >= 0.5 ? "medium" : "high";
+    } catch { /* use default */ }
+    return { fee, congestion };
   }
 
   // ---------------------------------------------------------------------------
@@ -1238,32 +1252,6 @@ export class StellarSplitClient {
   /** Clear the entire invoice cache. */
   clearCache(): void {
     this._cache?.clear();
-  }
-
-  // ---------------------------------------------------------------------------
-  // Issue #2 — subscribeToInvoice (streaming)
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Subscribe to live invoice events via Soroban RPC event polling.
-   *
-   * @param invoiceId  - The invoice ID to watch.
-   * @param callbacks  - Typed event callbacks.
-   * @param intervalMs - Poll interval in milliseconds (default: 5000).
-   * @returns Unsubscribe function that stops the stream.
-   */
-  subscribeToInvoice(
-    invoiceId: string,
-    callbacks: InvoiceEventCallbacks,
-    intervalMs?: number
-  ): () => void {
-    return _subscribeToInvoice(
-      this.server,
-      this.config.contractId,
-      invoiceId,
-      callbacks,
-      intervalMs
-    );
   }
 
   /**
@@ -1622,7 +1610,7 @@ export class StellarSplitClient {
    * @returns The invoice from the endpoint with the highest lastModifiedLedger.
    * @throws If all endpoints fail.
    */
-  async syncInvoice(invoiceId: string): Promise<SyncResult> {
+  async syncInvoice(invoiceId: string): Promise<{ invoice: Invoice; source: string; ledger: number }> {
     const urls = Array.isArray(this.config.rpcUrl)
       ? this.config.rpcUrl
       : [this.config.rpcUrl];
@@ -1661,7 +1649,7 @@ export class StellarSplitClient {
     );
 
     const successful = results
-      .filter((r): r is PromiseFulfilledResult<SyncResult> => r.status === "fulfilled")
+      .filter((r): r is PromiseFulfilledResult<{ invoice: Invoice; source: string; ledger: number }> => r.status === "fulfilled")
       .map((r) => r.value);
 
     if (successful.length === 0) {

@@ -43,8 +43,9 @@ export async function generatePaymentProof(
   txHash: string,
   config: StellarSplitClientConfig
 ): Promise<PaymentProof> {
-  const server = new SorobanRpc.Server(config.rpcUrl, {
-    allowHttp: config.rpcUrl.startsWith("http://"),
+  const rpcUrl = Array.isArray(config.rpcUrl) ? config.rpcUrl[0]! : config.rpcUrl;
+  const server = new SorobanRpc.Server(rpcUrl, {
+    allowHttp: rpcUrl.startsWith("http://"),
   });
 
   const txResult = await server.getTransaction(txHash);
@@ -121,8 +122,8 @@ function _computeProofHash(
   // Simple hash implementation for deterministic proof hash
   let hash = 0;
   for (let i = 0; i < buffer.length; i++) {
-    hash = ((hash << 5) - hash) + buffer[i];
-    hash = hash & hash; // Convert to 32bit integer
+    hash = ((hash << 5) - hash) + (buffer[i] ?? 0);
+    hash = hash & hash;
   }
   
   // Return a hex string representation

@@ -38,8 +38,9 @@ export async function resolveToken(
     return tokenCache.get(address)!;
   }
 
-  const server = new SorobanRpc.Server(config.rpcUrl, {
-    allowHttp: config.rpcUrl.startsWith("http://"),
+  const rpcUrl = Array.isArray(config.rpcUrl) ? config.rpcUrl[0]! : config.rpcUrl;
+  const server = new SorobanRpc.Server(rpcUrl, {
+    allowHttp: rpcUrl.startsWith("http://"),
   });
   const contract = new Contract(address);
 

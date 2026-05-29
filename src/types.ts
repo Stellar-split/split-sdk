@@ -104,6 +104,10 @@ export interface Invoice {
   clonedFrom?: string;
   /** ID of the group this invoice belongs to. */
   groupId?: string;
+  /** Ledger sequence when this invoice was last modified. */
+  lastModifiedLedger?: number;
+  /** IDs of invoices that must be paid before this one. */
+  prerequisites?: string[];
 }
 
 /** Parameters for creating an invoice. */
@@ -292,4 +296,72 @@ export interface PaymentProof {
   ledger: number;
   /** SHA-256 hash of proof fields. */
   proofHash: string;
+}
+
+/** Result of resolving a batch of invoices. */
+export interface BatchResolveResult {
+  invoiceId: string;
+  success: boolean;
+  error?: string;
+}
+
+/** Result of a sync operation. */
+export interface SyncResult {
+  synced: number;
+  failed: number;
+  errors: string[];
+}
+
+/** Strategy for resolving conflicting invoice states. */
+export type ConflictStrategy = "remote-wins" | "local-wins" | "latest-ledger";
+
+/** Memory usage report from the memory profiler. */
+export interface MemoryReport {
+  cacheEntries: number;
+  listenerCount: number;
+  estimatedKB: number;
+  warnings: string[];
+}
+
+/** Relationships between invoices (clones, groups, prerequisites). */
+export interface InvoiceRelationships {
+  invoiceId: string;
+  clones: string[];
+  groupId: string | null;
+  prerequisites: string[];
+}
+
+/** A discovered Soroban RPC node with latency info. */
+export interface RPCNode {
+  url: string;
+  latencyMs: number;
+  healthy: boolean;
+}
+
+/** Vesting schedule for an invoice with cliff and drip. */
+export interface VestingSchedule {
+  cliffDate: number;
+  fullyVestedDate: number;
+  claimableAt: (timestamp: number) => bigint;
+}
+
+/** Revenue breakdown after protocol fees. */
+export interface RevenueBreakdown {
+  invoiceId: string;
+  gross: bigint;
+  protocolFee: bigint;
+  net: bigint;
+  perRecipient: { address: string; amount: bigint }[];
+}
+
+/** Fee estimate with congestion indicator. */
+export interface FeeEstimate {
+  fee: bigint;
+  congestion: "low" | "medium" | "high";
+}
+
+/** A co-signature collected from one signer. */
+export interface CoSignature {
+  signer: string;
+  signedXdr: string;
 }

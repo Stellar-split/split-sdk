@@ -70,8 +70,6 @@ export { diffInvoice } from "./diff.js";
 
 export { getSDKHealth, resetSDKHealth } from "./healthDashboard.js";
 
-export { subscribeToInvoice } from "./stream.js";
-
 export {
   StellarSplitError,
   InvoiceNotFoundError,
