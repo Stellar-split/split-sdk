@@ -154,3 +154,6 @@ export async function generatePaymentProof(
 
 export type { ComplianceReport } from "./compliance.js";
 
+export { ScheduledPaymentManager } from "./scheduler.js";
+export type { ScheduledPayment } from "./scheduler.js";
+
