@@ -86,6 +86,30 @@ new StellarSplitClient(config: StellarSplitClientConfig)
 | `getPublicKey()` | `Promise<string>` | Get connected wallet's public key |
 | `signTransaction(xdr, network)` | `Promise<string>` | Sign a transaction XDR |
 
+### Multi-Tenant Support
+
+| Class | Description |
+|-------|-------------|
+| `MultiTenantClient` | Manage a pool of `StellarSplitClient` instances keyed by tenant ID, with `getClient`, `evict`, and `evictAll` |
+
+### Profiling
+
+| Class | Description |
+|-------|-------------|
+| `ProfilerSession` | Record SDK method timings during a session and produce a flame-graph-compatible report |
+
+### Webhook Validation
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `validateWebhookSignature(payload, signature, secret)` | `Promise<boolean>` | Verify the HMAC-SHA256 signature on incoming invoice webhook payloads |
+
+### Invoice Metadata Enricher
+
+| Function | Returns | Description |
+|----------|---------|-------------|
+| `enrichInvoice(invoiceId)` | `Promise<EnrichedInvoice>` | Fetch IPFS metadata from invoice memo CID and merge it into the invoice |
+
 ### Utilities
 
 | Function | Description |

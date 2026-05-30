@@ -34,4 +34,26 @@ describe("MultiTenantClient", () => {
     expect(third).not.toBe(first);
     expect(factory).toHaveBeenCalledTimes(3);
   });
+
+  it("evicts all cached tenant clients", () => {
+    const contractId = StrKey.encodeContract(randomBytes(32));
+    const factory = vi.fn((tenantId: string): DummyConfig => ({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId,
+    }));
+
+    const multiTenant = new MultiTenantClient(factory);
+    const first = multiTenant.getClient("tenant-a");
+    const second = multiTenant.getClient("tenant-b");
+
+    multiTenant.evictAll();
+
+    const third = multiTenant.getClient("tenant-a");
+    const fourth = multiTenant.getClient("tenant-b");
+
+    expect(third).not.toBe(first);
+    expect(fourth).not.toBe(second);
+    expect(factory).toHaveBeenCalledTimes(4);
+  });
 });
