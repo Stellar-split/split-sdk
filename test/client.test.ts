@@ -605,6 +605,13 @@ describe("TelemetryCollector", () => {
   it("records metrics and computes percentiles", () => {
     const collector = new TelemetryCollector();
 
+    await expect(
+      client.simulatePay({ payer: PAYER_ADDR, invoiceId: "1", amount: 1000n })
+    ).rejects.toThrow("Simulation error");
+  });
+});
+
+import { Deduplicator } from "../src/dedup.js";
     for (let i = 0; i < 10; i++) {
       collector.recordMethod("methodA", i % 3 === 0, i * 10);
     }

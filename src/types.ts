@@ -261,6 +261,11 @@ export interface SimulatePayResult {
   fee: string;
 }
 
+/** Result of SDK/contract version negotiation. */
+export interface VersionInfo {
+  contractVersion: string;
+  sdkVersion: string;
+  compatible: boolean;
 /** Fee breakdown for a payment amount. */
 export interface FeeBreakdown {
   /** Gross amount before fee deduction. */

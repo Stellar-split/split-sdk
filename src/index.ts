@@ -127,6 +127,10 @@ export type {
 } from "./types.js";
 export { InvalidTransitionError } from "./types.js";
 
+export { LedgerAdapter } from "./adapters/ledger.js";
+
+export { negotiateVersion, SDK_CONTRACT_VERSION } from "./version.js";
+export type { VersionInfo } from "./types.js";
 // ---------------------------------------------------------------------------
 // Lazy factories for heavy modules
 // ---------------------------------------------------------------------------
