@@ -8,6 +8,11 @@ import type { ExportFormat } from "./export.js";
 
 export { StellarSplitClient } from "./client.js";
 export type { StellarSplitClientConfig, NetworkConfig, TxResult } from "./client.js";
+export { MultiTenantClient } from "./multiTenant.js";
+export { ProfilerSession } from "./profiler.js";
+export type { ProfileReport } from "./profiler.js";
+export { enrichInvoice, registerInvoiceFetcher } from "./enricher.js";
+export type { EnrichedInvoice } from "./enricher.js";
 
 export { Deduplicator } from "./dedup.js";
 
@@ -53,6 +58,7 @@ export type { PaymentValidation } from "./paymentValidator.js";
 export { generateGraphQLSchema } from "./graphql.js";
 
 export { registerWebhook, triggerWebhook } from "./webhook.js";
+export { validateWebhookSignature } from "./webhookValidator.js";
 export type { WebhookConfig, WebhookEvent } from "./webhook.js";
 
 export { detectContractFeatures, clearFeatureCache } from "./featureDetection.js";

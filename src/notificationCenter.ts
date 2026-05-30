@@ -47,11 +47,7 @@ export class NotificationCenter extends EventEmitter {
     this._watchers.delete(invoiceId);
   }
 
-  // typed `on` overloads
-  on(event: "payment", listener: (invoiceId: string, payment: Payment) => void): this;
-  on(event: "released" | "refunded" | "expired", listener: (invoiceId: string) => void): this;
-  on(event: "expiring", listener: (invoiceId: string, secondsLeft: number) => void): this;
   on(event: NotificationEvent, listener: (...args: unknown[]) => void): this {
-    return super.on(event, listener as any);
+    return super.on(event, listener);
   }
 }
