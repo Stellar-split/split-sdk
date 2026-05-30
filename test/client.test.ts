@@ -10,6 +10,8 @@ import {
 } from "../src/utils.js";
 import { pollUSDCBalance, initPoller } from "../src/poller.js";
 import { telemetry } from "../src/telemetry.js";
+import { TelemetryCollector } from "../src/telemetryCollector.js";
+import { DIContainer } from "../src/container.js";
 import { StellarSplitClient } from "../src/client.js";
 
 afterEach(() => {
@@ -425,6 +427,194 @@ describe("pay", () => {
     ).rejects.toThrow("DeadlinePassedError");
 
     expect(submitSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("bulk invoice operations", () => {
+  it("returns partial success when one cancel fails", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    const submitSpy = vi.spyOn(client as any, "_submitTx")
+      .mockResolvedValueOnce({ txHash: "tx-1", returnValue: {} } as any)
+      .mockRejectedValueOnce(new Error("invoice not found"))
+      .mockResolvedValueOnce({ txHash: "tx-3", returnValue: {} } as any);
+
+    const results = await client.bulkCancel(["1", "2", "3"]);
+
+    expect(results).toEqual([
+      { invoiceId: "1", success: true },
+      { invoiceId: "2", success: false, error: "invoice not found" },
+      { invoiceId: "3", success: true },
+    ]);
+    expect(submitSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("exports invoices in parallel and returns only successful entries", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    const invoiceA = {
+      id: "1",
+      creator: "GCREATORXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      recipients: [
+        { address: "GRECIPIENTXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", amount: 10_000_000n },
+      ],
+      token: "GUSDCXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      deadline: 1_700_000_000,
+      funded: 0n,
+      status: "Pending" as const,
+      payments: [],
+    };
+    const invoiceC = {
+      id: "3",
+      creator: "GCREATORXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      recipients: [
+        { address: "GRECIPIENTXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", amount: 10_000_000n },
+      ],
+      token: "GUSDCXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      deadline: 1_700_000_000,
+      funded: 0n,
+      status: "Pending" as const,
+      payments: [],
+    };
+
+    const getInvoiceSpy = vi.spyOn(client, "getInvoice")
+      .mockResolvedValueOnce(invoiceA as any)
+      .mockRejectedValueOnce(new Error("missing invoice"))
+      .mockResolvedValueOnce(invoiceC as any);
+
+    const result = await client.bulkExport(["1", "2", "3"], "json");
+
+    expect(result).toHaveProperty("1");
+    expect(result).toHaveProperty("3");
+    expect(result).not.toHaveProperty("2");
+    expect(getInvoiceSpy).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("validatePayment", () => {
+  it("returns all validation errors for invalid payments", async () => {
+    const adapter = {
+      getAddress: vi.fn().mockResolvedValue(
+        "GPAYERXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+      ),
+      signTransaction: vi.fn().mockResolvedValue("signed"),
+    };
+
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+      adapter,
+    });
+
+    vi.spyOn(client, "getInvoice").mockResolvedValue({
+      id: "123",
+      creator: "GCREATORXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      recipients: [
+        { address: "GRECIPIENTXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", amount: 100n },
+      ],
+      token: "GUSDCXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      deadline: 1_000_000_000,
+      funded: 90n,
+      status: "Released" as const,
+      payments: [],
+    } as any);
+    vi.spyOn(client as any, "_getTokenBalance").mockResolvedValue(50n);
+
+    const validation = await client.validatePayment("123", 20n);
+
+    expect(validation.valid).toBe(false);
+    expect(validation.errors).toContain("Insufficient USDC balance");
+    expect(validation.errors).toContain("Invoice is not pending");
+    expect(validation.errors).toContain("Payment amount exceeds invoice remaining balance");
+    expect(validation.errors).toContain("Invoice deadline has passed");
+  });
+
+  it("validates successfully when all checks pass", async () => {
+    const adapter = {
+      getAddress: vi.fn().mockResolvedValue(
+        "GPAYERXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+      ),
+      signTransaction: vi.fn().mockResolvedValue("signed"),
+    };
+
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+      adapter,
+    });
+
+    vi.spyOn(client, "getInvoice").mockResolvedValue({
+      id: "123",
+      creator: "GCREATORXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      recipients: [
+        { address: "GRECIPIENTXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", amount: 100n },
+      ],
+      token: "GUSDCXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      deadline: Math.floor(Date.now() / 1000) + 10000,
+      funded: 50n,
+      status: "Pending" as const,
+      payments: [],
+    } as any);
+    vi.spyOn(client as any, "_getTokenBalance").mockResolvedValue(100n);
+
+    const validation = await client.validatePayment("123", 25n);
+
+    expect(validation.valid).toBe(true);
+    expect(validation.errors).toEqual([]);
+  });
+});
+
+describe("DIContainer", () => {
+  it("uses injected RPC client for health checks", async () => {
+    const rpcClient = {
+      getAccount: vi.fn().mockResolvedValue({}),
+      getLatestLedger: vi.fn().mockResolvedValue({ sequence: 42 }),
+      simulateTransaction: vi.fn().mockResolvedValue({} as any),
+      sendTransaction: vi.fn().mockResolvedValue({ status: "SUCCESS", hash: "txhash" } as any),
+      getTransaction: vi.fn().mockResolvedValue({ status: "SUCCESS" } as any),
+      getFeeStats: vi.fn().mockResolvedValue({ sorobanInclusionFee: { p50: "1", p99: "2" } }),
+    } as unknown as any;
+
+    const container = new DIContainer({ rpcClient });
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+      container,
+    });
+
+    const health = await client.checkRPCHealth();
+
+    expect(health.blockHeight).toBe(42);
+    expect(rpcClient.getLatestLedger).toHaveBeenCalled();
+  });
+});
+
+describe("TelemetryCollector", () => {
+  it("records metrics and computes percentiles", () => {
+    const collector = new TelemetryCollector();
+
+    for (let i = 0; i < 10; i++) {
+      collector.recordMethod("methodA", i % 3 === 0, i * 10);
+    }
+
+    const report = collector.getReport();
+
+    expect(report.period).toBeGreaterThanOrEqual(0);
+    expect(report.methods.methodA.calls).toBe(10);
+    expect(report.methods.methodA.errors).toBe(4);
+    expect(report.methods.methodA.p50).toBeGreaterThanOrEqual(40);
+    expect(report.methods.methodA.p95).toBeGreaterThanOrEqual(90);
   });
 });
 

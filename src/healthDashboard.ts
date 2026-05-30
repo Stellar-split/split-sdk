@@ -1,10 +1,12 @@
 import { rpc as SorobanRpc } from "@stellar/stellar-sdk";
 import type { SDKHealth } from "./types.js";
 
+type HealthServer = SorobanRpc.Server;
+
 let totalCalls = 0;
 let errorCalls = 0;
 let startTime = Date.now();
-let serverRef: SorobanRpc.Server | null = null;
+let serverRef: HealthServer | null = null;
 let dedupRef: { cacheHitRate: number } | null = null;
 
 export function recordCall(success: boolean): void {
@@ -13,7 +15,7 @@ export function recordCall(success: boolean): void {
 }
 
 export function initHealthDashboard(
-  server: SorobanRpc.Server,
+  server: HealthServer,
   dedup: { cacheHitRate: number }
 ): void {
   serverRef = server;

@@ -323,6 +323,15 @@ export interface BatchResolveResult {
   error?: string;
 }
 
+export type BulkResult =
+  | ({ invoiceId: string } & { success: true })
+  | ({ invoiceId: string } & { success: false; error: string });
+
+export interface PaymentValidation {
+  valid: boolean;
+  errors: string[];
+}
+
 /** Result of a sync operation. */
 export interface SyncResult {
   synced: number;

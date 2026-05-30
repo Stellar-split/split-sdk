@@ -17,6 +17,10 @@ import {
 } from "@stellar/stellar-sdk";
 import { signTransaction } from "./wallet.js";
 import { telemetry } from "./telemetry.js";
+import { exportInvoice } from "./export.js";
+import type { ExportFormat } from "./export.js";
+import { computePaymentValidation } from "./paymentValidator.js";
+import type { PaymentValidation } from "./paymentValidator.js";
 import { withRetry } from "./retry.js";
 import { isFeatureEnabled } from "./flags.js";
 import type { FeatureFlags } from "./flags.js";
@@ -35,6 +39,7 @@ import type {
   ArbiterVote,
   BatchPayment,
   BatchResolveResult,
+  BulkResult,
   CoSignature,
   CreateInvoiceParams,
   DisputeResult,
@@ -59,6 +64,7 @@ import type {
   WalletAdapter,
   TokenInfo,
 } from "./types.js";
+import type { DIContainer, IRPCClient, ICacheStore, IWalletAdapter } from "./container.js";
 import { InvoiceNotFoundError } from "./types.js";
 import { subscribeToInvoice as _subscribeToInvoice } from "./stream.js";
 import { ConnectionPool } from "./connectionPool.js";
@@ -106,6 +112,8 @@ export interface StellarSplitClientConfig {
   cache?: { ttlMs: number };
   /** Optional compliance rules injectable for invoice checks. */
   complianceRules?: import("./compliance.js").ComplianceRule[];
+  /** Optional dependency injection container for RPC, cache, and wallet implementations. */
+  container?: DIContainer;
 }
 
 /** Network configuration. */
@@ -144,41 +152,47 @@ export class StellarSplitClient {
   private config: StellarSplitClientConfig;
   private _plugins = new Set<string>();
   private _dedup = new Deduplicator<Invoice>();
-  private _cache: SimpleCache<Invoice> | null = null;
+  private _cache: SimpleCache<Invoice> | ICacheStore<Invoice> | null = null;
   private _auditLogger: AuditLogger | null = null;
   private _degradation: DegradationManager | null = null;
   private _rateLimiter: RateLimiter | null = null;
+  private _rpcClient: IRPCClient | null = null;
+  private _adapter: WalletAdapter | null = null;
 
   private get server(): SorobanRpc.Server {
-    return this._standby?.server ?? this._mainServer;
+    return this._rpcClient ?? this._standby?.server ?? this._mainServer;
   }
   private set server(s: SorobanRpc.Server) {
+    this._rpcClient = null;
     this._mainServer = s;
   }
 
   constructor(config: StellarSplitClientConfig) {
     this.config = config;
     const primaryUrl = Array.isArray(config.rpcUrl) ? config.rpcUrl[0]! : config.rpcUrl;
+    this._rpcClient = config.container?.getRPCClient() ?? null;
+    this._adapter = config.container?.getWalletAdapter() ?? config.adapter ?? null;
     this._mainServer = new SorobanRpc.Server(primaryUrl, {
       allowHttp: primaryUrl.startsWith("http://"),
     });
 
-    if (Array.isArray(config.rpcUrl) && config.rpcUrl.length > 1) {
+    if (!this._rpcClient && Array.isArray(config.rpcUrl) && config.rpcUrl.length > 1) {
       this._standby = new WarmStandby(config.rpcUrl);
       this._standby.start();
     }
 
     this.contract = new Contract(config.contractId);
 
+    this._cache =
+      config.container?.getCacheStore() ??
+      (config.cache ? new SimpleCache<Invoice>(config.cache.ttlMs) : null);
+
     if (config.telemetry) {
       telemetry.init(config.telemetry);
     }
 
-    if (config.cache) {
-      this._cache = new SimpleCache<Invoice>(config.cache.ttlMs);
-    }
-
-    initHealthDashboard(this.server, this._dedup);
+    const dashboardServer = this.server as Parameters<typeof initHealthDashboard>[0];
+    initHealthDashboard(dashboardServer, this._dedup);
   }
 
   private _logAudit(method: string, params: Record<string, unknown>, success: boolean, durationMs: number): void {
@@ -617,6 +631,69 @@ export class StellarSplitClient {
   }
 
   /**
+   * Cancel multiple invoices in parallel without aborting on individual failures.
+   */
+  async bulkCancel(ids: string[]): Promise<BulkResult[]> {
+    return this._executeBulkInvoiceAction(ids, (invoiceId) => {
+      const operation = this.contract.call(
+        "cancel_invoice",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+      return this._submitTx(this.config.contractId, operation);
+    });
+  }
+
+  /**
+   * Archive multiple invoices in parallel without aborting on individual failures.
+   */
+  async bulkArchive(ids: string[]): Promise<BulkResult[]> {
+    return this._executeBulkInvoiceAction(ids, (invoiceId) => {
+      const operation = this.contract.call(
+        "archive_invoice",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+      return this._submitTx(this.config.contractId, operation);
+    });
+  }
+
+  /**
+   * Export multiple invoices in parallel and return formatted results by invoice ID.
+   */
+  async bulkExport(ids: string[], format: ExportFormat): Promise<Record<string, string>> {
+    const settled = await Promise.allSettled(
+      ids.map(async (invoiceId) => {
+        const invoice = await this.getInvoice(invoiceId);
+        return { invoiceId, data: exportInvoice(invoice, format) };
+      })
+    );
+
+    return settled.reduce<Record<string, string>>((acc, result, index) => {
+      if (result.status === "fulfilled") {
+        acc[ids[index]!] = result.value.data;
+      }
+      return acc;
+    }, {});
+  }
+
+  private async _executeBulkInvoiceAction(
+    ids: string[],
+    execute: (invoiceId: string) => Promise<unknown>
+  ): Promise<BulkResult[]> {
+    const settled = await Promise.allSettled(ids.map((invoiceId) => execute(invoiceId)));
+    return settled.map((result, index) => {
+      const invoiceId = ids[index]!;
+      if (result.status === "fulfilled") {
+        return { invoiceId, success: true };
+      }
+      return {
+        invoiceId,
+        success: false,
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      };
+    });
+  }
+
+  /**
    * Save an invoice template for reuse.
    *
    * @returns The transaction hash.
@@ -999,6 +1076,62 @@ export class StellarSplitClient {
     return { txHash: result.txHash };
   }
 
+  /**
+   * Validate a proposed payment before submission.
+   *
+   * @param invoiceId - Invoice ID to validate against.
+   * @param amount - Payment amount in stroops.
+   */
+  async validatePayment(
+    invoiceId: string,
+    amount: bigint
+  ): Promise<PaymentValidation> {
+    const invoice = await this.getInvoice(invoiceId);
+    let balance: bigint | null = null;
+
+    const payerAddress = await this._getPayerAddress();
+    if (payerAddress) {
+      try {
+        balance = await this._getTokenBalance(payerAddress, invoice.token);
+      } catch {
+        balance = null;
+      }
+    }
+
+    return computePaymentValidation(invoice, amount, balance);
+  }
+
+  private async _getPayerAddress(): Promise<string | null> {
+    if (this._adapter && typeof this._adapter.getAddress === "function") {
+      return await this._adapter.getAddress();
+    }
+    return null;
+  }
+
+  private async _getTokenBalance(
+    address: string,
+    tokenAddress: string
+  ): Promise<bigint> {
+    const tokenContract = new Contract(tokenAddress);
+    const operation = tokenContract.call(
+      "balance",
+      nativeToScVal(address, { type: "address" })
+    );
+
+    const result = await this._simulateView(operation);
+    if (typeof result === "bigint") {
+      return result;
+    }
+    if (typeof result === "string" || typeof result === "number") {
+      return BigInt(result);
+    }
+    if (typeof result === "object" && result !== null && "balance" in result) {
+      return BigInt((result as Record<string, unknown>).balance as string | number);
+    }
+
+    throw new Error("Unable to determine USDC balance");
+  }
+
   // ---------------------------------------------------------------------------
   // Issue #2 — subscribeToInvoice
   // ---------------------------------------------------------------------------
@@ -1240,8 +1373,8 @@ export class StellarSplitClient {
     let current = xdrStr;
     for (const signer of signers) {
       try {
-        current = await (this.config.adapter
-          ? this.config.adapter.signTransaction(current, this.config.networkPassphrase)
+        current = await (this._adapter
+          ? this._adapter.signTransaction(current, this.config.networkPassphrase)
           : signTransaction(current, this.config.networkPassphrase));
       } catch (err) {
         throw new Error(
@@ -1463,8 +1596,8 @@ export class StellarSplitClient {
       }
 
       const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
-      const signedXdr = await (this.config.adapter
-        ? this.config.adapter.signTransaction(preparedTx.toXDR(), this.config.networkPassphrase)
+      const signedXdr = await (this._adapter
+        ? this._adapter.signTransaction(preparedTx.toXDR(), this.config.networkPassphrase)
         : signTransaction(preparedTx.toXDR(), this.config.networkPassphrase));
 
       const sendResult = await this.server.sendTransaction(
@@ -1501,8 +1634,8 @@ export class StellarSplitClient {
           innerTx,
           this.config.networkPassphrase
         );
-        const signedBumpXdr = await (this.config.adapter
-          ? this.config.adapter.signTransaction(feeBumpTx.toXDR(), this.config.networkPassphrase)
+        const signedBumpXdr = await (this._adapter
+          ? this._adapter.signTransaction(feeBumpTx.toXDR(), this.config.networkPassphrase)
           : signTransaction(feeBumpTx.toXDR(), this.config.networkPassphrase));
         const bumpSendResult = await this.server.sendTransaction(
           TransactionBuilder.fromXDR(signedBumpXdr, this.config.networkPassphrase)

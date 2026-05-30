@@ -43,6 +43,11 @@ export {
 export { pollUSDCBalance, initPoller } from "./poller.js";
 
 export { telemetry } from "./telemetry.js";
+export { TelemetryCollector } from "./telemetryCollector.js";
+export type { TelemetryReport } from "./telemetryCollector.js";
+export { DIContainer } from "./container.js";
+export type { IRPCClient, ICacheStore, IWalletAdapter } from "./container.js";
+export type { PaymentValidation } from "./paymentValidator.js";
 
 export { generateGraphQLSchema } from "./graphql.js";
 
