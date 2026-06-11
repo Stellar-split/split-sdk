@@ -621,7 +621,7 @@ describe("validatePayment", () => {
     } as any);
     vi.spyOn(client as any, "_getTokenBalance").mockResolvedValue(50n);
 
-    const validation = await client.validatePayment("123", 20n);
+    const validation = await client.validatePayment("123", 100n);
 
     expect(validation.valid).toBe(false);
     expect(validation.errors).toContain("Insufficient USDC balance");
@@ -704,7 +704,7 @@ describe("TelemetryCollector", () => {
 
     expect(report.period).toBeGreaterThanOrEqual(0);
     expect(report.methods.methodA.calls).toBe(10);
-    expect(report.methods.methodA.errors).toBe(4);
+    expect(report.methods.methodA.errors).toBe(6);
     expect(report.methods.methodA.p50).toBeGreaterThanOrEqual(40);
     expect(report.methods.methodA.p95).toBeGreaterThanOrEqual(90);
   });
