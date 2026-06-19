@@ -37,6 +37,13 @@ export { calculateFee } from "./fee.js";
 export { resolveToken } from "./token.js";
 
 export { watchExpiry } from "./watcher.js";
+export { DeadlineEngine } from "./deadlineEngine.js";
+export type {
+  BusinessHours,
+  CountdownOptions,
+  CountdownResult,
+  DeadlineEngineOptions,
+} from "./deadlineEngine.js";
 
 export { StellarSplitTxBuilder } from "./txBuilder.js";
 
@@ -203,4 +210,3 @@ export type { ComplianceReport } from "./compliance.js";
 
 export { ScheduledPaymentManager } from "./scheduler.js";
 export type { ScheduledPayment } from "./scheduler.js";
-

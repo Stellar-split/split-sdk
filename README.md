@@ -98,6 +98,12 @@ new StellarSplitClient(config: StellarSplitClientConfig)
 |-------|-------------|
 | `ProfilerSession` | Record SDK method timings during a session and produce a flame-graph-compatible report |
 
+### Deadlines
+
+| Class | Description |
+|-------|-------------|
+| `DeadlineEngine` | Compute timezone-aware invoice countdowns, business-hours remaining time, and shared expiry callbacks |
+
 ### Webhook Validation
 
 | Function | Returns | Description |
