@@ -728,3 +728,149 @@ describe("generateGraphQLSchema", () => {
     expect(() => buildSchema(generateGraphQLSchema())).not.toThrow();
   });
 });
+
+describe("cloneInvoice", () => {
+  it("submits clone call with overrides and returns new invoice ID", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    vi.spyOn(client, "getInvoice").mockResolvedValue({
+      id: "123",
+      creator: "GCREATORXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      recipients: [
+        { address: "GRECIPIENTXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", amount: 1000n },
+      ],
+      token: "GUSDCXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      deadline: 1_700_000_000,
+      funded: 0n,
+      status: "Pending" as const,
+      payments: [],
+    } as any);
+
+    const { nativeToScVal, scValToNative } = await import("@stellar/stellar-sdk");
+    const mockReturnValue = nativeToScVal(BigInt("456"), { type: "u64" });
+    const submitSpy = vi.spyOn(client as any, "_submitTx").mockResolvedValue({
+      txHash: "tx-success",
+      returnValue: mockReturnValue,
+    });
+
+    (client as any)._cache = {
+      get: vi.fn(),
+      set: vi.fn(),
+      invalidate: vi.fn(),
+      clear: vi.fn(),
+    };
+
+    const result = await client.cloneInvoice("123", { newDeadline: 1_800_000_000 });
+
+    expect(result).toBe("456");
+    expect(submitSpy).toHaveBeenCalledTimes(1);
+    expect((client as any)._cache.set).toHaveBeenCalledWith(
+      "456",
+      expect.objectContaining({ id: "456", clonedFrom: "123", parentInvoiceId: "123" })
+    );
+  });
+
+  it("rolls back optimistic cache on submission failure", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    vi.spyOn(client, "getInvoice").mockResolvedValue({
+      id: "123",
+      creator: "GCREATORXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      recipients: [
+        { address: "GRECIPIENTXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", amount: 1000n },
+      ],
+      token: "GUSDCXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      deadline: 1_700_000_000,
+      funded: 0n,
+      status: "Pending" as const,
+      payments: [],
+    } as any);
+
+    vi.spyOn(client as any, "_submitTx").mockRejectedValue(new Error("network error"));
+
+    const cache = {
+      get: vi.fn(),
+      set: vi.fn(),
+      invalidate: vi.fn(),
+      clear: vi.fn(),
+    };
+    (client as any)._cache = cache;
+
+    await expect(client.cloneInvoice("123")).rejects.toThrow("network error");
+    expect(cache.set).not.toHaveBeenCalled();
+    expect(cache.invalidate).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveCloneChain", () => {
+  it("resolves a 3-deep clone chain ordered root to leaf", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    const rootInvoice = { id: "1", creator: "G...ROOT", recipients: [], token: "G...", deadline: 100, funded: 0n, status: "Pending" as const, payments: [] };
+    const midInvoice = { id: "2", creator: "G...MID", recipients: [], token: "G...", deadline: 200, funded: 0n, status: "Pending" as const, payments: [] };
+    const leafInvoice = { id: "3", creator: "G...LEAF", recipients: [], token: "G...", deadline: 300, funded: 0n, status: "Pending" as const, payments: [] };
+
+    const getInvoiceSpy = vi.spyOn(client, "getInvoice")
+      .mockResolvedValueOnce(leafInvoice as any)
+      .mockResolvedValueOnce(midInvoice as any)
+      .mockResolvedValueOnce(rootInvoice as any);
+
+    const getExtSpy = vi.spyOn(client as any, "_getInvoiceExt")
+      .mockResolvedValueOnce({ parentInvoiceId: "2", cloneDepth: 2 })
+      .mockResolvedValueOnce({ parentInvoiceId: "1", cloneDepth: 1 })
+      .mockResolvedValueOnce({ parentInvoiceId: null, cloneDepth: 0 });
+
+    const chain = await client.resolveCloneChain("3");
+
+    expect(chain).toHaveLength(3);
+    expect(chain[0]!.id).toBe("1");
+    expect(chain[1]!.id).toBe("2");
+    expect(chain[2]!.id).toBe("3");
+    expect(getInvoiceSpy).toHaveBeenCalledTimes(3);
+    expect(getExtSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("throws when clone chain exceeds max depth", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    vi.spyOn(client, "getInvoice").mockImplementation((id: string) =>
+      Promise.resolve({
+        id,
+        creator: "G...",
+        recipients: [],
+        token: "G...",
+        deadline: 100,
+        funded: 0n,
+        status: "Pending" as const,
+        payments: [],
+      } as any)
+    );
+
+    let extCalls = 0;
+    vi.spyOn(client as any, "_getInvoiceExt").mockImplementation(() => {
+      extCalls++;
+      return Promise.resolve({
+        parentInvoiceId: extCalls < 15 ? "p" + extCalls : null,
+        cloneDepth: extCalls,
+      });
+    });
+
+    await expect(client.resolveCloneChain("x")).rejects.toThrow("clone chain depth exceeded");
+  });
+});

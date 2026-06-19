@@ -127,6 +127,10 @@ export interface Invoice {
   lastModifiedLedger?: number;
   /** IDs of invoices that must be paid before this one. */
   prerequisites?: string[];
+  /** ID of the parent invoice this was cloned from (clone chain). */
+  parentInvoiceId?: string;
+  /** Depth in the clone chain (0 = root, 1 = cloned from root, etc.). */
+  cloneDepth?: number;
 }
 
 /** Invoice receipt returned after a successful release. */
@@ -383,6 +387,23 @@ export interface MemoryReport {
   listenerCount: number;
   estimatedKB: number;
   warnings: string[];
+}
+
+/** Overflow behavior for cloned invoices when payment exceeds remaining. */
+export type OverflowBehavior = "refund" | "rollback" | "escalate";
+
+/** Overrides for cloning an invoice. All fields are optional. */
+export interface CloneOverrides {
+  newDeadline?: number;
+  newAmounts?: bigint[];
+  newRecipients?: string[];
+  newOverflowBehavior?: OverflowBehavior;
+}
+
+/** Extended invoice data from get_invoice_ext. */
+export interface InvoiceExt {
+  parentInvoiceId: string | null;
+  cloneDepth: number;
 }
 
 /** Relationships between invoices (clones, groups, prerequisites). */

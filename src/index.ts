@@ -157,6 +157,9 @@ export type {
   CircuitBreakerStatus,
   HistoricalInvoice,
   ContractFeatures,
+  CloneOverrides,
+  OverflowBehavior,
+  InvoiceExt,
 } from "./types.js";
 export { InvalidTransitionError } from "./types.js";
 

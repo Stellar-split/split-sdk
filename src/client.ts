@@ -49,6 +49,7 @@ import type {
   BatchPayment,
   BatchResolveResult,
   BulkResult,
+  CloneOverrides,
   CoSignature,
   CreateInvoiceParams,
   DisputeResult,
@@ -56,6 +57,7 @@ import type {
   FeeEstimate,
   Invoice,
   InvoiceEventCallbacks,
+  InvoiceExt,
   InvoiceGroup,
   InvoiceReceipt,
   InvoiceStatus,
@@ -441,33 +443,111 @@ export class StellarSplitClient {
   }
 
   /**
-   * Clone an existing invoice with a new deadline.
+   * Clone an existing invoice with optional overrides.
    *
-   * @param sourceId    - ID of the invoice to clone.
-   * @param creator     - Address of the creator (must sign).
-   * @param newDeadline - Unix timestamp for the new invoice's deadline.
-   * @returns The new invoice ID and transaction hash.
+   * Submits the `clone_invoice` contract call, writes an optimistic local cache
+   * entry for the new invoice, and automatically rolls back the cache entry on
+   * submission failure.
+   *
+   * @param sourceId - ID of the invoice to clone.
+   * @param overrides - Optional overrides for the cloned invoice fields.
+   * @returns The new invoice ID.
    * @throws {InvoiceNotFoundError} If the source invoice does not exist.
    */
   async cloneInvoice(
     sourceId: string,
-    creator: string,
-    newDeadline: number
-  ): Promise<{ invoiceId: string; txHash: string }> {
+    overrides: CloneOverrides = {}
+  ): Promise<string> {
     const startTime = Date.now();
+    const sourceInvoice = await this.getInvoice(sourceId);
+
+    const mapEntries: xdr.ScMapEntry[] = [];
+
+    if (overrides.newDeadline !== undefined) {
+      mapEntries.push(
+        new xdr.ScMapEntry({
+          key: nativeToScVal("new_deadline", { type: "symbol" }) as xdr.ScVal,
+          val: nativeToScVal(overrides.newDeadline, { type: "u64" }) as xdr.ScVal,
+        })
+      );
+    }
+    if (overrides.newAmounts !== undefined) {
+      mapEntries.push(
+        new xdr.ScMapEntry({
+          key: nativeToScVal("new_amounts", { type: "symbol" }) as xdr.ScVal,
+          val: xdr.ScVal.scvVec(
+            overrides.newAmounts.map((a) => nativeToScVal(a, { type: "i128" }))
+          ) as xdr.ScVal,
+        })
+      );
+    }
+    if (overrides.newRecipients !== undefined) {
+      mapEntries.push(
+        new xdr.ScMapEntry({
+          key: nativeToScVal("new_recipients", { type: "symbol" }) as xdr.ScVal,
+          val: xdr.ScVal.scvVec(
+            overrides.newRecipients.map((r) => nativeToScVal(r, { type: "address" }))
+          ) as xdr.ScVal,
+        })
+      );
+    }
+    if (overrides.newOverflowBehavior !== undefined) {
+      mapEntries.push(
+        new xdr.ScMapEntry({
+          key: nativeToScVal("new_overflow_behavior", { type: "symbol" }) as xdr.ScVal,
+          val: nativeToScVal(overrides.newOverflowBehavior, { type: "symbol" }) as xdr.ScVal,
+        })
+      );
+    }
+
+    const args: xdr.ScVal[] = [
+      nativeToScVal(BigInt(sourceId), { type: "u64" }),
+      xdr.ScVal.scvMap(mapEntries),
+    ];
+
+    const operation = this.contract.call("clone_invoice", ...args);
+
+    let newInvoiceId: string | undefined;
+    let cacheWritten = false;
+
     try {
-      const operation = this.contract.call(
-        "clone_invoice",
-        nativeToScVal(BigInt(sourceId), { type: "u64" }),
-        nativeToScVal(newDeadline, { type: "u64" })
+      const result = await withRetry(
+        () => this._submitTx(sourceInvoice.creator, operation),
+        this.config.maxRetries ?? 3,
+        1000
       );
 
-      const result = await this._submitTx(creator, operation);
-      const invoiceId = scValToNative(result.returnValue).toString();
+      newInvoiceId = scValToNative(result.returnValue).toString();
+
+      if (this._cache) {
+        const cloneDepth =
+          typeof (sourceInvoice as Record<string, unknown>).cloneDepth === "number"
+            ? ((sourceInvoice as Record<string, unknown>).cloneDepth as number) + 1
+            : 1;
+
+        const optimisticInvoice: Invoice = {
+          ...sourceInvoice,
+          id: newInvoiceId,
+          clonedFrom: sourceId,
+          parentInvoiceId: sourceId,
+          cloneDepth,
+          funded: 0n,
+          payments: [],
+          status: "Pending",
+        };
+        this._cache.set(newInvoiceId, optimisticInvoice);
+        cacheWritten = true;
+      }
+
       telemetry.recordMethod("cloneInvoice", true, Date.now() - startTime);
-      return { invoiceId, txHash: result.txHash };
+      return newInvoiceId;
     } catch (error) {
       telemetry.recordMethod("cloneInvoice", false, Date.now() - startTime);
+
+      if (cacheWritten && newInvoiceId && this._cache) {
+        this._cache.invalidate(newInvoiceId);
+      }
+
       if (error instanceof Error && error.message.includes("not found")) {
         throw new InvoiceNotFoundError(sourceId);
       }
@@ -1922,8 +2002,65 @@ export class StellarSplitClient {
       recurring: raw.recurring as boolean | undefined,
       memo: raw.memo as string | undefined,
       clonedFrom: raw.clonedFrom as string | undefined,
+      parentInvoiceId: raw.parentInvoiceId ? String(raw.parentInvoiceId) : undefined,
+      cloneDepth: typeof raw.cloneDepth === "number" ? raw.cloneDepth : undefined,
       groupId: raw.groupId as string | undefined,
     };
+  }
+
+  /**
+   * Fetch extended invoice metadata (clone chain info) via get_invoice_ext.
+   */
+  private async _getInvoiceExt(invoiceId: string): Promise<InvoiceExt> {
+    const operation = this.contract.call(
+      "get_invoice_ext",
+      nativeToScVal(BigInt(invoiceId), { type: "u64" })
+    );
+
+    const raw = await this._simulateView(operation) as Record<string, unknown>;
+
+    return {
+      parentInvoiceId: raw.parentInvoiceId ? String(raw.parentInvoiceId) : null,
+      cloneDepth: Number(raw.cloneDepth ?? 0),
+    };
+  }
+
+  /**
+   * Resolve the full clone chain for an invoice.
+   *
+   * Recursively fetches parent invoices via `parentInvoiceId` from
+   * `get_invoice_ext` until the root invoice is reached. Returns the chain
+   * ordered from root to leaf.
+   *
+   * @param invoiceId - The leaf invoice ID to resolve the chain from.
+   * @returns An array of invoices ordered root → leaf.
+   * @throws If the clone chain exceeds 10 levels or a cycle is detected.
+   */
+  async resolveCloneChain(invoiceId: string): Promise<Invoice[]> {
+    const chain: Invoice[] = [];
+    let currentId: string | null = invoiceId;
+    const seen = new Set<string>();
+    let depth = 0;
+    const MAX_DEPTH = 10;
+
+    while (currentId) {
+      if (seen.has(currentId)) {
+        throw new Error("clone chain cycle detected");
+      }
+      if (depth >= MAX_DEPTH) {
+        throw new Error("clone chain depth exceeded");
+      }
+
+      seen.add(currentId);
+      const invoice = await this.getInvoice(currentId);
+      chain.unshift(invoice);
+
+      const ext = await this._getInvoiceExt(currentId);
+      currentId = ext.parentInvoiceId;
+      depth++;
+    }
+
+    return chain;
   }
 
   // ---------------------------------------------------------------------------
