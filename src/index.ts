@@ -207,3 +207,12 @@ export type { ComplianceReport } from "./compliance.js";
 export { ScheduledPaymentManager } from "./scheduler.js";
 export type { ScheduledPayment } from "./scheduler.js";
 
+// Invoice filter engine
+export {
+  compileFilter,
+  applyFilter,
+  buildIndex,
+} from "./invoiceFilter.js";
+export type { FilterCriteria, CompiledFilter } from "./invoiceFilter.js";
+export { FilterIndex } from "./invoiceFilter.js";
+
