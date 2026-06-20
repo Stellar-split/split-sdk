@@ -53,6 +53,15 @@ export { TelemetryCollector } from "./telemetryCollector.js";
 export type { TelemetryReport } from "./telemetryCollector.js";
 export { DIContainer } from "./container.js";
 export type { IRPCClient, ICacheStore, IWalletAdapter } from "./container.js";
+export { PaymentAggregator } from "./paymentAggregator.js";
+export type {
+  PaymentLedger,
+  PaymentSnapshot,
+  PaymentSnapshotPayer,
+  PaymentSnapshotPayment,
+  PaymentSummary,
+  TopPayer,
+} from "./paymentAggregator.js";
 export type { PaymentValidation } from "./paymentValidator.js";
 
 export { generateGraphQLSchema } from "./graphql.js";

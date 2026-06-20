@@ -58,6 +58,8 @@ export interface Payment {
   payer: string;
   /** Amount paid in stroops (1 XLM = 10_000_000 stroops). */
   amount: bigint;
+  /** Ledger sequence number where the payment was recorded. */
+  ledger?: number;
   /** Unix timestamp in seconds when the payment was made (optional). */
   timestamp?: number;
 }
