@@ -7,7 +7,11 @@ import type { StellarSplitClientConfig } from "./client.js";
 import type { ExportFormat } from "./export.js";
 
 export { StellarSplitClient } from "./client.js";
-export type { StellarSplitClientConfig, NetworkConfig, TxResult } from "./client.js";
+export type {
+  StellarSplitClientConfig,
+  NetworkConfig,
+  TxResult,
+} from "./client.js";
 export { MultiTenantClient } from "./multiTenant.js";
 export { ProfilerSession } from "./profiler.js";
 export type { ProfileReport } from "./profiler.js";
@@ -19,7 +23,10 @@ export { Deduplicator } from "./dedup.js";
 export { TxQueue } from "./queue.js";
 
 export { replayEvents } from "./events.js";
-export { CircuitBreakerMonitor, defaultCircuitBreakerMonitor } from "./circuitBreakerMonitor.js";
+export {
+  CircuitBreakerMonitor,
+  defaultCircuitBreakerMonitor,
+} from "./circuitBreakerMonitor.js";
 
 export { connectWallet, getPublicKey, signTransaction } from "./wallet.js";
 
@@ -37,6 +44,8 @@ export { calculateFee } from "./fee.js";
 export { resolveToken } from "./token.js";
 
 export { watchExpiry } from "./watcher.js";
+
+export { DeadlineEngine } from "./deadlineEngine.js";
 
 export { StellarSplitTxBuilder } from "./txBuilder.js";
 
@@ -73,7 +82,10 @@ export { registerWebhook, triggerWebhook } from "./webhook.js";
 export { validateWebhookSignature } from "./webhookValidator.js";
 export type { WebhookConfig, WebhookEvent } from "./webhook.js";
 
-export { detectContractFeatures, clearFeatureCache } from "./featureDetection.js";
+export {
+  detectContractFeatures,
+  clearFeatureCache,
+} from "./featureDetection.js";
 
 export { ExportPipeline } from "./exportPipeline.js";
 export type { PipelineStage, PipelineSink } from "./exportPipeline.js";
@@ -105,7 +117,10 @@ export {
   renderTemplate,
   builtInNotificationTemplates,
 } from "./notificationTemplates.js";
-export type { InvoiceEvent, InvoiceEventType } from "./notificationTemplates.js";
+export type {
+  InvoiceEvent,
+  InvoiceEventType,
+} from "./notificationTemplates.js";
 export { LoadBalancer } from "./loadBalancer.js";
 export type { EndpointState, LoadBalancerOptions } from "./loadBalancer.js";
 export {
@@ -179,7 +194,10 @@ export async function getExportModule(): Promise<typeof import("./export.js")> {
   return await import("./export.js");
 }
 
-export async function exportInvoice(invoice: Invoice, format: ExportFormat): Promise<string> {
+export async function exportInvoice(
+  invoice: Invoice,
+  format: ExportFormat,
+): Promise<string> {
   const m = await getExportModule();
   return m.exportInvoice(invoice, format);
 }
@@ -190,7 +208,7 @@ export async function getProofModule(): Promise<typeof import("./proof.js")> {
 
 export async function generatePaymentProof(
   txHash: string,
-  config: StellarSplitClientConfig
+  config: StellarSplitClientConfig,
 ): Promise<import("./proof.js").PaymentProof> {
   const m = await getProofModule();
   return m.generatePaymentProof(txHash, config);
@@ -215,4 +233,3 @@ export type { ScheduledPayment } from "./scheduler.js";
 
 export { compileFilter, applyFilter, FilterIndex } from "./invoiceFilter.js";
 export type { FilterCriteria, CompiledFilter } from "./invoiceFilter.js";
-
