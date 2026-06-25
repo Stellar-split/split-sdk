@@ -98,6 +98,9 @@ import { computePrediction } from "./predictor.js";
 import type { CompletionPrediction } from "./predictor.js";
 import { PriorityQueue } from "./priorityQueue.js";
 import type { RequestPriority } from "./priorityQueue.js";
+import { HorizonFallbackReader } from "./horizonFallback.js";
+import type { NormalizedAccount, NormalizedBalance } from "./horizonFallback.js";
+import { FallbackChain } from "./fallbackChain.js";
 
 /** A plugin that extends StellarSplitClient with new methods at runtime. */
 export interface StellarSplitPlugin {
@@ -140,6 +143,12 @@ export interface StellarSplitClientConfig {
   hooks?: InvoiceLifecycleHooks;
   /** Optional adaptive retry configuration. When provided, replaces legacy maxRetries for pay/cloneInvoice. */
   retry?: RetryConfig;
+  /**
+   * Optional Horizon API base URL (e.g. "https://horizon.stellar.org").
+   * When provided, read-only account lookups fall back to Horizon automatically
+   * if the primary Soroban RPC endpoint throws or times out.
+   */
+  horizonUrl?: string;
 }
 
 /** Network configuration. */
@@ -186,6 +195,7 @@ export class StellarSplitClient {
   private _adapter: WalletAdapter | null = null;
   private _hooks: InvoiceLifecycleHooks = {};
   private _retryEngine: RetryEngine | null = null;
+  private _horizonReader: HorizonFallbackReader | null = null;
 
   private get server(): SorobanRpc.Server {
     return this._rpcClient ?? this._standby?.server ?? this._mainServer;
@@ -302,6 +312,10 @@ export class StellarSplitClient {
 
     if (config.retry) {
       this._retryEngine = new RetryEngine(config.retry, new TelemetryCollector());
+    }
+
+    if (config.horizonUrl) {
+      this._horizonReader = new HorizonFallbackReader(config.horizonUrl);
     }
 
     initHealthDashboard(this.server, this._dedup);
@@ -2075,6 +2089,81 @@ export class StellarSplitClient {
     }
 
     return chain;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #198 — Horizon fallback for read-only account operations
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetch normalised account info (id + sequence number).
+   *
+   * Tries the Soroban RPC endpoint first.  If `horizonUrl` was supplied in
+   * the config and the RPC call throws, the request is automatically retried
+   * against the Horizon REST API via a two-link FallbackChain.
+   *
+   * @param address - Stellar public key of the account.
+   */
+  async getAccount(address: string): Promise<NormalizedAccount> {
+    const rpcFetch = async (): Promise<NormalizedAccount> => {
+      const acc = await this.server.getAccount(address);
+      return { id: acc.accountId(), sequence: acc.sequenceNumber() };
+    };
+
+    if (!this._horizonReader) {
+      return rpcFetch();
+    }
+
+    const horizonReader = this._horizonReader;
+    const chain = new FallbackChain(["rpc", "horizon"], {
+      logger: (attempt) =>
+        console.warn(
+          `[StellarSplitClient] getAccount fallback (${attempt.url}): ${attempt.error}`
+        ),
+    });
+
+    return chain.execute(async (provider) => {
+      if (provider === "rpc") return rpcFetch();
+      return horizonReader.getAccount(address);
+    });
+  }
+
+  /**
+   * Fetch all balances for `address`.
+   *
+   * Balance data is not exposed by the Soroban RPC protocol, so this always
+   * reads from the Horizon API.  A two-link FallbackChain is used so that if
+   * `horizonUrl` is absent the call fails fast with a clear message.
+   *
+   * Requires `horizonUrl` to be set in the client config.
+   *
+   * @param address - Stellar public key of the account.
+   * @throws If no `horizonUrl` was configured.
+   */
+  async getAccountBalances(address: string): Promise<NormalizedBalance[]> {
+    if (!this._horizonReader) {
+      throw new Error(
+        "getAccountBalances requires horizonUrl to be set in StellarSplitClientConfig"
+      );
+    }
+
+    const horizonReader = this._horizonReader;
+    // Soroban RPC has no balance endpoint — the chain falls through to Horizon immediately.
+    const chain = new FallbackChain(["rpc", "horizon"], {
+      logger: (attempt) =>
+        console.warn(
+          `[StellarSplitClient] getAccountBalances fallback (${attempt.url}): ${attempt.error}`
+        ),
+    });
+
+    return chain.execute(async (provider) => {
+      if (provider === "rpc") {
+        throw new Error(
+          "Soroban RPC does not expose account balances; delegating to Horizon"
+        );
+      }
+      return horizonReader.getAccountBalances(address);
+    });
   }
 
   // ---------------------------------------------------------------------------
