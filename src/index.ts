@@ -233,3 +233,11 @@ export type { ScheduledPayment } from "./scheduler.js";
 
 export { compileFilter, applyFilter, FilterIndex } from "./invoiceFilter.js";
 export type { FilterCriteria, CompiledFilter } from "./invoiceFilter.js";
+
+export { diffSimulations } from "./simulationDiff.js";
+export type {
+  SimulationDiff,
+  SimulationDiffSuccess,
+  SimulationDiffNotComparable,
+  ResourceDelta,
+} from "./simulationDiff.js";
