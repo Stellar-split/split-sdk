@@ -24,6 +24,11 @@ export { TxQueue } from "./queue.js";
 
 export { replayEvents } from "./events.js";
 export {
+  EventChecksumChain,
+  verifyChain,
+  findTamperedEvent,
+} from "./eventChecksum.js";
+export {
   CircuitBreakerMonitor,
   defaultCircuitBreakerMonitor,
 } from "./circuitBreakerMonitor.js";
