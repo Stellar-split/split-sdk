@@ -123,6 +123,17 @@ export type {
 } from "./notificationTemplates.js";
 export { LoadBalancer } from "./loadBalancer.js";
 export type { EndpointState, LoadBalancerOptions } from "./loadBalancer.js";
+
+export { AutoRecoveryMonitor } from "./autoRecovery.js";
+export type { AutoRecoveryOptions } from "./autoRecovery.js";
+
+export { generateReceiptPdf } from "./pdfReceipt.js";
+
+export { estimateOperationCost } from "./feeEstimator.js";
+export type { FeeEstimate, FeeEstimateError } from "./feeEstimator.js";
+
+export { AclManager } from "./accessControl.js";
+export type { AsyncAclStore } from "./accessControl.js";
 export {
   generateFlowDiagram,
   registerInvoiceFlowFetcher,
