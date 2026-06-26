@@ -90,6 +90,9 @@ import { snapshotInvoice as _snapshotInvoice } from "./snapshot.js";
 import type { InvoiceSnapshot } from "./snapshot.js";
 import { SimpleCache } from "./cache.js";
 import { parseSorobanError } from "./errors.js";
+import { validateOrThrow } from "./configValidator.js";
+import { extendStorageTtl, buildInvoiceDataLedgerKey } from "./ttlExtension.js";
+import type { TtlExtensionOptions, TtlExtensionResult } from "./ttlExtension.js";
 import { RateLimiter } from "./rateLimiter.js";
 import { DegradationManager } from "./degradation.js";
 import { AuditLogger } from "./auditLogger.js";
@@ -286,6 +289,7 @@ export class StellarSplitClient {
   }
 
   constructor(config: StellarSplitClientConfig) {
+    validateOrThrow(config);
     this.config = config;
     const primaryUrl = Array.isArray(config.rpcUrl) ? config.rpcUrl[0]! : config.rpcUrl;
     this._rpcClient = config.container?.getRPCClient() ?? null;
@@ -1703,6 +1707,39 @@ export class StellarSplitClient {
   /** Clear the entire invoice cache. */
   clearCache(): void {
     this._cache?.clear();
+  }
+
+  /**
+   * Bump the storage TTL for contract data entries associated with an invoice.
+   *
+   * Extends the TTL of the invoice's persistent storage entry to the target
+   * ledger sequence, preventing premature archiving.
+   *
+   * @param invoiceId - The invoice ID whose storage entry to extend.
+   * @param extendTo  - Target ledger sequence to extend TTL to.
+   * @param source    - Stellar address of the account submitting the transaction.
+   */
+  async bumpStorageTtl(
+    invoiceId: string,
+    extendTo: number,
+    source: string
+  ): Promise<TtlExtensionResult> {
+    const ledgerKeys = [
+      buildInvoiceDataLedgerKey(this.config.contractId, invoiceId),
+    ];
+    return extendStorageTtl(this.config, { source, extendTo, ledgerKeys });
+  }
+
+  /**
+   * Bump storage TTL for multiple contract data keys in a single transaction.
+   *
+   * @param options - TTL extension parameters including source, target ledger,
+   *                  and an array of ledger keys to extend.
+   */
+  async bumpStorageTtlBatch(
+    options: TtlExtensionOptions
+  ): Promise<TtlExtensionResult> {
+    return extendStorageTtl(this.config, options);
   }
 
   /**

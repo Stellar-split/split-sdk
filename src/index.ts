@@ -271,6 +271,44 @@ export {
 } from "./sponsorship.js";
 
 export {
+  extendStorageTtl,
+  buildContractDataLedgerKey,
+  buildInvoiceDataLedgerKey,
+  buildInvoiceStorageKey,
+} from "./ttlExtension.js";
+export type {
+  TtlExtensionOptions,
+  TtlExtensionResult,
+} from "./ttlExtension.js";
+
+export {
+  diffTemplate,
+  migrateTemplate,
+  migrateAllTemplates,
+} from "./templateMigration.js";
+export type {
+  TemplateDiff,
+  TemplateDiffField,
+} from "./templateMigration.js";
+
+export {
+  validateClientConfig,
+  validateOrThrow,
+  ConfigValidationError,
+} from "./configValidator.js";
+export type {
+  ConfigValidation,
+  ConfigValidationError as ConfigValidationErrorType,
+} from "./configValidator.js";
+
+export { FundingVelocityAlert } from "./velocityAlert.js";
+export type {
+  VelocityAlert,
+  VelocityAlertKind,
+  VelocityConfig,
+} from "./velocityAlert.js";
+
+export {
   createClaimableRefund,
   getClaimableRefunds,
   isRefundTransferError,
