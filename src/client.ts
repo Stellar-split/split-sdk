@@ -189,6 +189,18 @@ export interface StellarSplitClientConfig {
    */
   sponsorAccount?: string;
   /**
+   * Optional anonymous feature-usage analytics configuration.
+   * When enabled, method call frequencies are collected and periodically flushed
+   * to the provided endpoint. No arguments or PII are ever captured.
+   */
+  usageAnalytics?: {
+    /** Set to true to enable collection. Default: false. */
+    enabled: boolean;
+    /** POST endpoint that receives flush payloads. */
+    endpoint?: string;
+    /** Flush interval in milliseconds. Default: 60_000. */
+    flushIntervalMs?: number;
+  };
    * Optional idempotency configuration for write methods.
    * When provided, duplicate submissions are detected and short-circuited.
    */
