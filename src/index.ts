@@ -11,6 +11,7 @@ export type {
   StellarSplitClientConfig,
   NetworkConfig,
   TxResult,
+  StellarSplitPlugin,
 } from "./client.js";
 export { MultiTenantClient } from "./multiTenant.js";
 export { ProfilerSession } from "./profiler.js";
@@ -104,6 +105,12 @@ export {
   addRequestInterceptor,
   addResponseInterceptor,
 } from "./interceptors.js";
+export { verifyBatchPayments } from "./batchVerifier.js";
+export type {
+  BatchVerificationResult,
+  BatchInvoiceValidation,
+  VerifyBatchPayResult,
+} from "./batchVerifier.js";
 export { createRequestSigningInterceptor } from "./requestSigner.js";
 export type {
   RequestInterceptor,
@@ -168,6 +175,11 @@ export {
 } from "./errors.js";
 
 export { SimpleCache } from "./cache.js";
+export { Recorder, createRecorder } from "./recorder.js";
+export type { SessionRecording, RecordingEntry, ReplayResult } from "./recorder.js";
+
+export { TabSync, tabSyncPlugin, createTabSyncPlugin } from "./tabSync.js";
+export type { TabSyncEvent, TabSyncEventType, TabSyncOptions } from "./tabSync.js";
 
 export type {
   Invoice,
