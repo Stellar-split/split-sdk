@@ -89,7 +89,7 @@ import { ConnectionPool } from "./connectionPool.js";
 import { snapshotInvoice as _snapshotInvoice } from "./snapshot.js";
 import type { InvoiceSnapshot } from "./snapshot.js";
 import { SimpleCache } from "./cache.js";
-import { parseSorobanError } from "./errors.js";
+import { parseSorobanError, CoCreatorApprovalNotRequiredError } from "./errors.js";
 import { RateLimiter } from "./rateLimiter.js";
 import { DegradationManager } from "./degradation.js";
 import { AuditLogger } from "./auditLogger.js";
@@ -1827,6 +1827,113 @@ export class StellarSplitClient {
     }
 
     return { txHash };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #262 — Co-creator approval flow
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Check whether an invoice requires co-creator sign-off before release.
+   *
+   * @param invoiceId - The invoice ID to check.
+   * @throws {CoCreatorApprovalNotRequiredError} If the invoice does not require co-creator approval.
+   */
+  private async _needsCoCreatorApproval(invoiceId: string): Promise<void> {
+    const operation = this.contract.call(
+      "needs_co_creator_approval",
+      nativeToScVal(BigInt(invoiceId), { type: "u64" })
+    );
+    const raw = await this._simulateView(operation);
+    if (!raw) {
+      throw new CoCreatorApprovalNotRequiredError(invoiceId);
+    }
+  }
+
+  /**
+   * Submit an approval for an invoice that requires co-creator sign-off.
+   *
+   * The `signer` address must be one of the invoice's co-creators and must
+   * sign the transaction.  Callers should check `getCoCreatorApprovals` to
+   * tally signatures before releasing the invoice.
+   *
+   * @param invoiceId - The invoice ID to approve.
+   * @param signer    - Stellar address of the co-creator submitting approval.
+   * @returns The transaction hash.
+   * @throws {CoCreatorApprovalNotRequiredError} If the invoice does not require co-creator sign-off.
+   */
+  async submitCoCreatorApproval(invoiceId: string, signer: string): Promise<TxResult> {
+    const startTime = Date.now();
+    try {
+      await this._needsCoCreatorApproval(invoiceId);
+
+      const operation = this.contract.call(
+        "submit_co_creator_approval",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+        nativeToScVal(signer, { type: "address" })
+      );
+      const result = await this._submitTx(signer, operation);
+      telemetry.recordMethod("submitCoCreatorApproval", true, Date.now() - startTime);
+      return { txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("submitCoCreatorApproval", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
+   * Get the list of addresses that have approved a co-creator approval invoice.
+   *
+   * @param invoiceId - The invoice ID to query.
+   * @returns Array of Stellar addresses that have approved.
+   * @throws {CoCreatorApprovalNotRequiredError} If the invoice does not require co-creator sign-off.
+   */
+  async getCoCreatorApprovals(invoiceId: string): Promise<string[]> {
+    const startTime = Date.now();
+    try {
+      await this._needsCoCreatorApproval(invoiceId);
+
+      const operation = this.contract.call(
+        "get_co_creator_approvals",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+      const raw = await this._simulateView(operation) as string[];
+      telemetry.recordMethod("getCoCreatorApprovals", true, Date.now() - startTime);
+      return raw;
+    } catch (error) {
+      telemetry.recordMethod("getCoCreatorApprovals", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
+   * Revoke a prior co-creator approval for an invoice.
+   *
+   * Only the original signer can revoke their own approval.  The `signer`
+   * address must sign the transaction.
+   *
+   * @param invoiceId - The invoice ID to revoke approval for.
+   * @param signer    - Stellar address of the co-creator revoking their approval.
+   * @returns The transaction hash.
+   * @throws {CoCreatorApprovalNotRequiredError} If the invoice does not require co-creator sign-off.
+   */
+  async revokeCoCreatorApproval(invoiceId: string, signer: string): Promise<TxResult> {
+    const startTime = Date.now();
+    try {
+      await this._needsCoCreatorApproval(invoiceId);
+
+      const operation = this.contract.call(
+        "revoke_co_creator_approval",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+        nativeToScVal(signer, { type: "address" })
+      );
+      const result = await this._submitTx(signer, operation);
+      telemetry.recordMethod("revokeCoCreatorApproval", true, Date.now() - startTime);
+      return { txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("revokeCoCreatorApproval", false, Date.now() - startTime);
+      throw error;
+    }
   }
 
   // ---------------------------------------------------------------------------
