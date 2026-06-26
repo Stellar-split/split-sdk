@@ -279,3 +279,19 @@ export type {
   ClaimableRefundResult,
   ClaimableRefundEntry,
 } from "./claimableBalanceFallback.js";
+
+export { convertAmount, clearPriceCache } from "./currencyConverter.js";
+export type { ConvertedAmount } from "./currencyConverter.js";
+
+export { compareFundingPaths } from "./feeComparator.js";
+export type {
+  CostEstimate,
+  FundingPathComparison,
+  FeeComparatorConfig,
+} from "./feeComparator.js";
+
+export { deprecated, resetDeprecationWarnings } from "./deprecation.js";
+export type { DeprecationOptions } from "./deprecation.js";
+
+export { computeSlaReport } from "./slaTracker.js";
+export type { SlaReport } from "./slaTracker.js";
