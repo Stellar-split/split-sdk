@@ -43,4 +43,22 @@ export class SimpleCache<T> {
   clear(): void {
     this.store.clear();
   }
+
+  /** Return a snapshot of live (non-expired) values keyed by cache key. */
+  entries(): Map<string, T> {
+    const now = Date.now();
+    const result = new Map<string, T>();
+    for (const [key, entry] of this.store) {
+      if (now <= entry.expiresAt) result.set(key, entry.value);
+    }
+    return result;
+  }
+
+  /** Replace all entries with the provided map, preserving the configured TTL. */
+  replaceAll(next: Map<string, T>): void {
+    this.store.clear();
+    for (const [key, value] of next) {
+      this.set(key, value);
+    }
+  }
 }
