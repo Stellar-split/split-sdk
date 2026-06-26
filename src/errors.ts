@@ -79,6 +79,18 @@ export class InvoiceFrozenError extends StellarSplitError {
   }
 }
 
+/** Thrown when an operation requires co-creator sign-off but the invoice does not require it. */
+export class CoCreatorApprovalNotRequiredError extends StellarSplitError {
+  readonly invoiceId: string;
+
+  constructor(invoiceId: string, raw?: string) {
+    super(`Invoice does not require co-creator sign-off: ${invoiceId}`, raw ?? `Invoice does not require co-creator sign-off: ${invoiceId}`);
+    this.name = "CoCreatorApprovalNotRequiredError";
+    this.invoiceId = invoiceId;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Error message patterns from the Soroban contract
 // ---------------------------------------------------------------------------

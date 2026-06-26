@@ -11,6 +11,7 @@ export type {
   StellarSplitClientConfig,
   NetworkConfig,
   TxResult,
+  StellarSplitPlugin,
 } from "./client.js";
 export { MultiTenantClient } from "./multiTenant.js";
 export { ProfilerSession } from "./profiler.js";
@@ -104,6 +105,12 @@ export {
   addRequestInterceptor,
   addResponseInterceptor,
 } from "./interceptors.js";
+export { verifyBatchPayments } from "./batchVerifier.js";
+export type {
+  BatchVerificationResult,
+  BatchInvoiceValidation,
+  VerifyBatchPayResult,
+} from "./batchVerifier.js";
 export { createRequestSigningInterceptor } from "./requestSigner.js";
 export type {
   RequestInterceptor,
@@ -164,10 +171,16 @@ export {
   DeadlinePassedError,
   PaymentExceedsRemainingError,
   InvoiceFrozenError,
+  CoCreatorApprovalNotRequiredError,
   parseSorobanError,
 } from "./errors.js";
 
 export { SimpleCache } from "./cache.js";
+export { Recorder, createRecorder } from "./recorder.js";
+export type { SessionRecording, RecordingEntry, ReplayResult } from "./recorder.js";
+
+export { TabSync, tabSyncPlugin, createTabSyncPlugin } from "./tabSync.js";
+export type { TabSyncEvent, TabSyncEventType, TabSyncOptions } from "./tabSync.js";
 
 export type {
   Invoice,
@@ -244,6 +257,13 @@ export type { BatcherConfig } from "./requestBatcher.js";
 
 export type { ComplianceReport } from "./compliance.js";
 
+export { exportComplianceReport, CSV_COLUMNS } from "./complianceExporter.js";
+export type {
+  ComplianceExportRecord,
+  ComplianceExportOptions,
+  ComplianceExportResult,
+} from "./complianceExporter.js";
+
 export { ScheduledPaymentManager } from "./scheduler.js";
 export type { ScheduledPayment } from "./scheduler.js";
 
@@ -271,6 +291,44 @@ export {
 } from "./sponsorship.js";
 
 export {
+  extendStorageTtl,
+  buildContractDataLedgerKey,
+  buildInvoiceDataLedgerKey,
+  buildInvoiceStorageKey,
+} from "./ttlExtension.js";
+export type {
+  TtlExtensionOptions,
+  TtlExtensionResult,
+} from "./ttlExtension.js";
+
+export {
+  diffTemplate,
+  migrateTemplate,
+  migrateAllTemplates,
+} from "./templateMigration.js";
+export type {
+  TemplateDiff,
+  TemplateDiffField,
+} from "./templateMigration.js";
+
+export {
+  validateClientConfig,
+  validateOrThrow,
+  ConfigValidationError,
+} from "./configValidator.js";
+export type {
+  ConfigValidation,
+  ConfigValidationError as ConfigValidationErrorType,
+} from "./configValidator.js";
+
+export { FundingVelocityAlert } from "./velocityAlert.js";
+export type {
+  VelocityAlert,
+  VelocityAlertKind,
+  VelocityConfig,
+} from "./velocityAlert.js";
+
+export {
   createClaimableRefund,
   getClaimableRefunds,
   isRefundTransferError,
@@ -280,18 +338,55 @@ export type {
   ClaimableRefundEntry,
 } from "./claimableBalanceFallback.js";
 
-export { convertAmount, clearPriceCache } from "./currencyConverter.js";
-export type { ConvertedAmount } from "./currencyConverter.js";
-
-export { compareFundingPaths } from "./feeComparator.js";
+export { subscribeToInvoice } from "./sse.js";
 export type {
-  CostEstimate,
-  FundingPathComparison,
-  FeeComparatorConfig,
-} from "./feeComparator.js";
+  SSEInvoiceEventType,
+  SSEInvoiceEvent,
+  InvoiceEventHandler,
+  SubscribeToInvoiceOptions,
+  EventSourceLike,
+} from "./sse.js";
+export {
+  bundleDisputeEvidence,
+  computeBundleChecksum,
+  verifyBundleChecksum,
+  registerProofFetcher,
+  registerAuditLogFetcher,
+  registerEventFetcher,
+} from "./disputeEvidenceBundler.js";
+export type {
+  DisputeEvidenceBundle,
+  ProofFetcher,
+  AuditLogFetcher,
+  EventFetcher,
+} from "./disputeEvidenceBundler.js";
 
-export { deprecated, resetDeprecationWarnings } from "./deprecation.js";
-export type { DeprecationOptions } from "./deprecation.js";
+export { UsageAnalyticsCollector, wrapWithAnalytics } from "./usageAnalytics.js";
+export type {
+  UsageAnalyticsConfig,
+  FeatureCountSnapshot,
+} from "./usageAnalytics.js";
+export { IdempotencyManager } from "./idempotency.js";
+export type { IdempotencyConfig } from "./idempotency.js";
 
-export { computeSlaReport } from "./slaTracker.js";
-export type { SlaReport } from "./slaTracker.js";
+export {
+  validateInvoicePayload,
+  PayloadSizeError,
+} from "./payloadGuard.js";
+export type {
+  PayloadGuardConfig,
+  PayloadViolation,
+} from "./payloadGuard.js";
+
+export { computeCreatorReputation } from "./reputation.js";
+export type {
+  CreatorReputationScore,
+  ReputationConfig,
+} from "./reputation.js";
+
+export { computePaymentForecast } from "./forecast.js";
+export type {
+  PaymentForecast,
+  ForecastConfig,
+  HistoricalInvoiceSample,
+} from "./forecast.js";

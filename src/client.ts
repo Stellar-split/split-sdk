@@ -30,6 +30,11 @@ import { isFeatureEnabled } from "./flags.js";
 import type { FeatureFlags } from "./flags.js";
 import { checkRPCHealth } from "./health.js";
 import { Deduplicator } from "./dedup.js";
+import { verifyBatchPayments } from "./batchVerifier.js";
+import type {
+  BatchVerificationResult,
+  BatchInvoiceValidation,
+} from "./batchVerifier.js";
 import { initHealthDashboard, recordCall } from "./healthDashboard.js";
 import {
   addRequestInterceptor,
@@ -90,6 +95,9 @@ import { snapshotInvoice as _snapshotInvoice } from "./snapshot.js";
 import type { InvoiceSnapshot } from "./snapshot.js";
 import { SimpleCache } from "./cache.js";
 import { parseSorobanError } from "./errors.js";
+import { validateOrThrow } from "./configValidator.js";
+import { extendStorageTtl, buildInvoiceDataLedgerKey } from "./ttlExtension.js";
+import type { TtlExtensionOptions, TtlExtensionResult } from "./ttlExtension.js";
 import { RateLimiter } from "./rateLimiter.js";
 import { DegradationManager } from "./degradation.js";
 import { AuditLogger } from "./auditLogger.js";
@@ -98,6 +106,10 @@ import { computePrediction } from "./predictor.js";
 import type { CompletionPrediction } from "./predictor.js";
 import { PriorityQueue } from "./priorityQueue.js";
 import type { RequestPriority } from "./priorityQueue.js";
+import { IdempotencyManager } from "./idempotency.js";
+import type { IdempotencyConfig } from "./idempotency.js";
+import { validateInvoicePayload } from "./payloadGuard.js";
+import type { PayloadGuardConfig } from "./payloadGuard.js";
 import { HorizonFallbackReader } from "./horizonFallback.js";
 import type { NormalizedAccount, NormalizedBalance } from "./horizonFallback.js";
 import { FallbackChain } from "./fallbackChain.js";
@@ -112,12 +124,24 @@ import type {
 } from "./claimableBalanceFallback.js";
 import { Asset } from "@stellar/stellar-sdk";
 
-/** A plugin that extends StellarSplitClient with new methods at runtime. */
+/** A plugin that extends StellarSplitClient with new methods and lifecycle hooks. */
 export interface StellarSplitPlugin {
   /** Unique plugin name — duplicate registrations throw. */
   name: string;
   /** Called with the client instance; attach new methods here. */
-  install(client: StellarSplitClient): void;
+  install?(client: StellarSplitClient): void;
+  /**
+   * Called once after the client has been fully constructed and all internal
+   * subsystems are initialized. Use this for async setup (e.g. connecting to
+   * external services, starting watchers).
+   */
+  onInit?(client: StellarSplitClient): void | Promise<void>;
+  /**
+   * Called during client shutdown, before internal resources are released.
+   * Use this for teardown (e.g. closing connections, clearing intervals).
+   * Plugins are destroyed in reverse registration order.
+   */
+  onDestroy?(client: StellarSplitClient): void | Promise<void>;
 }
 
 /** Configuration for StellarSplitClient. */
@@ -164,6 +188,33 @@ export interface StellarSplitClientConfig {
    * Required when calling buildSponsoredOnboarding from src/sponsorship.ts.
    */
   sponsorAccount?: string;
+  /**
+   * Optional anonymous feature-usage analytics configuration.
+   * When enabled, method call frequencies are collected and periodically flushed
+   * to the provided endpoint. No arguments or PII are ever captured.
+   */
+  usageAnalytics?: {
+    /** Set to true to enable collection. Default: false. */
+    enabled: boolean;
+    /** POST endpoint that receives flush payloads. */
+    endpoint?: string;
+    /** Flush interval in milliseconds. Default: 60_000. */
+    flushIntervalMs?: number;
+  };
+   * Optional idempotency configuration for write methods.
+   * When provided, duplicate submissions are detected and short-circuited.
+   */
+  idempotency?: IdempotencyConfig;
+  /**
+   * Optional payload guard configuration for createInvoice.
+   * When provided, invoice payloads are checked before submission.
+   */
+  payloadGuard?: PayloadGuardConfig;
+   * Optional list of plugins to register at construction time.
+   * Each plugin's `install()` is called during the constructor, and
+   * `onInit()` is invoked once all subsystems are ready.
+   */
+  plugins?: StellarSplitPlugin[];
 }
 
 /** Network configuration. */
@@ -201,6 +252,7 @@ export class StellarSplitClient {
   private contract: Contract;
   private config: StellarSplitClientConfig;
   private _plugins = new Set<string>();
+  private _pluginInstances: StellarSplitPlugin[] = [];
   private _dedup = new Deduplicator<Invoice>();
   private _cache: SimpleCache<Invoice> | ICacheStore<Invoice> | null = null;
   private _auditLogger: AuditLogger | null = null;
@@ -211,6 +263,7 @@ export class StellarSplitClient {
   private _hooks: InvoiceLifecycleHooks = {};
   private _retryEngine: RetryEngine | null = null;
   private _horizonReader: HorizonFallbackReader | null = null;
+  private _idempotency: IdempotencyManager | null = null;
 
   private get server(): SorobanRpc.Server {
     return this._rpcClient ?? this._standby?.server ?? this._mainServer;
@@ -286,6 +339,7 @@ export class StellarSplitClient {
   }
 
   constructor(config: StellarSplitClientConfig) {
+    validateOrThrow(config);
     this.config = config;
     const primaryUrl = Array.isArray(config.rpcUrl) ? config.rpcUrl[0]! : config.rpcUrl;
     this._rpcClient = config.container?.getRPCClient() ?? null;
@@ -333,7 +387,21 @@ export class StellarSplitClient {
       this._horizonReader = new HorizonFallbackReader(config.horizonUrl);
     }
 
+    if (config.idempotency) {
+      this._idempotency = new IdempotencyManager(config.idempotency);
+    }
+
     initHealthDashboard(this.server, this._dedup);
+
+    // Register and initialize config-level plugins
+    if (config.plugins) {
+      for (const plugin of config.plugins) {
+        this.registerPlugin(plugin);
+      }
+    }
+    for (const p of this._pluginInstances) {
+      p.onInit?.(this);
+    }
   }
 
   private _logAudit(method: string, params: Record<string, unknown>, success: boolean, durationMs: number): void {
@@ -360,7 +428,8 @@ export class StellarSplitClient {
       throw new Error(`Plugin "${plugin.name}" is already registered.`);
     }
     this._plugins.add(plugin.name);
-    plugin.install(this);
+    this._pluginInstances.push(plugin);
+    plugin.install?.(this);
   }
 
   // ---------------------------------------------------------------------------
@@ -451,6 +520,10 @@ export class StellarSplitClient {
   ): Promise<{ invoiceId: string; txHash: string }> {
     const startTime = Date.now();
     try {
+      if (this.config.payloadGuard) {
+        validateInvoicePayload(params, this.config.payloadGuard);
+      }
+
       const recipientAddresses = params.recipients.map((r) =>
         nativeToScVal(r.address, { type: "address" })
       );
@@ -917,6 +990,17 @@ export class StellarSplitClient {
    * Gracefully shutdown the SDK client, flush pending operations, and close internal resources.
    */
   async shutdown(): Promise<void> {
+    // Tear down plugins in reverse registration order
+    for (const p of this._pluginInstances.reverse()) {
+      try {
+        await p.onDestroy?.(this);
+      } catch (error) {
+        console.error(`[StellarSplitClient] Plugin "${p.name}" onDestroy error:`, error);
+      }
+    }
+    this._pluginInstances = [];
+    this._plugins.clear();
+
     try {
       await this._queue.shutdown();
     } finally {
@@ -1383,6 +1467,35 @@ export class StellarSplitClient {
   }
 
   /**
+   * Validate a batch of proposed payments before submission.
+   *
+   * Resolves all referenced invoices, verifies they are all in "Pending"
+   * status and share the same token, and checks that each payment amount
+   * does not exceed the invoice's remaining amount.
+   *
+   * This is a client-side preflight to avoid wasting gas/fees on a
+   * batch that would be rejected on-chain.
+   *
+   * @param payments - Array of { invoiceId, amount } pairs to verify.
+   * @returns A `BatchVerificationResult` describing per-invoice validity,
+   *          the common token (if uniform), and any aggregated errors.
+   */
+  async verifyBatchPay(payments: BatchPayment[]): Promise<BatchVerificationResult> {
+    const invoiceIds = payments.map((p) => p.invoiceId);
+    const results = await this.resolveBatch(invoiceIds);
+
+    const resolvedInvoices: Invoice[] = [];
+    for (const r of results) {
+      const rr = r as { success: boolean; invoice?: Invoice };
+      if (rr.success && rr.invoice) {
+        resolvedInvoices.push(rr.invoice);
+      }
+    }
+
+    return verifyBatchPayments(resolvedInvoices, payments);
+  }
+
+  /**
    * Validate a proposed payment before submission.
    *
    * @param invoiceId - Invoice ID to validate against.
@@ -1706,6 +1819,39 @@ export class StellarSplitClient {
   }
 
   /**
+   * Bump the storage TTL for contract data entries associated with an invoice.
+   *
+   * Extends the TTL of the invoice's persistent storage entry to the target
+   * ledger sequence, preventing premature archiving.
+   *
+   * @param invoiceId - The invoice ID whose storage entry to extend.
+   * @param extendTo  - Target ledger sequence to extend TTL to.
+   * @param source    - Stellar address of the account submitting the transaction.
+   */
+  async bumpStorageTtl(
+    invoiceId: string,
+    extendTo: number,
+    source: string
+  ): Promise<TtlExtensionResult> {
+    const ledgerKeys = [
+      buildInvoiceDataLedgerKey(this.config.contractId, invoiceId),
+    ];
+    return extendStorageTtl(this.config, { source, extendTo, ledgerKeys });
+  }
+
+  /**
+   * Bump storage TTL for multiple contract data keys in a single transaction.
+   *
+   * @param options - TTL extension parameters including source, target ledger,
+   *                  and an array of ledger keys to extend.
+   */
+  async bumpStorageTtlBatch(
+    options: TtlExtensionOptions
+  ): Promise<TtlExtensionResult> {
+    return extendStorageTtl(this.config, options);
+  }
+
+  /**
    * Switch to a different network.
    *
    * @param network - Network name ('testnet', 'mainnet') or custom NetworkConfig
@@ -1830,6 +1976,113 @@ export class StellarSplitClient {
   }
 
   // ---------------------------------------------------------------------------
+  // Issue #262 — Co-creator approval flow
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Check whether an invoice requires co-creator sign-off before release.
+   *
+   * @param invoiceId - The invoice ID to check.
+   * @throws {CoCreatorApprovalNotRequiredError} If the invoice does not require co-creator approval.
+   */
+  private async _needsCoCreatorApproval(invoiceId: string): Promise<void> {
+    const operation = this.contract.call(
+      "needs_co_creator_approval",
+      nativeToScVal(BigInt(invoiceId), { type: "u64" })
+    );
+    const raw = await this._simulateView(operation);
+    if (!raw) {
+      throw new CoCreatorApprovalNotRequiredError(invoiceId);
+    }
+  }
+
+  /**
+   * Submit an approval for an invoice that requires co-creator sign-off.
+   *
+   * The `signer` address must be one of the invoice's co-creators and must
+   * sign the transaction.  Callers should check `getCoCreatorApprovals` to
+   * tally signatures before releasing the invoice.
+   *
+   * @param invoiceId - The invoice ID to approve.
+   * @param signer    - Stellar address of the co-creator submitting approval.
+   * @returns The transaction hash.
+   * @throws {CoCreatorApprovalNotRequiredError} If the invoice does not require co-creator sign-off.
+   */
+  async submitCoCreatorApproval(invoiceId: string, signer: string): Promise<TxResult> {
+    const startTime = Date.now();
+    try {
+      await this._needsCoCreatorApproval(invoiceId);
+
+      const operation = this.contract.call(
+        "submit_co_creator_approval",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+        nativeToScVal(signer, { type: "address" })
+      );
+      const result = await this._submitTx(signer, operation);
+      telemetry.recordMethod("submitCoCreatorApproval", true, Date.now() - startTime);
+      return { txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("submitCoCreatorApproval", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
+   * Get the list of addresses that have approved a co-creator approval invoice.
+   *
+   * @param invoiceId - The invoice ID to query.
+   * @returns Array of Stellar addresses that have approved.
+   * @throws {CoCreatorApprovalNotRequiredError} If the invoice does not require co-creator sign-off.
+   */
+  async getCoCreatorApprovals(invoiceId: string): Promise<string[]> {
+    const startTime = Date.now();
+    try {
+      await this._needsCoCreatorApproval(invoiceId);
+
+      const operation = this.contract.call(
+        "get_co_creator_approvals",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+      const raw = await this._simulateView(operation) as string[];
+      telemetry.recordMethod("getCoCreatorApprovals", true, Date.now() - startTime);
+      return raw;
+    } catch (error) {
+      telemetry.recordMethod("getCoCreatorApprovals", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
+   * Revoke a prior co-creator approval for an invoice.
+   *
+   * Only the original signer can revoke their own approval.  The `signer`
+   * address must sign the transaction.
+   *
+   * @param invoiceId - The invoice ID to revoke approval for.
+   * @param signer    - Stellar address of the co-creator revoking their approval.
+   * @returns The transaction hash.
+   * @throws {CoCreatorApprovalNotRequiredError} If the invoice does not require co-creator sign-off.
+   */
+  async revokeCoCreatorApproval(invoiceId: string, signer: string): Promise<TxResult> {
+    const startTime = Date.now();
+    try {
+      await this._needsCoCreatorApproval(invoiceId);
+
+      const operation = this.contract.call(
+        "revoke_co_creator_approval",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+        nativeToScVal(signer, { type: "address" })
+      );
+      const result = await this._submitTx(signer, operation);
+      telemetry.recordMethod("revokeCoCreatorApproval", true, Date.now() - startTime);
+      return { txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("revokeCoCreatorApproval", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Internal helpers
   // ---------------------------------------------------------------------------
 
@@ -1864,12 +2117,36 @@ export class StellarSplitClient {
     priority: RequestPriority = "normal"
   ): Promise<{ txHash: string; returnValue: xdr.ScVal }> {
     return this._queue.enqueue(priority, async () => {
+      if (this._idempotency) {
+        const opXdr = operation.toXDR().toString("base64");
+        const key = this._idempotency.generateKey(sourceAddress, opXdr);
+        const existing = this._idempotency.getResult(key);
+        if (existing) {
+          return {
+            txHash: existing.txHash,
+            returnValue: xdr.ScVal.scvVoid(),
+          };
+        }
+      }
+
       try {
-        return await this._doSubmitTx(sourceAddress, operation);
+        const result = await this._doSubmitTx(sourceAddress, operation);
+        if (this._idempotency) {
+          const opXdr = operation.toXDR().toString("base64");
+          const key = this._idempotency.generateKey(sourceAddress, opXdr);
+          this._idempotency.tryClaim(key, { txHash: result.txHash });
+        }
+        return result;
       } catch (error) {
         if (this._standby) {
           this._standby.failover();
-          return await this._doSubmitTx(sourceAddress, operation);
+          const result = await this._doSubmitTx(sourceAddress, operation);
+          if (this._idempotency) {
+            const opXdr = operation.toXDR().toString("base64");
+            const key = this._idempotency.generateKey(sourceAddress, opXdr);
+            this._idempotency.tryClaim(key, { txHash: result.txHash });
+          }
+          return result;
         }
         throw error;
       }
