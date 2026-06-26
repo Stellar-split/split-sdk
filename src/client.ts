@@ -30,6 +30,11 @@ import { isFeatureEnabled } from "./flags.js";
 import type { FeatureFlags } from "./flags.js";
 import { checkRPCHealth } from "./health.js";
 import { Deduplicator } from "./dedup.js";
+import { verifyBatchPayments } from "./batchVerifier.js";
+import type {
+  BatchVerificationResult,
+  BatchInvoiceValidation,
+} from "./batchVerifier.js";
 import { initHealthDashboard, recordCall } from "./healthDashboard.js";
 import {
   addRequestInterceptor,
@@ -112,12 +117,24 @@ import type {
 } from "./claimableBalanceFallback.js";
 import { Asset } from "@stellar/stellar-sdk";
 
-/** A plugin that extends StellarSplitClient with new methods at runtime. */
+/** A plugin that extends StellarSplitClient with new methods and lifecycle hooks. */
 export interface StellarSplitPlugin {
   /** Unique plugin name — duplicate registrations throw. */
   name: string;
   /** Called with the client instance; attach new methods here. */
-  install(client: StellarSplitClient): void;
+  install?(client: StellarSplitClient): void;
+  /**
+   * Called once after the client has been fully constructed and all internal
+   * subsystems are initialized. Use this for async setup (e.g. connecting to
+   * external services, starting watchers).
+   */
+  onInit?(client: StellarSplitClient): void | Promise<void>;
+  /**
+   * Called during client shutdown, before internal resources are released.
+   * Use this for teardown (e.g. closing connections, clearing intervals).
+   * Plugins are destroyed in reverse registration order.
+   */
+  onDestroy?(client: StellarSplitClient): void | Promise<void>;
 }
 
 /** Configuration for StellarSplitClient. */
@@ -164,6 +181,12 @@ export interface StellarSplitClientConfig {
    * Required when calling buildSponsoredOnboarding from src/sponsorship.ts.
    */
   sponsorAccount?: string;
+  /**
+   * Optional list of plugins to register at construction time.
+   * Each plugin's `install()` is called during the constructor, and
+   * `onInit()` is invoked once all subsystems are ready.
+   */
+  plugins?: StellarSplitPlugin[];
 }
 
 /** Network configuration. */
@@ -201,6 +224,7 @@ export class StellarSplitClient {
   private contract: Contract;
   private config: StellarSplitClientConfig;
   private _plugins = new Set<string>();
+  private _pluginInstances: StellarSplitPlugin[] = [];
   private _dedup = new Deduplicator<Invoice>();
   private _cache: SimpleCache<Invoice> | ICacheStore<Invoice> | null = null;
   private _auditLogger: AuditLogger | null = null;
@@ -334,6 +358,16 @@ export class StellarSplitClient {
     }
 
     initHealthDashboard(this.server, this._dedup);
+
+    // Register and initialize config-level plugins
+    if (config.plugins) {
+      for (const plugin of config.plugins) {
+        this.registerPlugin(plugin);
+      }
+    }
+    for (const p of this._pluginInstances) {
+      p.onInit?.(this);
+    }
   }
 
   private _logAudit(method: string, params: Record<string, unknown>, success: boolean, durationMs: number): void {
@@ -360,7 +394,8 @@ export class StellarSplitClient {
       throw new Error(`Plugin "${plugin.name}" is already registered.`);
     }
     this._plugins.add(plugin.name);
-    plugin.install(this);
+    this._pluginInstances.push(plugin);
+    plugin.install?.(this);
   }
 
   // ---------------------------------------------------------------------------
@@ -917,6 +952,17 @@ export class StellarSplitClient {
    * Gracefully shutdown the SDK client, flush pending operations, and close internal resources.
    */
   async shutdown(): Promise<void> {
+    // Tear down plugins in reverse registration order
+    for (const p of this._pluginInstances.reverse()) {
+      try {
+        await p.onDestroy?.(this);
+      } catch (error) {
+        console.error(`[StellarSplitClient] Plugin "${p.name}" onDestroy error:`, error);
+      }
+    }
+    this._pluginInstances = [];
+    this._plugins.clear();
+
     try {
       await this._queue.shutdown();
     } finally {
@@ -1380,6 +1426,35 @@ export class StellarSplitClient {
 
     const result = await this._submitTx(payer, operation);
     return { txHash: result.txHash };
+  }
+
+  /**
+   * Validate a batch of proposed payments before submission.
+   *
+   * Resolves all referenced invoices, verifies they are all in "Pending"
+   * status and share the same token, and checks that each payment amount
+   * does not exceed the invoice's remaining amount.
+   *
+   * This is a client-side preflight to avoid wasting gas/fees on a
+   * batch that would be rejected on-chain.
+   *
+   * @param payments - Array of { invoiceId, amount } pairs to verify.
+   * @returns A `BatchVerificationResult` describing per-invoice validity,
+   *          the common token (if uniform), and any aggregated errors.
+   */
+  async verifyBatchPay(payments: BatchPayment[]): Promise<BatchVerificationResult> {
+    const invoiceIds = payments.map((p) => p.invoiceId);
+    const results = await this.resolveBatch(invoiceIds);
+
+    const resolvedInvoices: Invoice[] = [];
+    for (const r of results) {
+      const rr = r as { success: boolean; invoice?: Invoice };
+      if (rr.success && rr.invoice) {
+        resolvedInvoices.push(rr.invoice);
+      }
+    }
+
+    return verifyBatchPayments(resolvedInvoices, payments);
   }
 
   /**
