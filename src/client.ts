@@ -54,6 +54,10 @@ import { generatePaymentProof } from "./proof.js";
 import type {
   ArchivedInvoice,
   ArbiterVote,
+  AuctionInfo,
+  DisputeStatus,
+  QueueActionParams,
+  TimelockAction,
   BatchPayment,
   BatchResolveResult,
   BulkResult,
@@ -89,6 +93,7 @@ import type {
   PaymentReconciliationReport,
   RolloverResult,
   SetCrossChainRefParams,
+  ScheduledReleaseCountdown,
 } from "./types.js";
 import type { DIContainer, IRPCClient, ICacheStore, IWalletAdapter } from "./container.js";
 import {
@@ -499,23 +504,74 @@ export class StellarSplitClient {
   }
 
   /**
-   * Resolve a dispute for an invoice.
+   * Resolve a dispute for an invoice. The arbiter address must co-sign the resolution.
    * @param invoiceId - The ID of the invoice to resolve dispute for.
+   * @param arbiter - The Stellar address of the arbiter (must sign).
    * @returns The dispute ID and transaction hash.
    */
-  async resolveDispute(invoiceId: string): Promise<DisputeResult> {
+  async resolveDispute(invoiceId: string, arbiter: string): Promise<DisputeResult> {
     const startTime = Date.now();
     try {
       const operation = this.contract.call(
         "resolve_dispute",
         nativeToScVal(BigInt(invoiceId), { type: "u64" })
       );
-      const result = await this._submitTx(this.config.contractId, operation);
+      const result = await this._submitTx(arbiter, operation);
       const disputeId = scValToNative(result.returnValue).toString();
       telemetry.recordMethod("resolveDispute", true, Date.now() - startTime);
       return { disputeId, txHash: result.txHash };
     } catch (error) {
       telemetry.recordMethod("resolveDispute", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
+   * Raise a dispute on an invoice.
+   * @param invoiceId - The ID of the invoice to dispute.
+   * @returns The dispute ID and transaction hash.
+   */
+  async raiseDispute(invoiceId: string): Promise<DisputeResult> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "dispute_invoice",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+      const result = await this._submitTx(this.config.contractId, operation);
+      const disputeId = scValToNative(result.returnValue).toString();
+      telemetry.recordMethod("raiseDispute", true, Date.now() - startTime);
+      return { disputeId, txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("raiseDispute", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
+   * Get the dispute status for an invoice.
+   * @param invoiceId - The ID of the invoice to query.
+   * @returns The dispute status.
+   */
+  async getDisputeStatus(invoiceId: string): Promise<DisputeStatus> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "get_dispute_status",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+      const raw = await this._simulateView(operation) as Record<string, unknown>;
+      const status: DisputeStatus = {
+        invoiceId,
+        disputed: Boolean(raw.disputed),
+        arbiter: raw.arbiter as string,
+        resolved: Boolean(raw.resolved),
+        resolution: raw.resolution === "approved" ? "approved" : raw.resolution === "rejected" ? "rejected" : null,
+      };
+      telemetry.recordMethod("getDisputeStatus", true, Date.now() - startTime);
+      return status;
+    } catch (error) {
+      telemetry.recordMethod("getDisputeStatus", false, Date.now() - startTime);
       throw error;
     }
   }
@@ -2234,6 +2290,70 @@ export class StellarSplitClient {
       return result;
     } catch (error) {
       telemetry.recordMethod("getPaymentCooldown", false, Date.now() - startTime);
+  // Scheduled release countdown
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Compute the time remaining until a scheduled release fires.
+   * Accepts an Invoice or a raw timestamp (Unix seconds).
+   * When an Invoice is provided, `scheduledReleaseDate` is used if present,
+   * otherwise the invoice `deadline` is used as the target timestamp.
+   *
+   * @param invoiceOrTimestamp - An Invoice object or a Unix timestamp (seconds).
+   * @returns A structured countdown with days, hours, minutes, seconds, and whether overdue.
+   */
+  getScheduledReleaseCountdown(
+    invoiceOrTimestamp: Invoice | number
+  ): ScheduledReleaseCountdown {
+    const target: number =
+      typeof invoiceOrTimestamp === "number"
+        ? invoiceOrTimestamp
+        : invoiceOrTimestamp.scheduledReleaseDate ?? invoiceOrTimestamp.deadline;
+
+    const now = Math.floor(Date.now() / 1000);
+    const diff = target - now;
+
+    if (diff <= 0) {
+      return { days: 0, hours: 0, minutes: 0, seconds: 0, overdue: true };
+    }
+
+    const days = Math.floor(diff / 86400);
+    const hours = Math.floor((diff % 86400) / 3600);
+    const minutes = Math.floor((diff % 3600) / 60);
+    const seconds = diff % 60;
+
+    return { days, hours, minutes, seconds, overdue: false };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Auction workflow
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Place a bid on an invoice that has auction_on_expiry enabled.
+   * @param bidder - Stellar address of the bidder (must sign).
+   * @param invoiceId - The ID of the invoice to bid on.
+   * @param amount - Bid amount in stroops.
+   * @returns The transaction hash.
+   */
+  async placeBid(
+    bidder: string,
+    invoiceId: string,
+    amount: bigint
+  ): Promise<TxResult> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "place_bid",
+        nativeToScVal(bidder, { type: "address" }),
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+        nativeToScVal(amount, { type: "i128" })
+      );
+      const result = await this._submitTx(bidder, operation);
+      telemetry.recordMethod("placeBid", true, Date.now() - startTime);
+      return { txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("placeBid", false, Date.now() - startTime);
       throw error;
     }
   }
@@ -2295,6 +2415,58 @@ export class StellarSplitClient {
       return allPayments;
     } catch (error) {
       telemetry.recordMethod("getPaymentHistory", false, Date.now() - startTime);
+  /**
+   * Settle an auction for an invoice, releasing funds to the winning bidder.
+   * @param caller - Stellar address of the caller (must sign).
+   * @param invoiceId - The ID of the invoice to settle.
+   * @returns The transaction hash.
+   */
+  async settleAuction(caller: string, invoiceId: string): Promise<TxResult> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "settle_auction",
+        nativeToScVal(caller, { type: "address" }),
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+      const result = await this._submitTx(caller, operation);
+      telemetry.recordMethod("settleAuction", true, Date.now() - startTime);
+      return { txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("settleAuction", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
+   * Get the auction state for an invoice.
+   * @param invoiceId - The ID of the invoice to query.
+   * @returns Auction information including active state, highest bid, and end time.
+   */
+  async getAuctionInfo(invoiceId: string): Promise<AuctionInfo> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "get_auction_info",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+      const raw = await this._simulateView(operation) as Record<string, unknown>;
+      const info: AuctionInfo = {
+        invoiceId,
+        active: Boolean(raw.active),
+        highestBid: raw.highestBid
+          ? {
+              bidder: (raw.highestBid as Record<string, unknown>).bidder as string,
+              amount: BigInt((raw.highestBid as Record<string, unknown>).amount as string | number),
+              timestamp: Number((raw.highestBid as Record<string, unknown>).timestamp),
+            }
+          : null,
+        endTime: Number(raw.endTime ?? 0),
+      };
+      telemetry.recordMethod("getAuctionInfo", true, Date.now() - startTime);
+      return info;
+    } catch (error) {
+      telemetry.recordMethod("getAuctionInfo", false, Date.now() - startTime);
       throw error;
     }
   }
@@ -2323,6 +2495,33 @@ export class StellarSplitClient {
       return { txHash: result.txHash };
     } catch (error) {
       telemetry.recordMethod("adminFreeze", false, Date.now() - startTime);
+  // Timelock action queue
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Queue a treasury or fee change action for execution after a timelock delay.
+   * @param params - Queue action parameters.
+   * @returns The action ID and transaction hash.
+   */
+  async queueAction(
+    params: QueueActionParams
+  ): Promise<{ actionId: string; txHash: string }> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "queue_action",
+        nativeToScVal(params.caller, { type: "address" }),
+        nativeToScVal(params.actionType, { type: "symbol" }),
+        nativeToScVal(params.target, { type: "address" }),
+        nativeToScVal(params.value, { type: "i128" }),
+        nativeToScVal(BigInt(params.eta), { type: "u64" })
+      );
+      const result = await this._submitTx(params.caller, operation);
+      const actionId = scValToNative(result.returnValue).toString();
+      telemetry.recordMethod("queueAction", true, Date.now() - startTime);
+      return { actionId, txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("queueAction", false, Date.now() - startTime);
       throw error;
     }
   }
@@ -2347,6 +2546,24 @@ export class StellarSplitClient {
       return { txHash: result.txHash };
     } catch (error) {
       telemetry.recordMethod("adminUnfreeze", false, Date.now() - startTime);
+   * Execute a previously queued action after its timelock has elapsed.
+   * @param caller - Stellar address of the caller (must sign).
+   * @param actionId - The ID of the action to execute.
+   * @returns The transaction hash.
+   */
+  async executeAction(caller: string, actionId: string): Promise<TxResult> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "execute_action",
+        nativeToScVal(caller, { type: "address" }),
+        nativeToScVal(BigInt(actionId), { type: "u64" })
+      );
+      const result = await this._submitTx(caller, operation);
+      telemetry.recordMethod("executeAction", true, Date.now() - startTime);
+      return { txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("executeAction", false, Date.now() - startTime);
       throw error;
     }
   }
@@ -2383,6 +2600,25 @@ export class StellarSplitClient {
       return result;
     } catch (error) {
       telemetry.recordMethod("getCrossChainRef", false, Date.now() - startTime);
+  /**
+   * Cancel a queued action before it has been executed.
+   * @param caller - Stellar address of the caller (must sign).
+   * @param actionId - The ID of the action to cancel.
+   * @returns The transaction hash.
+   */
+  async cancelAction(caller: string, actionId: string): Promise<TxResult> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "cancel_action",
+        nativeToScVal(caller, { type: "address" }),
+        nativeToScVal(BigInt(actionId), { type: "u64" })
+      );
+      const result = await this._submitTx(caller, operation);
+      telemetry.recordMethod("cancelAction", true, Date.now() - startTime);
+      return { txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("cancelAction", false, Date.now() - startTime);
       throw error;
     }
   }
@@ -2426,6 +2662,31 @@ export class StellarSplitClient {
       return { txHash: result.txHash };
     } catch (error) {
       telemetry.recordMethod("setCrossChainRef", false, Date.now() - startTime);
+   * Get the status of a queued action.
+   * @param actionId - The ID of the action to query.
+   * @returns Timelock action status.
+   */
+  async getActionStatus(actionId: string): Promise<TimelockAction> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "get_action_status",
+        nativeToScVal(BigInt(actionId), { type: "u64" })
+      );
+      const raw = await this._simulateView(operation) as Record<string, unknown>;
+      const status: TimelockAction = {
+        actionId,
+        actionType: raw.actionType as string,
+        target: raw.target as string,
+        value: BigInt(raw.value as string | number),
+        eta: Number(raw.eta),
+        executed: Boolean(raw.executed),
+        cancelled: Boolean(raw.cancelled),
+      };
+      telemetry.recordMethod("getActionStatus", true, Date.now() - startTime);
+      return status;
+    } catch (error) {
+      telemetry.recordMethod("getActionStatus", false, Date.now() - startTime);
       throw error;
     }
   }

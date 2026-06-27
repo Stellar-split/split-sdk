@@ -216,6 +216,13 @@ export type {
   PaymentCooldown,
   CrossChainRef,
   SetCrossChainRefParams,
+  RolloverResult,
+  ScheduledReleaseCountdown,
+  DisputeStatus,
+  AuctionBid,
+  AuctionInfo,
+  TimelockAction,
+  QueueActionParams,
 } from "./types.js";
 export { InvalidTransitionError } from "./types.js";
 
