@@ -446,6 +446,15 @@ export type {
   HistoricalInvoiceSample,
 } from "./forecast.js";
 
+export {
+  reconcileChannel,
+  registerChannelStateFetcher,
+} from "./channelReconciler.js";
+export type {
+  ChannelState,
+  ChannelReconciliationResult,
+  ChannelStateFetcher,
+} from "./channelReconciler.js";
 export { getInvoiceStats, computeInvoiceStats } from "./invoiceStats.js";
 
 export { previewSplitRules } from "./splitPreview.js";
