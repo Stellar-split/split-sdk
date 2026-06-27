@@ -268,6 +268,9 @@ const NETWORKS: Record<string, NetworkConfig> = {
   },
 };
 
+/** @internal Union type alias to work around esbuild union-type-in-param parsing limitation */
+type InvoiceOrTimestamp = Invoice | number;
+
 export class StellarSplitClient {
   private _mainServer!: SorobanRpc.Server;
   private _standby: WarmStandby | null = null;
@@ -2319,6 +2322,10 @@ export class StellarSplitClient {
       return result;
     } catch (error) {
       telemetry.recordMethod("getPaymentCooldown", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
   // Scheduled release countdown
   // ---------------------------------------------------------------------------
 
@@ -2331,9 +2338,7 @@ export class StellarSplitClient {
    * @param invoiceOrTimestamp - An Invoice object or a Unix timestamp (seconds).
    * @returns A structured countdown with days, hours, minutes, seconds, and whether overdue.
    */
-  getScheduledReleaseCountdown(
-    invoiceOrTimestamp: Invoice | number
-  ): ScheduledReleaseCountdown {
+  getScheduledReleaseCountdown(invoiceOrTimestamp: InvoiceOrTimestamp): ScheduledReleaseCountdown {
     const target: number =
       typeof invoiceOrTimestamp === "number"
         ? invoiceOrTimestamp
@@ -2534,6 +2539,10 @@ export class StellarSplitClient {
       return { txHash: result.txHash };
     } catch (error) {
       telemetry.recordMethod("adminFreeze", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
   // Timelock action queue
   // ---------------------------------------------------------------------------
 
@@ -2585,6 +2594,11 @@ export class StellarSplitClient {
       return { txHash: result.txHash };
     } catch (error) {
       telemetry.recordMethod("adminUnfreeze", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
    * Execute a previously queued action after its timelock has elapsed.
    * @param caller - Stellar address of the caller (must sign).
    * @param actionId - The ID of the action to execute.
@@ -2639,6 +2653,10 @@ export class StellarSplitClient {
       return result;
     } catch (error) {
       telemetry.recordMethod("getCrossChainRef", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
   /**
    * Cancel a queued action before it has been executed.
    * @param caller - Stellar address of the caller (must sign).
@@ -2701,6 +2719,11 @@ export class StellarSplitClient {
       return { txHash: result.txHash };
     } catch (error) {
       telemetry.recordMethod("setCrossChainRef", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
    * Get the status of a queued action.
    * @param actionId - The ID of the action to query.
    * @returns Timelock action status.
