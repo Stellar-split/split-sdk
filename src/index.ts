@@ -391,3 +391,13 @@ export type {
   ForecastConfig,
   HistoricalInvoiceSample,
 } from "./forecast.js";
+
+export {
+  reconcileChannel,
+  registerChannelStateFetcher,
+} from "./channelReconciler.js";
+export type {
+  ChannelState,
+  ChannelReconciliationResult,
+  ChannelStateFetcher,
+} from "./channelReconciler.js";
