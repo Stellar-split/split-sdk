@@ -15,6 +15,8 @@ export interface RetryConfig {
   circuitBreakerThreshold: number;
   /** Milliseconds the circuit stays open before resetting. */
   circuitResetMs: number;
+  maxRetries?: number;
+  baseDelayMs?: number;
 }
 
 type ErrorClass = "transient" | "rateLimit" | "contract";

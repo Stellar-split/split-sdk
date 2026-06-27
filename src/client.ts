@@ -51,6 +51,8 @@ import type { CompressionConfig } from "./compression.js";
 import { calculateFee } from "./fee.js";
 import { resolveToken } from "./token.js";
 import { generatePaymentProof } from "./proof.js";
+import { compilePaymentReceipt } from "./receipt.js";
+import type { PaymentReceipt } from "./receipt.js";
 import type {
   ArchivedInvoice,
   ArbiterVote,
@@ -1663,6 +1665,20 @@ export class StellarSplitClient {
     return generatePaymentProof(txHash, this.config);
   }
 
+  /**
+   * Generate a payment receipt for an invoice and payer address.
+   * Compiles on-chain invoice details, total paid, timestamps, and a SHA-256 proof hash.
+   * Works for both completed and in-progress invoices.
+   *
+   * @param invoiceId - The ID of the invoice.
+   * @param payerAddress - The Stellar address of the payer.
+   * @returns Payment receipt with proofHash and optional JSON serialization.
+   */
+  async generatePaymentReceipt(invoiceId: string, payerAddress: string): Promise<PaymentReceipt> {
+    const invoice = await this.getInvoice(invoiceId);
+    return compilePaymentReceipt(invoice, payerAddress);
+  }
+
   // ---------------------------------------------------------------------------
   // Issue #1 — batchPay
   // ---------------------------------------------------------------------------
@@ -2439,6 +2455,10 @@ export class StellarSplitClient {
       return result;
     } catch (error) {
       telemetry.recordMethod("getPaymentCooldown", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
   // Scheduled release countdown
   // ---------------------------------------------------------------------------
 
@@ -2550,6 +2570,10 @@ export class StellarSplitClient {
       return allPayments;
     } catch (error) {
       telemetry.recordMethod("getPaymentHistory", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
   /**
    * Settle an auction for an invoice, releasing funds to the winning bidder.
    * @param caller - Stellar address of the caller (must sign).
@@ -2630,6 +2654,10 @@ export class StellarSplitClient {
       return { txHash: result.txHash };
     } catch (error) {
       telemetry.recordMethod("adminFreeze", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
   // Timelock action queue
   // ---------------------------------------------------------------------------
 
@@ -2681,6 +2709,11 @@ export class StellarSplitClient {
       return { txHash: result.txHash };
     } catch (error) {
       telemetry.recordMethod("adminUnfreeze", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
    * Execute a previously queued action after its timelock has elapsed.
    * @param caller - Stellar address of the caller (must sign).
    * @param actionId - The ID of the action to execute.
@@ -2735,6 +2768,10 @@ export class StellarSplitClient {
       return result;
     } catch (error) {
       telemetry.recordMethod("getCrossChainRef", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
   /**
    * Cancel a queued action before it has been executed.
    * @param caller - Stellar address of the caller (must sign).
@@ -2797,6 +2834,11 @@ export class StellarSplitClient {
       return { txHash: result.txHash };
     } catch (error) {
       telemetry.recordMethod("setCrossChainRef", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
    * Get the status of a queued action.
    * @param actionId - The ID of the action to query.
    * @returns Timelock action status.

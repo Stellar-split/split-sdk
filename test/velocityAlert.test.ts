@@ -103,7 +103,7 @@ describe("FundingVelocityAlert", () => {
 
     // After cooldown — should fire again
     vi.advanceTimersByTime(10_000);
-    alert.recordSnapshot(makeSummary({ totalFunded: 6_000_000n }));
+    alert.recordSnapshot(makeSummary({ totalFunded: 20_000_000n }));
     expect(alerts).toHaveLength(2);
   });
 

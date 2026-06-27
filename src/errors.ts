@@ -144,6 +144,10 @@ export class CircularPrerequisiteError extends StellarSplitError {
     );
     this.name = "CircularPrerequisiteError";
     this.invoiceId = invoiceId;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Thrown when an operation is attempted without proper authorization. */
 export class UnauthorizedError extends StellarSplitError {
   constructor(message: string = "Unauthorized", raw?: string) {

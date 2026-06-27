@@ -133,6 +133,8 @@ export interface Invoice {
   recurring?: boolean;
   /** Optional memo / description attached to the invoice. */
   memo?: string;
+  /** Optional scheduled release date timestamp. */
+  scheduledReleaseDate?: number;
   /** ID of the source invoice this was cloned from. */
   clonedFrom?: string;
   /** ID of the group this invoice belongs to. */
@@ -283,6 +285,8 @@ export interface CreateInvoiceParams {
   token: string;
   /** Unix timestamp deadline (seconds). */
   deadline: number;
+  /** Optional memo / description. */
+  memo?: string;
 }
 
 /** Generic hardware/software wallet adapter interface. */
@@ -757,6 +761,8 @@ export interface CreatorVolumeCap {
   used: bigint;
   /** Remaining volume (cap - used), or Infinity if uncapped. */
   remaining: bigint | typeof Infinity;
+}
+
 /** Cooldown status for a payer on a given invoice. */
 export interface PaymentCooldown {
   /** Whether the payer is currently in their cooldown period. */
@@ -783,4 +789,51 @@ export interface SetCrossChainRefParams {
   creator: string;
   /** Cross-chain reference data. */
   ref: CrossChainRef;
+}
+
+export interface ScheduledReleaseCountdown {
+  days: number;
+  hours: number;
+  minutes: number;
+  seconds: number;
+  overdue: boolean;
+}
+
+export interface DisputeStatus {
+  invoiceId: string;
+  disputed: boolean;
+  arbiter: string;
+  resolved: boolean;
+  resolution: "approved" | "rejected" | null;
+}
+
+export interface AuctionBid {
+  bidder: string;
+  amount: bigint;
+  timestamp: number;
+}
+
+export interface AuctionInfo {
+  invoiceId: string;
+  active: boolean;
+  highestBid: AuctionBid | null;
+  endTime: number;
+}
+
+export interface QueueActionParams {
+  caller: string;
+  actionType: string;
+  target: string;
+  value: bigint;
+  eta: number;
+}
+
+export interface TimelockAction {
+  actionId: string;
+  actionType: string;
+  target: string;
+  value: bigint;
+  eta: number;
+  executed: boolean;
+  cancelled: boolean;
 }

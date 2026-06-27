@@ -5,6 +5,8 @@ import {
   listTemplates,
 } from "./templateManager.js";
 
+const safeStringify = (val: unknown) => JSON.stringify(val, (_, v) => (typeof v === "bigint" ? v.toString() : v));
+
 export interface TemplateDiffField {
   field: string;
   from: unknown;
@@ -21,10 +23,13 @@ function isObject(val: unknown): val is Record<string, unknown> {
   return typeof val === "object" && val !== null;
 }
 
-function getAllKeys(template: InvoiceTemplate): string[] {
-  return Object.keys(template) as (keyof InvoiceTemplate)[];
-}
-
+/**
+ * Compare two templates and produce a structured field-level diff.
+ *
+ * @param existing - The current template
+ * @param schema - The target template schema
+ * @returns A diff containing added, removed, and changed fields
+ */
 export function diffTemplate(
   existing: InvoiceTemplate,
   schema: InvoiceTemplate
@@ -33,8 +38,8 @@ export function diffTemplate(
   const removed: TemplateDiffField[] = [];
   const changed: TemplateDiffField[] = [];
 
-  const existingKeys = new Set(getAllKeys(existing));
-  const schemaKeys = new Set(getAllKeys(schema));
+  const existingKeys = new Set(Object.keys(existing));
+  const schemaKeys = new Set(Object.keys(schema));
 
   for (const key of schemaKeys) {
     if (!existingKeys.has(key)) {
@@ -49,7 +54,7 @@ export function diffTemplate(
       if (
         isObject(existingVal) &&
         isObject(schemaVal) &&
-        JSON.stringify(existingVal) !== JSON.stringify(schemaVal)
+        safeStringify(existingVal) !== safeStringify(schemaVal)
       ) {
         changed.push({ field: key, from: existingVal, to: schemaVal });
       } else if (
@@ -79,7 +84,7 @@ export function migrateTemplate(
   existing: InvoiceTemplate,
   schema: InvoiceTemplate
 ): InvoiceTemplate {
-  const schemaKeys = getAllKeys(schema);
+  const schemaKeys = Object.keys(schema);
   const migrated = { ...existing } as Record<string, unknown>;
 
   for (const key of schemaKeys) {
@@ -109,7 +114,7 @@ export function migrateAllTemplates(
       }
 
       const diff = diffTemplate(existing, schema);
-      if (diff.added.length === 0 && diff.changed.length === 0) {
+      if (diff.added.length === 0) {
         skipped++;
         continue;
       }

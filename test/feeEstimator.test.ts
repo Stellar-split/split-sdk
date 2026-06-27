@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { estimateOperationCost, type FeeEstimate } from "../src/feeEstimator.js";
-import { rpc as SorobanRpc, BASE_FEE } from "@stellar/stellar-sdk";
+import { rpc as SorobanRpc, BASE_FEE, Operation, Asset } from "@stellar/stellar-sdk";
 
 describe("feeEstimator", () => {
   it("returns fee estimate with base and resource fees", async () => {
@@ -10,14 +10,15 @@ describe("feeEstimator", () => {
       } as SorobanRpc.Api.SimulateTransactionSuccessResponse),
     } as unknown as SorobanRpc.Server;
 
-    const operation = {
-      type: "invokeHostFunction",
-      function: { type: "wasm" },
-    };
+    const operation = Operation.payment({
+      destination: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+      asset: Asset.native(),
+      amount: "10",
+    });
 
     const result = await estimateOperationCost(
       operation,
-      "GCZST3XVCDTUJ76ZAV2HA72KYTZ4KXX52HRXVWWRWXH2NBDXZWQS2FB2",
+      "GBVMS4VIB7ETO3X6SVVBGCPUJJG6VRM37KYWWFYP52BCX7NREZ72XCIL",
       mockServer,
       "Test SDF Network ; September 2015"
     );
@@ -35,11 +36,15 @@ describe("feeEstimator", () => {
       } as SorobanRpc.Api.SimulationError),
     } as unknown as SorobanRpc.Server;
 
-    const operation = { type: "invokeHostFunction" };
+    const operation = Operation.payment({
+      destination: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+      asset: Asset.native(),
+      amount: "10",
+    });
 
     const result = await estimateOperationCost(
       operation,
-      "GCZST3XVCDTUJ76ZAV2HA72KYTZ4KXX52HRXVWWRWXH2NBDXZWQS2FB2",
+      "GBVMS4VIB7ETO3X6SVVBGCPUJJG6VRM37KYWWFYP52BCX7NREZ72XCIL",
       mockServer,
       "Test SDF Network ; September 2015"
     );
@@ -54,11 +59,15 @@ describe("feeEstimator", () => {
       simulateTransaction: vi.fn().mockRejectedValue(new Error("Network error")),
     } as unknown as SorobanRpc.Server;
 
-    const operation = { type: "invokeHostFunction" };
+    const operation = Operation.payment({
+      destination: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+      asset: Asset.native(),
+      amount: "10",
+    });
 
     const result = await estimateOperationCost(
       operation,
-      "GCZST3XVCDTUJ76ZAV2HA72KYTZ4KXX52HRXVWWRWXH2NBDXZWQS2FB2",
+      "GBVMS4VIB7ETO3X6SVVBGCPUJJG6VRM37KYWWFYP52BCX7NREZ72XCIL",
       mockServer,
       "Test SDF Network ; September 2015"
     );

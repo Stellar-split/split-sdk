@@ -33,6 +33,7 @@ describe("AutoRecoveryMonitor", () => {
   });
 
   it("stops monitoring when stop() is called", async () => {
+    vi.useFakeTimers();
     const monitor = new AutoRecoveryMonitor();
     const balancer = new LoadBalancer(["https://a.example"]);
     const mockServer = {
@@ -45,6 +46,7 @@ describe("AutoRecoveryMonitor", () => {
     monitor.stop();
 
     expect(vi.getTimerCount()).toBe(0);
+    vi.useRealTimers();
   });
 
   it("resets failure count on healthy check", async () => {

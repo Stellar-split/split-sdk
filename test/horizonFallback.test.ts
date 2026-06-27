@@ -178,7 +178,7 @@ describe("StellarSplitClient — Horizon fallback integration", () => {
   const baseConfig = {
     rpcUrl: "https://soroban-testnet.stellar.org",
     networkPassphrase: "Test SDF Network ; September 2015",
-    contractId: "CCUZTEST00000000000000000000000000000000000000000000000000",
+    contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
   };
 
   beforeEach(() => {

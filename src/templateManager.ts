@@ -30,6 +30,8 @@ function readNodeStore(): Record<string, InvoiceTemplate> {
   }
 }
 
+const bigintReplacer = (_: string, v: unknown) => (typeof v === "bigint" ? v.toString() : v);
+
 function writeNodeStore(store: Record<string, InvoiceTemplate>): void {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const fs = require("fs") as typeof import("fs");
@@ -38,7 +40,7 @@ function writeNodeStore(store: Record<string, InvoiceTemplate>): void {
   const filePath = getNodeStorePath();
   const dir = path.dirname(filePath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(store, null, 2), "utf-8");
+  fs.writeFileSync(filePath, JSON.stringify(store, bigintReplacer, 2), "utf-8");
 }
 
 // ---------------------------------------------------------------------------
@@ -56,7 +58,7 @@ function readBrowserStore(): Record<string, InvoiceTemplate> {
 }
 
 function writeBrowserStore(store: Record<string, InvoiceTemplate>): void {
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store, bigintReplacer));
 }
 
 // ---------------------------------------------------------------------------
