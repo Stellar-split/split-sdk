@@ -172,6 +172,8 @@ export {
   PaymentExceedsRemainingError,
   InvoiceFrozenError,
   CoCreatorApprovalNotRequiredError,
+  ForwardChainTooDeepError,
+  UnauthorizedError,
   parseSorobanError,
 } from "./errors.js";
 
@@ -211,6 +213,9 @@ export type {
   OverflowBehavior,
   InvoiceExt,
   PaymentOptions,
+  PaymentCooldown,
+  CrossChainRef,
+  SetCrossChainRefParams,
   RolloverResult,
   ScheduledReleaseCountdown,
   DisputeStatus,
