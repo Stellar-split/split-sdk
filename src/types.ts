@@ -135,6 +135,17 @@ export interface Invoice {
   parentInvoiceId?: string;
   /** Depth in the clone chain (0 = root, 1 = cloned from root, etc.). */
   cloneDepth?: number;
+  /** Unix timestamp in seconds when a scheduled release should fire. */
+  scheduledReleaseDate?: number;
+}
+
+/** Countdown until a scheduled release fires. */
+export interface ScheduledReleaseCountdown {
+  days: number;
+  hours: number;
+  minutes: number;
+  seconds: number;
+  overdue: boolean;
 }
 
 export interface InvoiceLifecycleHooks {

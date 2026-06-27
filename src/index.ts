@@ -211,6 +211,7 @@ export type {
   OverflowBehavior,
   InvoiceExt,
   PaymentOptions,
+  ScheduledReleaseCountdown,
 } from "./types.js";
 export { InvalidTransitionError } from "./types.js";
 

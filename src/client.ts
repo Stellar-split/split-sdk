@@ -86,6 +86,7 @@ import type {
   PaymentEventRecord,
   PaymentReconciliationReport,
   RolloverResult,
+  ScheduledReleaseCountdown,
 } from "./types.js";
 import type { DIContainer, IRPCClient, ICacheStore, IWalletAdapter } from "./container.js";
 import { InvoiceNotFoundError } from "./types.js";
@@ -2116,6 +2117,42 @@ export class StellarSplitClient {
       telemetry.recordMethod("revokeCoCreatorApproval", false, Date.now() - startTime);
       throw error;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Scheduled release countdown
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Compute the time remaining until a scheduled release fires.
+   * Accepts an Invoice or a raw timestamp (Unix seconds).
+   * When an Invoice is provided, `scheduledReleaseDate` is used if present,
+   * otherwise the invoice `deadline` is used as the target timestamp.
+   *
+   * @param invoiceOrTimestamp - An Invoice object or a Unix timestamp (seconds).
+   * @returns A structured countdown with days, hours, minutes, seconds, and whether overdue.
+   */
+  getScheduledReleaseCountdown(
+    invoiceOrTimestamp: Invoice | number
+  ): ScheduledReleaseCountdown {
+    const target: number =
+      typeof invoiceOrTimestamp === "number"
+        ? invoiceOrTimestamp
+        : invoiceOrTimestamp.scheduledReleaseDate ?? invoiceOrTimestamp.deadline;
+
+    const now = Math.floor(Date.now() / 1000);
+    const diff = target - now;
+
+    if (diff <= 0) {
+      return { days: 0, hours: 0, minutes: 0, seconds: 0, overdue: true };
+    }
+
+    const days = Math.floor(diff / 86400);
+    const hours = Math.floor((diff % 86400) / 3600);
+    const minutes = Math.floor((diff % 3600) / 60);
+    const seconds = diff % 60;
+
+    return { days, hours, minutes, seconds, overdue: false };
   }
 
   // ---------------------------------------------------------------------------
