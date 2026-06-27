@@ -73,6 +73,7 @@ import type {
   PaginationOptions,
   Payment,
   PayParams,
+  PaymentCooldown,
   PaymentProof,
   Recipient,
   SimulateCreateInvoiceResult,
@@ -94,6 +95,7 @@ import {
   InvoiceFrozenError,
   InvoiceNotFoundError,
   InvoiceNotPendingError,
+  UnauthorizedError,
   parseSorobanError,
 } from "./errors.js";
 import { replayEvents } from "./events.js";
@@ -2193,6 +2195,43 @@ export class StellarSplitClient {
       return { txHash: result.txHash };
     } catch (error) {
       telemetry.recordMethod("revokeCoCreatorApproval", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Payment cooldown
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Check whether a payer is in their cooldown period for a given invoice
+   * and when they can next pay.
+   *
+   * @param invoiceId    - The invoice ID to check.
+   * @param payerAddress - Stellar address of the payer.
+   * @returns Cooldown status with inCooldown flag and cooldownEndsAt timestamp.
+   */
+  async getPaymentCooldown(invoiceId: string, payerAddress: string): Promise<PaymentCooldown> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "payment_cooldown",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+        nativeToScVal(payerAddress, { type: "address" })
+      );
+      const raw = await this._simulateView(operation) as Record<string, unknown>;
+      const result: PaymentCooldown = {
+        inCooldown: Boolean(raw.in_cooldown ?? raw.inCooldown ?? false),
+        cooldownEndsAt: raw.cooldown_ends_at != null
+          ? Number(raw.cooldown_ends_at)
+          : raw.cooldownEndsAt != null
+            ? Number(raw.cooldownEndsAt)
+            : null,
+      };
+      telemetry.recordMethod("getPaymentCooldown", true, Date.now() - startTime);
+      return result;
+    } catch (error) {
+      telemetry.recordMethod("getPaymentCooldown", false, Date.now() - startTime);
       throw error;
     }
   }

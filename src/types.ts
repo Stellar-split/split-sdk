@@ -524,3 +524,11 @@ export interface RolloverResult {
   /** Transaction hash of the rollover submission. */
   txHash: string;
 }
+
+/** Cooldown status for a payer on a given invoice. */
+export interface PaymentCooldown {
+  /** Whether the payer is currently in their cooldown period. */
+  inCooldown: boolean;
+  /** Unix timestamp (seconds) when the cooldown ends, or null if no cooldown is active. */
+  cooldownEndsAt: number | null;
+}

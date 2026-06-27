@@ -100,6 +100,15 @@ export class ForwardChainTooDeepError extends StellarSplitError {
   }
 }
 
+/** Thrown when an operation is attempted without proper authorization. */
+export class UnauthorizedError extends StellarSplitError {
+  constructor(message: string = "Unauthorized", raw?: string) {
+    super(message, raw ?? message);
+    this.name = "UnauthorizedError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Error message patterns from the Soroban contract
 // ---------------------------------------------------------------------------
@@ -127,6 +136,10 @@ const ERROR_PATTERNS: Array<{
   {
     pattern: /frozen|disputed|locked/i,
     factory: (id, raw) => new InvoiceFrozenError(id, raw),
+  },
+  {
+    pattern: /unauthorized|not.authorized|admin.only|forbidden/i,
+    factory: (id, raw) => new UnauthorizedError(`Unauthorized: ${raw}`, raw),
   },
 ];
 

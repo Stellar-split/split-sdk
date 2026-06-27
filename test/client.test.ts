@@ -1122,3 +1122,60 @@ describe("trackVelocity", () => {
     expect(report.invoices[0]!.trend).toBe("steady");
   });
 });
+
+describe("getPaymentCooldown", () => {
+  const payerAddr = Keypair.random().publicKey();
+
+  it("returns cooldown status when payer is in cooldown", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    const now = Math.floor(Date.now() / 1000);
+    const mockCooldown = { in_cooldown: true, cooldown_ends_at: now + 3600 };
+    vi.spyOn(client as any, "_simulateView").mockResolvedValue(mockCooldown);
+
+    const result = await client.getPaymentCooldown("42", payerAddr);
+
+    expect(result.inCooldown).toBe(true);
+    expect(result.cooldownEndsAt).toBe(now + 3600);
+  });
+
+  it("returns cooldown false when no cooldown is active", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    vi.spyOn(client as any, "_simulateView").mockResolvedValue({
+      in_cooldown: false,
+      cooldown_ends_at: null,
+    });
+
+    const result = await client.getPaymentCooldown("42", payerAddr);
+
+    expect(result.inCooldown).toBe(false);
+    expect(result.cooldownEndsAt).toBeNull();
+  });
+
+  it("handles camelCase keys from scValToNative", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    vi.spyOn(client as any, "_simulateView").mockResolvedValue({
+      inCooldown: true,
+      cooldownEndsAt: 1_800_000_000,
+    });
+
+    const result = await client.getPaymentCooldown("42", payerAddr);
+
+    expect(result.inCooldown).toBe(true);
+    expect(result.cooldownEndsAt).toBe(1_800_000_000);
+  });
+});
