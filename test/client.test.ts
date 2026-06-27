@@ -956,3 +956,169 @@ describe("resolveCloneChain", () => {
     await expect(client.resolveCloneChain("x")).rejects.toThrow("clone chain depth exceeded");
   });
 });
+
+describe("trackVelocity", () => {
+  it("calculates payments per day from payment timestamps", async () => {
+    const { trackVelocity } = await import("../src/velocityTracker.js");
+
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    const now = Math.floor(Date.now() / 1000);
+    const creatorAddr = "GCREATORXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+
+    vi.spyOn(client, "getInvoicesByCreator").mockResolvedValue({
+      items: ["inv1"],
+      nextCursor: null,
+      total: 1,
+    });
+
+    vi.spyOn(client, "getInvoice").mockResolvedValue({
+      id: "inv1",
+      creator: creatorAddr,
+      recipients: [],
+      token: "GUSDCXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      deadline: now + 86_400,
+      funded: 1_000_000n,
+      status: "Pending" as const,
+      payments: [
+        { payer: "GPAYER1", amount: 100_000n, timestamp: now },
+        { payer: "GPAYER2", amount: 100_000n, timestamp: now + 43_200 }, // 12 hours later
+        { payer: "GPAYER3", amount: 100_000n, timestamp: now + 86_400 }, // 1 day later
+      ],
+    } as any);
+
+    const report = await trackVelocity(creatorAddr, client);
+
+    expect(report.address).toBe(creatorAddr);
+    expect(report.invoices).toHaveLength(1);
+    expect(report.invoices[0]!.invoiceId).toBe("inv1");
+    expect(report.invoices[0]!.paymentsPerDay).toBeGreaterThan(0);
+    expect(report.invoices[0]!.paymentsPerDay).toBeLessThan(10);
+  });
+
+  it("classifies stalling trend for decreasing payment rate", async () => {
+    const { trackVelocity } = await import("../src/velocityTracker.js");
+
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    const now = Math.floor(Date.now() / 1000);
+    const creatorAddr = "GCREATORXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+
+    vi.spyOn(client, "getInvoicesByCreator").mockResolvedValue({
+      items: ["inv1"],
+      nextCursor: null,
+      total: 1,
+    });
+
+    // Payments concentrated early (stalling pattern)
+    vi.spyOn(client, "getInvoice").mockResolvedValue({
+      id: "inv1",
+      creator: creatorAddr,
+      recipients: [],
+      token: "GUSDCXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      deadline: now + 864_000,
+      funded: 1_000_000n,
+      status: "Pending" as const,
+      payments: [
+        { payer: "GPAYER1", amount: 100_000n, timestamp: now },
+        { payer: "GPAYER2", amount: 100_000n, timestamp: now + 3_600 },
+        { payer: "GPAYER3", amount: 100_000n, timestamp: now + 7_200 },
+        { payer: "GPAYER4", amount: 100_000n, timestamp: now + 432_000 }, // 5 days later
+        { payer: "GPAYER5", amount: 100_000n, timestamp: now + 435_600 },
+      ],
+    } as any);
+
+    const report = await trackVelocity(creatorAddr, client);
+
+    expect(report.invoices[0]!.trend).toBe("stalling");
+  });
+
+  it("classifies accelerating trend for increasing payment rate", async () => {
+    const { trackVelocity } = await import("../src/velocityTracker.js");
+
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    const now = Math.floor(Date.now() / 1000);
+    const creatorAddr = "GCREATORXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+
+    vi.spyOn(client, "getInvoicesByCreator").mockResolvedValue({
+      items: ["inv1"],
+      nextCursor: null,
+      total: 1,
+    });
+
+    // Payments concentrated later (accelerating pattern)
+    vi.spyOn(client, "getInvoice").mockResolvedValue({
+      id: "inv1",
+      creator: creatorAddr,
+      recipients: [],
+      token: "GUSDCXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      deadline: now + 864_000,
+      funded: 1_000_000n,
+      status: "Pending" as const,
+      payments: [
+        { payer: "GPAYER1", amount: 100_000n, timestamp: now },
+        { payer: "GPAYER2", amount: 100_000n, timestamp: now + 172_800 }, // First half ends here (5 payments / 2 = 2.5)
+        { payer: "GPAYER3", amount: 100_000n, timestamp: now + 345_600 },
+        { payer: "GPAYER4", amount: 100_000n, timestamp: now + 432_000 },
+        { payer: "GPAYER5", amount: 100_000n, timestamp: now + 439_200 },
+      ],
+    } as any);
+
+    const report = await trackVelocity(creatorAddr, client);
+
+    expect(report.invoices[0]!.trend).toBe("accelerating");
+  });
+
+  it("classifies steady trend for constant payment rate", async () => {
+    const { trackVelocity } = await import("../src/velocityTracker.js");
+
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    const now = Math.floor(Date.now() / 1000);
+    const creatorAddr = "GCREATORXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+
+    vi.spyOn(client, "getInvoicesByCreator").mockResolvedValue({
+      items: ["inv1"],
+      nextCursor: null,
+      total: 1,
+    });
+
+    // Evenly distributed payments
+    vi.spyOn(client, "getInvoice").mockResolvedValue({
+      id: "inv1",
+      creator: creatorAddr,
+      recipients: [],
+      token: "GUSDCXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      deadline: now + 864_000,
+      funded: 1_000_000n,
+      status: "Pending" as const,
+      payments: [
+        { payer: "GPAYER1", amount: 100_000n, timestamp: now },
+        { payer: "GPAYER2", amount: 100_000n, timestamp: now + 86_400 },
+        { payer: "GPAYER3", amount: 100_000n, timestamp: now + 172_800 },
+        { payer: "GPAYER4", amount: 100_000n, timestamp: now + 259_200 },
+      ],
+    } as any);
+
+    const report = await trackVelocity(creatorAddr, client);
+
+    expect(report.invoices[0]!.trend).toBe("steady");
+  });
+});
