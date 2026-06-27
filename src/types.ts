@@ -172,6 +172,26 @@ export interface AuctionInfo {
   endTime: number;
 }
 
+/** Status of a timelock queued action. */
+export interface TimelockAction {
+  actionId: string;
+  actionType: string;
+  target: string;
+  value: bigint;
+  eta: number;
+  executed: boolean;
+  cancelled: boolean;
+}
+
+/** Parameters for queuing a timelock action. */
+export interface QueueActionParams {
+  caller: string;
+  actionType: string;
+  target: string;
+  value: bigint;
+  eta: number;
+}
+
 export interface InvoiceLifecycleHooks {
   onCreated?: (invoice: Invoice) => void;
   onPaid?: (invoice: Invoice, payment: Payment) => void;

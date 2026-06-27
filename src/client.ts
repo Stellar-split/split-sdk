@@ -56,6 +56,8 @@ import type {
   ArbiterVote,
   AuctionInfo,
   DisputeStatus,
+  QueueActionParams,
+  TimelockAction,
   BatchPayment,
   BatchResolveResult,
   BulkResult,
@@ -2293,6 +2295,114 @@ export class StellarSplitClient {
       return info;
     } catch (error) {
       telemetry.recordMethod("getAuctionInfo", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Timelock action queue
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Queue a treasury or fee change action for execution after a timelock delay.
+   * @param params - Queue action parameters.
+   * @returns The action ID and transaction hash.
+   */
+  async queueAction(
+    params: QueueActionParams
+  ): Promise<{ actionId: string; txHash: string }> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "queue_action",
+        nativeToScVal(params.caller, { type: "address" }),
+        nativeToScVal(params.actionType, { type: "symbol" }),
+        nativeToScVal(params.target, { type: "address" }),
+        nativeToScVal(params.value, { type: "i128" }),
+        nativeToScVal(BigInt(params.eta), { type: "u64" })
+      );
+      const result = await this._submitTx(params.caller, operation);
+      const actionId = scValToNative(result.returnValue).toString();
+      telemetry.recordMethod("queueAction", true, Date.now() - startTime);
+      return { actionId, txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("queueAction", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
+   * Execute a previously queued action after its timelock has elapsed.
+   * @param caller - Stellar address of the caller (must sign).
+   * @param actionId - The ID of the action to execute.
+   * @returns The transaction hash.
+   */
+  async executeAction(caller: string, actionId: string): Promise<TxResult> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "execute_action",
+        nativeToScVal(caller, { type: "address" }),
+        nativeToScVal(BigInt(actionId), { type: "u64" })
+      );
+      const result = await this._submitTx(caller, operation);
+      telemetry.recordMethod("executeAction", true, Date.now() - startTime);
+      return { txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("executeAction", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
+   * Cancel a queued action before it has been executed.
+   * @param caller - Stellar address of the caller (must sign).
+   * @param actionId - The ID of the action to cancel.
+   * @returns The transaction hash.
+   */
+  async cancelAction(caller: string, actionId: string): Promise<TxResult> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "cancel_action",
+        nativeToScVal(caller, { type: "address" }),
+        nativeToScVal(BigInt(actionId), { type: "u64" })
+      );
+      const result = await this._submitTx(caller, operation);
+      telemetry.recordMethod("cancelAction", true, Date.now() - startTime);
+      return { txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("cancelAction", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
+   * Get the status of a queued action.
+   * @param actionId - The ID of the action to query.
+   * @returns Timelock action status.
+   */
+  async getActionStatus(actionId: string): Promise<TimelockAction> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "get_action_status",
+        nativeToScVal(BigInt(actionId), { type: "u64" })
+      );
+      const raw = await this._simulateView(operation) as Record<string, unknown>;
+      const status: TimelockAction = {
+        actionId,
+        actionType: raw.actionType as string,
+        target: raw.target as string,
+        value: BigInt(raw.value as string | number),
+        eta: Number(raw.eta),
+        executed: Boolean(raw.executed),
+        cancelled: Boolean(raw.cancelled),
+      };
+      telemetry.recordMethod("getActionStatus", true, Date.now() - startTime);
+      return status;
+    } catch (error) {
+      telemetry.recordMethod("getActionStatus", false, Date.now() - startTime);
       throw error;
     }
   }
