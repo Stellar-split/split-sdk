@@ -60,6 +60,7 @@ import type {
   CloneOverrides,
   CoSignature,
   CreateInvoiceParams,
+  CrossChainRef,
   DisputeResult,
   FeeBreakdown,
   FeeEstimate,
@@ -73,6 +74,7 @@ import type {
   PaginationOptions,
   Payment,
   PayParams,
+  PaymentCooldown,
   PaymentProof,
   Recipient,
   SimulateCreateInvoiceResult,
@@ -86,6 +88,7 @@ import type {
   PaymentEventRecord,
   PaymentReconciliationReport,
   RolloverResult,
+  SetCrossChainRefParams,
 } from "./types.js";
 import type { DIContainer, IRPCClient, ICacheStore, IWalletAdapter } from "./container.js";
 import {
@@ -94,6 +97,7 @@ import {
   InvoiceFrozenError,
   InvoiceNotFoundError,
   InvoiceNotPendingError,
+  UnauthorizedError,
   parseSorobanError,
 } from "./errors.js";
 import { replayEvents } from "./events.js";
@@ -2193,6 +2197,235 @@ export class StellarSplitClient {
       return { txHash: result.txHash };
     } catch (error) {
       telemetry.recordMethod("revokeCoCreatorApproval", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Payment cooldown
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Check whether a payer is in their cooldown period for a given invoice
+   * and when they can next pay.
+   *
+   * @param invoiceId    - The invoice ID to check.
+   * @param payerAddress - Stellar address of the payer.
+   * @returns Cooldown status with inCooldown flag and cooldownEndsAt timestamp.
+   */
+  async getPaymentCooldown(invoiceId: string, payerAddress: string): Promise<PaymentCooldown> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "payment_cooldown",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+        nativeToScVal(payerAddress, { type: "address" })
+      );
+      const raw = await this._simulateView(operation) as Record<string, unknown>;
+      const result: PaymentCooldown = {
+        inCooldown: Boolean(raw.in_cooldown ?? raw.inCooldown ?? false),
+        cooldownEndsAt: raw.cooldown_ends_at != null
+          ? Number(raw.cooldown_ends_at)
+          : raw.cooldownEndsAt != null
+            ? Number(raw.cooldownEndsAt)
+            : null,
+      };
+      telemetry.recordMethod("getPaymentCooldown", true, Date.now() - startTime);
+      return result;
+    } catch (error) {
+      telemetry.recordMethod("getPaymentCooldown", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Payment history (sharded)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetch the full payment history for an invoice by querying all 8 payment
+   * shards in parallel. Returns a merged, chronologically sorted payment list.
+   *
+   * The contract stores payments across up to 8 shards per invoice (issue #177)
+   * to work around Soroban per-contract-entry size limits.
+   *
+   * @param invoiceId - The invoice ID to fetch payments for.
+   * @returns All payments merged and sorted by timestamp (ascending).
+   */
+  async getPaymentHistory(invoiceId: string): Promise<Payment[]> {
+    const startTime = Date.now();
+    try {
+      const NUM_SHARDS = 8;
+
+      const operations = Array.from({ length: NUM_SHARDS }, (_, i) =>
+        this.contract.call(
+          "get_payment_shard",
+          nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+          nativeToScVal(i, { type: "u32" })
+        )
+      );
+
+      const shardResults = await Promise.allSettled(
+        operations.map((op) => this._simulateView(op))
+      );
+
+      const allPayments: Payment[] = [];
+      for (const result of shardResults) {
+        if (result.status === "fulfilled" && Array.isArray(result.value)) {
+          for (const raw of result.value as unknown[]) {
+            const p = raw as Record<string, unknown>;
+            allPayments.push({
+              payer: (p.payer ?? p.payer) as string,
+              amount: BigInt((p.amount ?? p.amount ?? 0) as string | number),
+              ledger: p.ledger != null ? Number(p.ledger) : undefined,
+              timestamp: p.timestamp != null ? Number(p.timestamp) : undefined,
+              donateOnFailure: Boolean(p.donateOnFailure ?? p.donate_on_failure ?? false),
+            });
+          }
+        }
+      }
+
+      allPayments.sort((a, b) => {
+        const ta = a.timestamp ?? a.ledger ?? 0;
+        const tb = b.timestamp ?? b.ledger ?? 0;
+        return ta - tb;
+      });
+
+      telemetry.recordMethod("getPaymentHistory", true, Date.now() - startTime);
+      return allPayments;
+    } catch (error) {
+      telemetry.recordMethod("getPaymentHistory", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Admin freeze / unfreeze
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Freeze an invoice. Only an authorized admin keypair can call this.
+   * The `admin` address must sign the transaction.
+   *
+   * @param invoiceId - The invoice ID to freeze.
+   * @param admin     - Stellar address of the admin (must sign).
+   * @returns The transaction hash.
+   */
+  async adminFreeze(invoiceId: string, admin: string): Promise<TxResult> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "admin_freeze",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+      const result = await this._submitTx(admin, operation);
+      telemetry.recordMethod("adminFreeze", true, Date.now() - startTime);
+      return { txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("adminFreeze", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
+   * Unfreeze a previously frozen invoice. Only an authorized admin keypair can call this.
+   * The `admin` address must sign the transaction.
+   *
+   * @param invoiceId - The invoice ID to unfreeze.
+   * @param admin     - Stellar address of the admin (must sign).
+   * @returns The transaction hash.
+   */
+  async adminUnfreeze(invoiceId: string, admin: string): Promise<TxResult> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "admin_unfreeze",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+      const result = await this._submitTx(admin, operation);
+      telemetry.recordMethod("adminUnfreeze", true, Date.now() - startTime);
+      return { txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("adminUnfreeze", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cross-chain references
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetch the cross-chain reference for an invoice and parse it into a
+   * structured format.
+   *
+   * @param invoiceId - The invoice ID to query.
+   * @returns The parsed CrossChainRef, or null if none is set.
+   */
+  async getCrossChainRef(invoiceId: string): Promise<CrossChainRef | null> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "get_cross_chain_ref",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+      const raw = await this._simulateView(operation) as Record<string, unknown> | null;
+      if (!raw) {
+        telemetry.recordMethod("getCrossChainRef", true, Date.now() - startTime);
+        return null;
+      }
+      const result: CrossChainRef = {
+        chain: String(raw.chain ?? raw.chain ?? ""),
+        transactionHash: String(raw.transactionHash ?? raw.tx_hash ?? ""),
+        blockNumber: raw.blockNumber != null ? String(raw.blockNumber) : raw.block_number != null ? String(raw.block_number) : undefined,
+      };
+      telemetry.recordMethod("getCrossChainRef", true, Date.now() - startTime);
+      return result;
+    } catch (error) {
+      telemetry.recordMethod("getCrossChainRef", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
+   * Attach a cross-chain reference to an invoice. The creator address must sign.
+   *
+   * @param params - Parameters including invoiceId, creator, and the CrossChainRef.
+   * @returns The transaction hash.
+   */
+  async setCrossChainRef(params: SetCrossChainRefParams): Promise<TxResult> {
+    const startTime = Date.now();
+    try {
+      const refMap: xdr.ScMapEntry[] = [
+        new xdr.ScMapEntry({
+          key: nativeToScVal("chain", { type: "symbol" }) as xdr.ScVal,
+          val: nativeToScVal(params.ref.chain, { type: "string" }) as xdr.ScVal,
+        }),
+        new xdr.ScMapEntry({
+          key: nativeToScVal("tx_hash", { type: "symbol" }) as xdr.ScVal,
+          val: nativeToScVal(params.ref.transactionHash, { type: "string" }) as xdr.ScVal,
+        }),
+      ];
+      if (params.ref.blockNumber !== undefined) {
+        refMap.push(
+          new xdr.ScMapEntry({
+            key: nativeToScVal("block_number", { type: "symbol" }) as xdr.ScVal,
+            val: nativeToScVal(params.ref.blockNumber, { type: "string" }) as xdr.ScVal,
+          })
+        );
+      }
+
+      const operation = this.contract.call(
+        "set_cross_chain_ref",
+        nativeToScVal(BigInt(params.invoiceId), { type: "u64" }),
+        nativeToScVal(params.creator, { type: "address" }),
+        xdr.ScVal.scvMap(refMap)
+      );
+      const result = await this._submitTx(params.creator, operation);
+      telemetry.recordMethod("setCrossChainRef", true, Date.now() - startTime);
+      return { txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("setCrossChainRef", false, Date.now() - startTime);
       throw error;
     }
   }
