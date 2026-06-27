@@ -211,6 +211,7 @@ export type {
   OverflowBehavior,
   InvoiceExt,
   PaymentOptions,
+  RolloverResult,
   ScheduledReleaseCountdown,
   DisputeStatus,
   AuctionBid,
