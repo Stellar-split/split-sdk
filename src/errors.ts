@@ -91,11 +91,64 @@ export class CoCreatorApprovalNotRequiredError extends StellarSplitError {
   }
 }
 
+/** Thrown when createInvoice is attempted without the required qualifying NFT. */
+export class NftGateRequiredError extends StellarSplitError {
+  readonly creatorAddress: string;
+  readonly nftContractAddress: string | null;
+
+  constructor(creatorAddress: string, nftContractAddress: string | null, raw?: string) {
+    const contract = nftContractAddress ?? "unknown";
+    super(
+      `Creator ${creatorAddress} must hold a qualifying NFT from ${contract} to create invoices`,
+      raw ?? `NFT gate required for creator: ${creatorAddress}`,
+    );
+    this.name = "NftGateRequiredError";
+    this.creatorAddress = creatorAddress;
+    this.nftContractAddress = nftContractAddress;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Thrown when resolving a forward chain exceeds the maximum depth limit. */
 export class ForwardChainTooDeepError extends StellarSplitError {
   constructor(message: string, raw?: string) {
     super(message, raw ?? message);
     this.name = "ForwardChainTooDeepError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a prerequisite chain exceeds the maximum traversal depth. */
+export class ChainTooDeepError extends StellarSplitError {
+  readonly maxDepth: number;
+
+  constructor(maxDepth: number, raw?: string) {
+    super(
+      `Prerequisite chain exceeded maximum depth of ${maxDepth}`,
+      raw ?? `Prerequisite chain exceeded maximum depth of ${maxDepth}`
+    );
+    this.name = "ChainTooDeepError";
+    this.maxDepth = maxDepth;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a prerequisite chain contains a cycle. */
+export class CircularPrerequisiteError extends StellarSplitError {
+  readonly invoiceId: string;
+
+  constructor(invoiceId: string, raw?: string) {
+    super(
+      `Circular prerequisite chain detected at invoice: ${invoiceId}`,
+      raw ?? `Circular prerequisite chain detected at invoice: ${invoiceId}`
+    );
+    this.name = "CircularPrerequisiteError";
+    this.invoiceId = invoiceId;
+/** Thrown when an operation is attempted without proper authorization. */
+export class UnauthorizedError extends StellarSplitError {
+  constructor(message: string = "Unauthorized", raw?: string) {
+    super(message, raw ?? message);
+    this.name = "UnauthorizedError";
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
@@ -127,6 +180,10 @@ const ERROR_PATTERNS: Array<{
   {
     pattern: /frozen|disputed|locked/i,
     factory: (id, raw) => new InvoiceFrozenError(id, raw),
+  },
+  {
+    pattern: /unauthorized|not.authorized|admin.only|forbidden/i,
+    factory: (id, raw) => new UnauthorizedError(`Unauthorized: ${raw}`, raw),
   },
 ];
 

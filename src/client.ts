@@ -54,12 +54,17 @@ import { generatePaymentProof } from "./proof.js";
 import type {
   ArchivedInvoice,
   ArbiterVote,
+  AuctionInfo,
+  DisputeStatus,
+  QueueActionParams,
+  TimelockAction,
   BatchPayment,
   BatchResolveResult,
   BulkResult,
   CloneOverrides,
   CoSignature,
   CreateInvoiceParams,
+  CrossChainRef,
   DisputeResult,
   FeeBreakdown,
   FeeEstimate,
@@ -73,6 +78,7 @@ import type {
   PaginationOptions,
   Payment,
   PayParams,
+  PaymentCooldown,
   PaymentProof,
   Recipient,
   SimulateCreateInvoiceResult,
@@ -87,6 +93,12 @@ import type {
   PaymentReconciliationReport,
   RolloverResult,
   VelocityStatus,
+  NftGateResult,
+  ClaimPayoutResult,
+  PayWithAttestationParams,
+  AttestationPaymentReceipt,
+  SetCrossChainRefParams,
+  ScheduledReleaseCountdown,
 } from "./types.js";
 import type { DIContainer, IRPCClient, ICacheStore, IWalletAdapter } from "./container.js";
 import {
@@ -95,6 +107,8 @@ import {
   InvoiceFrozenError,
   InvoiceNotFoundError,
   InvoiceNotPendingError,
+  NftGateRequiredError,
+  UnauthorizedError,
   parseSorobanError,
 } from "./errors.js";
 import { replayEvents } from "./events.js";
@@ -246,6 +260,9 @@ export interface NetworkConfig {
 export interface TxResult {
   txHash: string;
 }
+
+/** TTL for cached NFT gate status results (30 seconds). */
+const NFT_GATE_CACHE_TTL_MS = 30_000;
 
 /** Built-in network presets. */
 const NETWORKS: Record<string, NetworkConfig> = {
@@ -501,23 +518,74 @@ export class StellarSplitClient {
   }
 
   /**
-   * Resolve a dispute for an invoice.
+   * Resolve a dispute for an invoice. The arbiter address must co-sign the resolution.
    * @param invoiceId - The ID of the invoice to resolve dispute for.
+   * @param arbiter - The Stellar address of the arbiter (must sign).
    * @returns The dispute ID and transaction hash.
    */
-  async resolveDispute(invoiceId: string): Promise<DisputeResult> {
+  async resolveDispute(invoiceId: string, arbiter: string): Promise<DisputeResult> {
     const startTime = Date.now();
     try {
       const operation = this.contract.call(
         "resolve_dispute",
         nativeToScVal(BigInt(invoiceId), { type: "u64" })
       );
-      const result = await this._submitTx(this.config.contractId, operation);
+      const result = await this._submitTx(arbiter, operation);
       const disputeId = scValToNative(result.returnValue).toString();
       telemetry.recordMethod("resolveDispute", true, Date.now() - startTime);
       return { disputeId, txHash: result.txHash };
     } catch (error) {
       telemetry.recordMethod("resolveDispute", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
+   * Raise a dispute on an invoice.
+   * @param invoiceId - The ID of the invoice to dispute.
+   * @returns The dispute ID and transaction hash.
+   */
+  async raiseDispute(invoiceId: string): Promise<DisputeResult> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "dispute_invoice",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+      const result = await this._submitTx(this.config.contractId, operation);
+      const disputeId = scValToNative(result.returnValue).toString();
+      telemetry.recordMethod("raiseDispute", true, Date.now() - startTime);
+      return { disputeId, txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("raiseDispute", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
+   * Get the dispute status for an invoice.
+   * @param invoiceId - The ID of the invoice to query.
+   * @returns The dispute status.
+   */
+  async getDisputeStatus(invoiceId: string): Promise<DisputeStatus> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "get_dispute_status",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+      const raw = await this._simulateView(operation) as Record<string, unknown>;
+      const status: DisputeStatus = {
+        invoiceId,
+        disputed: Boolean(raw.disputed),
+        arbiter: raw.arbiter as string,
+        resolved: Boolean(raw.resolved),
+        resolution: raw.resolution === "approved" ? "approved" : raw.resolution === "rejected" ? "rejected" : null,
+      };
+      telemetry.recordMethod("getDisputeStatus", true, Date.now() - startTime);
+      return status;
+    } catch (error) {
+      telemetry.recordMethod("getDisputeStatus", false, Date.now() - startTime);
       throw error;
     }
   }
@@ -538,6 +606,11 @@ export class StellarSplitClient {
     try {
       if (this.config.payloadGuard) {
         validateInvoicePayload(params, this.config.payloadGuard);
+      }
+
+      const gate = await this.checkNftGate(params.creator);
+      if (gate.gated && !gate.hasNft) {
+        throw new NftGateRequiredError(params.creator, gate.contractAddress);
       }
 
       const recipientAddresses = params.recipients.map((r) =>
@@ -1003,15 +1076,27 @@ export class StellarSplitClient {
     });
   }
 
-  private _nftGateCache = new Map<string, { timestamp: number; result: { gated: boolean; hasNft: boolean; contractAddress: string | null } }>();
+  private _nftGateCache = new Map<string, { timestamp: number; result: NftGateResult }>();
 
   /**
-   * Checks the NFT gate status for a given creator address.
+   * Checks whether a creator address satisfies the configured NFT gate.
+   *
+   * Queries the on-chain `check_nft_gate` contract method and returns whether
+   * the creator has an NFT gate configured and, if so, whether they hold a
+   * qualifying NFT. Results are cached for 30 seconds per creator address.
+   *
+   * Call this before `createInvoice` when the contract has an NFT gate
+   * configured for the creator. `createInvoice` performs this check automatically.
+   *
+   * @param creatorAddress - The Stellar address of the invoice creator.
+   * @returns Gate status including whether gating applies and NFT ownership.
    */
-  async checkNftGate(creatorAddress: string): Promise<{ gated: boolean; hasNft: boolean; contractAddress: string | null }> {
+  async checkNftGate(creatorAddress: string): Promise<NftGateResult> {
+    const startTime = Date.now();
     const now = Date.now();
     const cached = this._nftGateCache.get(creatorAddress);
-    if (cached && now - cached.timestamp < 30000) {
+    if (cached && now - cached.timestamp < NFT_GATE_CACHE_TTL_MS) {
+      telemetry.recordMethod("checkNftGate", true, Date.now() - startTime);
       return cached.result;
     }
 
@@ -1020,26 +1105,25 @@ export class StellarSplitClient {
         "check_nft_gate",
         nativeToScVal(creatorAddress, { type: "address" })
       );
-      
-      const raw = await this._simulateView(operation) as any;
-      let result = { gated: false, hasNft: false, contractAddress: null };
-      
-      if (raw && typeof raw === "object") {
-        result = {
-          gated: Boolean(raw.gated),
-          hasNft: Boolean(raw.hasNft || raw.has_nft),
-          contractAddress: (raw.contractAddress || raw.contract_address) ?? null
-        };
-      }
-      
+
+      const raw = await this._simulateView(operation);
+      const result = this._parseNftGateResult(raw);
+
       this._nftGateCache.set(creatorAddress, { timestamp: now, result });
+      telemetry.recordMethod("checkNftGate", true, Date.now() - startTime);
       return result;
-    } catch (error) {
-      // If the method doesn't exist or fails, assume no gate
-      const result = { gated: false, hasNft: false, contractAddress: null };
+    } catch {
+      // If the method doesn't exist or fails, assume no gate is configured.
+      const result: NftGateResult = { gated: false, hasNft: false, contractAddress: null };
       this._nftGateCache.set(creatorAddress, { timestamp: now, result });
+      telemetry.recordMethod("checkNftGate", true, Date.now() - startTime);
       return result;
     }
+  }
+
+  /** Clears the NFT gate status cache (useful for testing). */
+  clearNftGateCache(): void {
+    this._nftGateCache.clear();
   }
 
   /**
@@ -2244,6 +2328,441 @@ export class StellarSplitClient {
     }
   }
 
+
+  // ---------------------------------------------------------------------------
+  // Payment cooldown
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Check whether a payer is in their cooldown period for a given invoice
+   * and when they can next pay.
+   *
+   * @param invoiceId    - The invoice ID to check.
+   * @param payerAddress - Stellar address of the payer.
+   * @returns Cooldown status with inCooldown flag and cooldownEndsAt timestamp.
+   */
+  async getPaymentCooldown(invoiceId: string, payerAddress: string): Promise<PaymentCooldown> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "payment_cooldown",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+        nativeToScVal(payerAddress, { type: "address" })
+      );
+      const raw = await this._simulateView(operation) as Record<string, unknown>;
+      const result: PaymentCooldown = {
+        inCooldown: Boolean(raw.in_cooldown ?? raw.inCooldown ?? false),
+        cooldownEndsAt: raw.cooldown_ends_at != null
+          ? Number(raw.cooldown_ends_at)
+          : raw.cooldownEndsAt != null
+            ? Number(raw.cooldownEndsAt)
+            : null,
+      };
+      telemetry.recordMethod("getPaymentCooldown", true, Date.now() - startTime);
+      return result;
+    } catch (error) {
+      telemetry.recordMethod("getPaymentCooldown", false, Date.now() - startTime);
+  // Scheduled release countdown
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Compute the time remaining until a scheduled release fires.
+   * Accepts an Invoice or a raw timestamp (Unix seconds).
+   * When an Invoice is provided, `scheduledReleaseDate` is used if present,
+   * otherwise the invoice `deadline` is used as the target timestamp.
+   *
+   * @param invoiceOrTimestamp - An Invoice object or a Unix timestamp (seconds).
+   * @returns A structured countdown with days, hours, minutes, seconds, and whether overdue.
+   */
+  getScheduledReleaseCountdown(
+    invoiceOrTimestamp: Invoice | number
+  ): ScheduledReleaseCountdown {
+    const target: number =
+      typeof invoiceOrTimestamp === "number"
+        ? invoiceOrTimestamp
+        : invoiceOrTimestamp.scheduledReleaseDate ?? invoiceOrTimestamp.deadline;
+
+    const now = Math.floor(Date.now() / 1000);
+    const diff = target - now;
+
+    if (diff <= 0) {
+      return { days: 0, hours: 0, minutes: 0, seconds: 0, overdue: true };
+    }
+
+    const days = Math.floor(diff / 86400);
+    const hours = Math.floor((diff % 86400) / 3600);
+    const minutes = Math.floor((diff % 3600) / 60);
+    const seconds = diff % 60;
+
+    return { days, hours, minutes, seconds, overdue: false };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Auction workflow
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Place a bid on an invoice that has auction_on_expiry enabled.
+   * @param bidder - Stellar address of the bidder (must sign).
+   * @param invoiceId - The ID of the invoice to bid on.
+   * @param amount - Bid amount in stroops.
+   * @returns The transaction hash.
+   */
+  async placeBid(
+    bidder: string,
+    invoiceId: string,
+    amount: bigint
+  ): Promise<TxResult> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "place_bid",
+        nativeToScVal(bidder, { type: "address" }),
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+        nativeToScVal(amount, { type: "i128" })
+      );
+      const result = await this._submitTx(bidder, operation);
+      telemetry.recordMethod("placeBid", true, Date.now() - startTime);
+      return { txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("placeBid", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Payment history (sharded)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetch the full payment history for an invoice by querying all 8 payment
+   * shards in parallel. Returns a merged, chronologically sorted payment list.
+   *
+   * The contract stores payments across up to 8 shards per invoice (issue #177)
+   * to work around Soroban per-contract-entry size limits.
+   *
+   * @param invoiceId - The invoice ID to fetch payments for.
+   * @returns All payments merged and sorted by timestamp (ascending).
+   */
+  async getPaymentHistory(invoiceId: string): Promise<Payment[]> {
+    const startTime = Date.now();
+    try {
+      const NUM_SHARDS = 8;
+
+      const operations = Array.from({ length: NUM_SHARDS }, (_, i) =>
+        this.contract.call(
+          "get_payment_shard",
+          nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+          nativeToScVal(i, { type: "u32" })
+        )
+      );
+
+      const shardResults = await Promise.allSettled(
+        operations.map((op) => this._simulateView(op))
+      );
+
+      const allPayments: Payment[] = [];
+      for (const result of shardResults) {
+        if (result.status === "fulfilled" && Array.isArray(result.value)) {
+          for (const raw of result.value as unknown[]) {
+            const p = raw as Record<string, unknown>;
+            allPayments.push({
+              payer: (p.payer ?? p.payer) as string,
+              amount: BigInt((p.amount ?? p.amount ?? 0) as string | number),
+              ledger: p.ledger != null ? Number(p.ledger) : undefined,
+              timestamp: p.timestamp != null ? Number(p.timestamp) : undefined,
+              donateOnFailure: Boolean(p.donateOnFailure ?? p.donate_on_failure ?? false),
+            });
+          }
+        }
+      }
+
+      allPayments.sort((a, b) => {
+        const ta = a.timestamp ?? a.ledger ?? 0;
+        const tb = b.timestamp ?? b.ledger ?? 0;
+        return ta - tb;
+      });
+
+      telemetry.recordMethod("getPaymentHistory", true, Date.now() - startTime);
+      return allPayments;
+    } catch (error) {
+      telemetry.recordMethod("getPaymentHistory", false, Date.now() - startTime);
+  /**
+   * Settle an auction for an invoice, releasing funds to the winning bidder.
+   * @param caller - Stellar address of the caller (must sign).
+   * @param invoiceId - The ID of the invoice to settle.
+   * @returns The transaction hash.
+   */
+  async settleAuction(caller: string, invoiceId: string): Promise<TxResult> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "settle_auction",
+        nativeToScVal(caller, { type: "address" }),
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+      const result = await this._submitTx(caller, operation);
+      telemetry.recordMethod("settleAuction", true, Date.now() - startTime);
+      return { txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("settleAuction", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
+   * Get the auction state for an invoice.
+   * @param invoiceId - The ID of the invoice to query.
+   * @returns Auction information including active state, highest bid, and end time.
+   */
+  async getAuctionInfo(invoiceId: string): Promise<AuctionInfo> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "get_auction_info",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+      const raw = await this._simulateView(operation) as Record<string, unknown>;
+      const info: AuctionInfo = {
+        invoiceId,
+        active: Boolean(raw.active),
+        highestBid: raw.highestBid
+          ? {
+              bidder: (raw.highestBid as Record<string, unknown>).bidder as string,
+              amount: BigInt((raw.highestBid as Record<string, unknown>).amount as string | number),
+              timestamp: Number((raw.highestBid as Record<string, unknown>).timestamp),
+            }
+          : null,
+        endTime: Number(raw.endTime ?? 0),
+      };
+      telemetry.recordMethod("getAuctionInfo", true, Date.now() - startTime);
+      return info;
+    } catch (error) {
+      telemetry.recordMethod("getAuctionInfo", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Admin freeze / unfreeze
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Freeze an invoice. Only an authorized admin keypair can call this.
+   * The `admin` address must sign the transaction.
+   *
+   * @param invoiceId - The invoice ID to freeze.
+   * @param admin     - Stellar address of the admin (must sign).
+   * @returns The transaction hash.
+   */
+  async adminFreeze(invoiceId: string, admin: string): Promise<TxResult> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "admin_freeze",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+      const result = await this._submitTx(admin, operation);
+      telemetry.recordMethod("adminFreeze", true, Date.now() - startTime);
+      return { txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("adminFreeze", false, Date.now() - startTime);
+  // Timelock action queue
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Queue a treasury or fee change action for execution after a timelock delay.
+   * @param params - Queue action parameters.
+   * @returns The action ID and transaction hash.
+   */
+  async queueAction(
+    params: QueueActionParams
+  ): Promise<{ actionId: string; txHash: string }> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "queue_action",
+        nativeToScVal(params.caller, { type: "address" }),
+        nativeToScVal(params.actionType, { type: "symbol" }),
+        nativeToScVal(params.target, { type: "address" }),
+        nativeToScVal(params.value, { type: "i128" }),
+        nativeToScVal(BigInt(params.eta), { type: "u64" })
+      );
+      const result = await this._submitTx(params.caller, operation);
+      const actionId = scValToNative(result.returnValue).toString();
+      telemetry.recordMethod("queueAction", true, Date.now() - startTime);
+      return { actionId, txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("queueAction", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
+   * Unfreeze a previously frozen invoice. Only an authorized admin keypair can call this.
+   * The `admin` address must sign the transaction.
+   *
+   * @param invoiceId - The invoice ID to unfreeze.
+   * @param admin     - Stellar address of the admin (must sign).
+   * @returns The transaction hash.
+   */
+  async adminUnfreeze(invoiceId: string, admin: string): Promise<TxResult> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "admin_unfreeze",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+      const result = await this._submitTx(admin, operation);
+      telemetry.recordMethod("adminUnfreeze", true, Date.now() - startTime);
+      return { txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("adminUnfreeze", false, Date.now() - startTime);
+   * Execute a previously queued action after its timelock has elapsed.
+   * @param caller - Stellar address of the caller (must sign).
+   * @param actionId - The ID of the action to execute.
+   * @returns The transaction hash.
+   */
+  async executeAction(caller: string, actionId: string): Promise<TxResult> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "execute_action",
+        nativeToScVal(caller, { type: "address" }),
+        nativeToScVal(BigInt(actionId), { type: "u64" })
+      );
+      const result = await this._submitTx(caller, operation);
+      telemetry.recordMethod("executeAction", true, Date.now() - startTime);
+      return { txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("executeAction", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cross-chain references
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetch the cross-chain reference for an invoice and parse it into a
+   * structured format.
+   *
+   * @param invoiceId - The invoice ID to query.
+   * @returns The parsed CrossChainRef, or null if none is set.
+   */
+  async getCrossChainRef(invoiceId: string): Promise<CrossChainRef | null> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "get_cross_chain_ref",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      );
+      const raw = await this._simulateView(operation) as Record<string, unknown> | null;
+      if (!raw) {
+        telemetry.recordMethod("getCrossChainRef", true, Date.now() - startTime);
+        return null;
+      }
+      const result: CrossChainRef = {
+        chain: String(raw.chain ?? raw.chain ?? ""),
+        transactionHash: String(raw.transactionHash ?? raw.tx_hash ?? ""),
+        blockNumber: raw.blockNumber != null ? String(raw.blockNumber) : raw.block_number != null ? String(raw.block_number) : undefined,
+      };
+      telemetry.recordMethod("getCrossChainRef", true, Date.now() - startTime);
+      return result;
+    } catch (error) {
+      telemetry.recordMethod("getCrossChainRef", false, Date.now() - startTime);
+  /**
+   * Cancel a queued action before it has been executed.
+   * @param caller - Stellar address of the caller (must sign).
+   * @param actionId - The ID of the action to cancel.
+   * @returns The transaction hash.
+   */
+  async cancelAction(caller: string, actionId: string): Promise<TxResult> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "cancel_action",
+        nativeToScVal(caller, { type: "address" }),
+        nativeToScVal(BigInt(actionId), { type: "u64" })
+      );
+      const result = await this._submitTx(caller, operation);
+      telemetry.recordMethod("cancelAction", true, Date.now() - startTime);
+      return { txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("cancelAction", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
+   * Attach a cross-chain reference to an invoice. The creator address must sign.
+   *
+   * @param params - Parameters including invoiceId, creator, and the CrossChainRef.
+   * @returns The transaction hash.
+   */
+  async setCrossChainRef(params: SetCrossChainRefParams): Promise<TxResult> {
+    const startTime = Date.now();
+    try {
+      const refMap: xdr.ScMapEntry[] = [
+        new xdr.ScMapEntry({
+          key: nativeToScVal("chain", { type: "symbol" }) as xdr.ScVal,
+          val: nativeToScVal(params.ref.chain, { type: "string" }) as xdr.ScVal,
+        }),
+        new xdr.ScMapEntry({
+          key: nativeToScVal("tx_hash", { type: "symbol" }) as xdr.ScVal,
+          val: nativeToScVal(params.ref.transactionHash, { type: "string" }) as xdr.ScVal,
+        }),
+      ];
+      if (params.ref.blockNumber !== undefined) {
+        refMap.push(
+          new xdr.ScMapEntry({
+            key: nativeToScVal("block_number", { type: "symbol" }) as xdr.ScVal,
+            val: nativeToScVal(params.ref.blockNumber, { type: "string" }) as xdr.ScVal,
+          })
+        );
+      }
+
+      const operation = this.contract.call(
+        "set_cross_chain_ref",
+        nativeToScVal(BigInt(params.invoiceId), { type: "u64" }),
+        nativeToScVal(params.creator, { type: "address" }),
+        xdr.ScVal.scvMap(refMap)
+      );
+      const result = await this._submitTx(params.creator, operation);
+      telemetry.recordMethod("setCrossChainRef", true, Date.now() - startTime);
+      return { txHash: result.txHash };
+    } catch (error) {
+      telemetry.recordMethod("setCrossChainRef", false, Date.now() - startTime);
+   * Get the status of a queued action.
+   * @param actionId - The ID of the action to query.
+   * @returns Timelock action status.
+   */
+  async getActionStatus(actionId: string): Promise<TimelockAction> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "get_action_status",
+        nativeToScVal(BigInt(actionId), { type: "u64" })
+      );
+      const raw = await this._simulateView(operation) as Record<string, unknown>;
+      const status: TimelockAction = {
+        actionId,
+        actionType: raw.actionType as string,
+        target: raw.target as string,
+        value: BigInt(raw.value as string | number),
+        eta: Number(raw.eta),
+        executed: Boolean(raw.executed),
+        cancelled: Boolean(raw.cancelled),
+      };
+      telemetry.recordMethod("getActionStatus", true, Date.now() - startTime);
+      return status;
+    } catch (error) {
+      telemetry.recordMethod("getActionStatus", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Issue #285 — Velocity limit status
   // ---------------------------------------------------------------------------
@@ -2304,6 +2823,22 @@ export class StellarSplitClient {
   // ---------------------------------------------------------------------------
   // Internal helpers
   // ---------------------------------------------------------------------------
+
+  /** Parse the native return value from `check_nft_gate`. */
+  private _parseNftGateResult(raw: unknown): NftGateResult {
+    if (!raw || typeof raw !== "object") {
+      return { gated: false, hasNft: false, contractAddress: null };
+    }
+
+    const obj = raw as Record<string, unknown>;
+    const contractAddress = obj.contractAddress ?? obj.contract_address ?? null;
+
+    return {
+      gated: Boolean(obj.gated),
+      hasNft: Boolean(obj.hasNft ?? obj.has_nft),
+      contractAddress: typeof contractAddress === "string" ? contractAddress : null,
+    };
+  }
 
   /** Simulate a read-only contract call and return the native-decoded result. */
   private async _simulateView(operation: xdr.Operation): Promise<unknown> {
@@ -2824,6 +3359,265 @@ export class StellarSplitClient {
     }
 
     return successful.reduce((best, cur) => cur.ledger > best.ledger ? cur : best);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #274 — Pending payout claim helper
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Get the claimable payout amount for a recipient on an invoice.
+   * Returns 0n if no pending payout exists.
+   */
+  async getPendingPayout(invoiceId: string, recipient: string): Promise<bigint> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "get_pending_payout",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+        nativeToScVal(recipient, { type: "address" })
+      );
+      const raw = await this._simulateView(operation);
+      const amount = raw == null ? 0n : BigInt(raw as string | number | bigint);
+      telemetry.recordMethod("getPendingPayout", true, Date.now() - startTime);
+      return amount;
+    } catch {
+      telemetry.recordMethod("getPendingPayout", false, Date.now() - startTime);
+      return 0n;
+    }
+  }
+
+  /**
+   * Claim a pending payout for a recipient on an invoice.
+   * Emits a `pending_payout_claimed` event on success.
+   * @throws If no pending payout exists for the recipient.
+   */
+  async claimPendingPayout(invoiceId: string, recipient: string): Promise<ClaimPayoutResult> {
+    const startTime = Date.now();
+    try {
+      const pending = await this.getPendingPayout(invoiceId, recipient);
+      if (pending === 0n) {
+        throw new Error(`No pending payout for recipient ${recipient} on invoice ${invoiceId}`);
+      }
+      const operation = this.contract.call(
+        "claim_pending_payout",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+        nativeToScVal(recipient, { type: "address" })
+      );
+      const result = await this._submitTx(recipient, operation);
+      telemetry.recordMethod("claimPendingPayout", true, Date.now() - startTime);
+      return { txHash: result.txHash, invoiceId, recipient };
+    } catch (error) {
+      telemetry.recordMethod("claimPendingPayout", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #275 — Pay with attestation
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Pay toward an invoice bound to an off-chain identity attestation.
+   * Validates attestationHash (32 bytes) and signature (64 bytes) before submission.
+   * Returns a payment receipt with the attestation hash included.
+   */
+  async payWithAttestation(params: PayWithAttestationParams): Promise<AttestationPaymentReceipt> {
+    const startTime = Date.now();
+    try {
+      if (params.attestationHash.length !== 32) {
+        throw new Error(`attestationHash must be 32 bytes, got ${params.attestationHash.length}`);
+      }
+      if (params.signature.length !== 64) {
+        throw new Error(`signature must be 64 bytes, got ${params.signature.length}`);
+      }
+      const operation = this.contract.call(
+        "pay_with_attestation",
+        nativeToScVal(params.payer, { type: "address" }),
+        nativeToScVal(BigInt(params.invoiceId), { type: "u64" }),
+        nativeToScVal(params.amount, { type: "i128" }),
+        xdr.ScVal.scvBytes(Buffer.from(params.attestationHash)),
+        xdr.ScVal.scvBytes(Buffer.from(params.signature)),
+        nativeToScVal(params.signerPubkey, { type: "address" })
+      );
+      const result = await this._submitTx(params.payer, operation);
+      const attestationHash = Buffer.from(params.attestationHash).toString("hex");
+      telemetry.recordMethod("payWithAttestation", true, Date.now() - startTime);
+      return { txHash: result.txHash, invoiceId: params.invoiceId, amount: params.amount, attestationHash };
+    } catch (error) {
+      telemetry.recordMethod("payWithAttestation", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #276 — Creator volume cap status checker
+  // ---------------------------------------------------------------------------
+
+  /** Returns the volume cap for a creator in token units, or null if uncapped. */
+  async getCreatorVolumeCap(address: string): Promise<bigint | null> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "get_creator_volume_cap",
+        nativeToScVal(address, { type: "address" })
+      );
+      const raw = await this._simulateView(operation);
+      const cap = raw == null ? null : BigInt(raw as string | number | bigint);
+      telemetry.recordMethod("getCreatorVolumeCap", true, Date.now() - startTime);
+      return cap;
+    } catch {
+      telemetry.recordMethod("getCreatorVolumeCap", false, Date.now() - startTime);
+      return null;
+    }
+  }
+
+  /** Returns the lifetime volume used by a creator in token units. */
+  async getCreatorVolumeUsed(address: string): Promise<bigint> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "get_creator_volume_used",
+        nativeToScVal(address, { type: "address" })
+      );
+      const raw = await this._simulateView(operation);
+      const used = raw == null ? 0n : BigInt(raw as string | number | bigint);
+      telemetry.recordMethod("getCreatorVolumeUsed", true, Date.now() - startTime);
+      return used;
+    } catch {
+      telemetry.recordMethod("getCreatorVolumeUsed", false, Date.now() - startTime);
+      return 0n;
+    }
+  }
+
+  /** Returns remaining volume (cap - used) or Infinity if the creator is uncapped. */
+  async getRemainingCreatorVolume(address: string): Promise<bigint | typeof Infinity> {
+    const [cap, used] = await Promise.all([
+      this.getCreatorVolumeCap(address),
+      this.getCreatorVolumeUsed(address),
+    ]);
+    if (cap === null) return Infinity;
+    return cap > used ? cap - used : 0n;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #277 — Batch invoice creation helper
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Create up to 10 invoices in a single fee-bump transaction.
+   * Validates all items before submission; fails fast on the first invalid item.
+   * Returns invoice IDs in the same order as the input array.
+   */
+  async createInvoiceBatch(
+    items: CreateInvoiceParams[]
+  ): Promise<{ invoiceIds: string[]; txHash: string }> {
+    if (items.length === 0 || items.length > 10) {
+      throw new Error("Batch size must be between 1 and 10 items");
+    }
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]!;
+      if (!item.creator) throw new Error(`Item ${i}: creator is required`);
+      if (!item.token) throw new Error(`Item ${i}: token is required`);
+      if (!item.deadline || item.deadline <= 0) throw new Error(`Item ${i}: deadline must be a positive number`);
+      if (!Array.isArray(item.recipients) || item.recipients.length === 0) {
+        throw new Error(`Item ${i}: recipients must be a non-empty array`);
+      }
+      if (this.config.payloadGuard) {
+        validateInvoicePayload(item, this.config.payloadGuard);
+      }
+    }
+
+    const creator = items[0]!.creator;
+    const invoiceParamVals = items.map((p) =>
+      xdr.ScVal.scvMap([
+        new xdr.ScMapEntry({
+          key: nativeToScVal("creator", { type: "symbol" }) as xdr.ScVal,
+          val: nativeToScVal(p.creator, { type: "address" }) as xdr.ScVal,
+        }),
+        new xdr.ScMapEntry({
+          key: nativeToScVal("recipients", { type: "symbol" }) as xdr.ScVal,
+          val: xdr.ScVal.scvVec(p.recipients.map((r) => nativeToScVal(r.address, { type: "address" }))),
+        }),
+        new xdr.ScMapEntry({
+          key: nativeToScVal("amounts", { type: "symbol" }) as xdr.ScVal,
+          val: xdr.ScVal.scvVec(p.recipients.map((r) => nativeToScVal(r.amount, { type: "i128" }))),
+        }),
+        new xdr.ScMapEntry({
+          key: nativeToScVal("token", { type: "symbol" }) as xdr.ScVal,
+          val: nativeToScVal(p.token, { type: "address" }) as xdr.ScVal,
+        }),
+        new xdr.ScMapEntry({
+          key: nativeToScVal("deadline", { type: "symbol" }) as xdr.ScVal,
+          val: nativeToScVal(p.deadline, { type: "u64" }) as xdr.ScVal,
+        }),
+      ])
+    );
+
+    const operation = this.contract.call(
+      "create_invoice_batch",
+      xdr.ScVal.scvVec(invoiceParamVals)
+    );
+
+    const startTime = Date.now();
+    try {
+      const account = await this.server.getAccount(creator);
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.config.networkPassphrase,
+      })
+        .addOperation(operation)
+        .setTimeout(30)
+        .build();
+
+      const simResult = await this.server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(simResult)) {
+        throw new Error(`Simulation failed: ${simResult.error}`);
+      }
+
+      const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+      const bumpedFee = String(Math.ceil(Number(BASE_FEE) * (this.config.feeBumpMultiplier ?? 2) * items.length));
+      const feeBumpTx = TransactionBuilder.buildFeeBumpTransaction(
+        creator,
+        bumpedFee,
+        preparedTx as Parameters<typeof TransactionBuilder.buildFeeBumpTransaction>[2],
+        this.config.networkPassphrase
+      );
+
+      const signedXdr = await (this._adapter
+        ? this._adapter.signTransaction(feeBumpTx.toXDR(), this.config.networkPassphrase)
+        : signTransaction(feeBumpTx.toXDR(), this.config.networkPassphrase));
+
+      const sendResult = await this.server.sendTransaction(
+        TransactionBuilder.fromXDR(signedXdr, this.config.networkPassphrase)
+      );
+      if (sendResult.status === "ERROR") {
+        throw new Error(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
+      }
+
+      const txHash = sendResult.hash;
+      let getResult = await this.server.getTransaction(txHash);
+      let attempts = 0;
+      while (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND && attempts < 20) {
+        await new Promise((r) => setTimeout(r, 1500));
+        getResult = await this.server.getTransaction(txHash);
+        attempts++;
+      }
+      if (getResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+        throw new Error(`Transaction not confirmed: ${getResult.status}`);
+      }
+
+      const returnVal =
+        (getResult as SorobanRpc.Api.GetSuccessfulTransactionResponse).returnValue ??
+        xdr.ScVal.scvVoid();
+      const invoiceIds = (scValToNative(returnVal) as (string | number | bigint)[]).map((id) => id.toString());
+
+      telemetry.recordMethod("createInvoiceBatch", true, Date.now() - startTime);
+      return { invoiceIds, txHash };
+    } catch (error) {
+      telemetry.recordMethod("createInvoiceBatch", false, Date.now() - startTime);
+      throw error;
+    }
   }
 
 }

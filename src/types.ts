@@ -18,6 +18,16 @@ export interface ApprovalResult {
   reason?: string;
 }
 
+/** Result of an NFT gate status check for a creator address. */
+export interface NftGateResult {
+  /** Whether an NFT gate is configured for this creator. */
+  gated: boolean;
+  /** Whether the creator holds a qualifying NFT (only meaningful when gated is true). */
+  hasNft: boolean;
+  /** Address of the NFT contract used for gating, or null when not gated. */
+  contractAddress: string | null;
+}
+
 /** Parameters for an arbiter's vote on a dispute. */
 export interface ArbiterVote {
   invoiceId: string;
@@ -145,6 +155,96 @@ export interface Invoice {
   penalty_tiers?: { days_late: number; penalty_bps: number }[];
   /** List of caller addresses permitted to interact, or null if open. */
   allowed_callers?: string[] | null;
+  /** Configured split rules governing how released funds are distributed. */
+  split_rules?: SplitRule[];
+  /** Rules evaluated by auto_resolve() to decide Release/Refund automatically. */
+  auto_resolve_rules?: AutoResolveRule[];
+  /** ID of the single prerequisite invoice in this invoice's dependency chain. */
+  prerequisite_id?: string;
+}
+
+/**
+ * A rule describing how a single recipient's share is computed when an
+ * invoice is released. The active variant is selected by `kind`.
+ */
+export type SplitRule =
+  | {
+      /** Recipient receives a fixed amount in stroops (capped at remaining funds). */
+      kind: "Fixed";
+      recipient: string;
+      amount: bigint;
+    }
+  | {
+      /** Recipient receives `bps` basis points of the funded amount. */
+      kind: "Percentage";
+      recipient: string;
+      bps: number;
+    }
+  | {
+      /**
+       * Recipient receives a marginal-band share: for each tier, `bps` is
+       * applied to the portion of funds falling between the previous tier's
+       * `upTo` and this tier's `upTo`.
+       */
+      kind: "Tiered";
+      recipient: string;
+      tiers: { upTo: bigint; bps: number }[];
+    };
+
+/** A single recipient's previewed payout under the configured split rules. */
+export interface SplitPreviewEntry {
+  recipient: string;
+  amount: bigint;
+}
+
+/**
+ * An auto-resolve rule evaluated against the invoice's current funded amount.
+ * The first rule (in order) whose condition holds determines the action.
+ */
+export interface AutoResolveRule {
+  /** Action that fires when this rule matches. */
+  action: "Release" | "Refund";
+  /** Funded-amount threshold in stroops the rule is compared against. */
+  threshold: bigint;
+  /**
+   * Comparison applied between `funded` and `threshold`. Defaults to "gte"
+   * (funded >= threshold). "lt" matches when funded < threshold.
+   */
+  comparator?: "gte" | "lt";
+}
+
+/** Result of simulating auto_resolve() against an invoice's current state. */
+export interface AutoResolveSimulation {
+  /** Whether auto_resolve() would take an action right now. */
+  wouldResolve: boolean;
+  /** The action that would fire, or null if no rule matched. */
+  action: "Release" | "Refund" | null;
+  /** The first rule that matched, or null if none did. */
+  matchedRule: AutoResolveRule | null;
+}
+
+/** Rich analytics computed from an invoice's on-chain payment history. */
+export interface InvoiceStats {
+  /** Number of distinct payer addresses. */
+  totalPayers: number;
+  /** Mean payment size in stroops (0 when there are no payments). */
+  avgPayment: bigint;
+  /** Tokens funded per day since the first payment. */
+  fundingVelocity: number;
+  /** Seconds from first to last payment once completed, else null. */
+  timeToCompletion: number | null;
+  /** Funded share of total owed, in basis points (capped at 10000). */
+  completionBps: number;
+}
+
+/** One entry in a resolved prerequisite dependency chain. */
+export interface PrerequisiteChainEntry {
+  /** Invoice ID of this prerequisite. */
+  id: string;
+  /** Current lifecycle status of the prerequisite. */
+  status: InvoiceStatus;
+  /** True while the prerequisite is not yet Released (still blocking). */
+  isBlocking: boolean;
 }
 
 export interface InvoiceLifecycleHooks {
@@ -544,3 +644,76 @@ export interface VelocityWindowStatus {
  * window state, or `{ limited: false }` when the invoice has no velocity limit.
  */
 export type VelocityStatus = VelocityWindowStatus | { limited: false };
+/** Result of claiming a pending payout. */
+export interface ClaimPayoutResult {
+  /** Transaction hash of the claim submission. */
+  txHash: string;
+  /** Invoice ID the payout was claimed from. */
+  invoiceId: string;
+  /** Recipient address that received the payout. */
+  recipient: string;
+}
+
+/** Parameters for payWithAttestation. */
+export interface PayWithAttestationParams {
+  /** Stellar address of the payer (must sign). */
+  payer: string;
+  /** Invoice ID to pay toward. */
+  invoiceId: string;
+  /** Amount to pay in stroops. */
+  amount: bigint;
+  /** 32-byte hash of the off-chain attestation document. */
+  attestationHash: Uint8Array;
+  /** 64-byte Ed25519 signature over the attestation hash. */
+  signature: Uint8Array;
+  /** Stellar public key of the attestation signer. */
+  signerPubkey: string;
+}
+
+/** Payment receipt returned after a successful payWithAttestation. */
+export interface AttestationPaymentReceipt {
+  /** Transaction hash. */
+  txHash: string;
+  /** Invoice ID paid. */
+  invoiceId: string;
+  /** Amount paid in stroops. */
+  amount: bigint;
+  /** Hex-encoded attestation hash included in the receipt. */
+  attestationHash: string;
+}
+
+/** Creator volume cap information. */
+export interface CreatorVolumeCap {
+  /** Volume cap in token units, or null if uncapped. */
+  cap: bigint | null;
+  /** Lifetime volume used in token units. */
+  used: bigint;
+  /** Remaining volume (cap - used), or Infinity if uncapped. */
+  remaining: bigint | typeof Infinity;
+/** Cooldown status for a payer on a given invoice. */
+export interface PaymentCooldown {
+  /** Whether the payer is currently in their cooldown period. */
+  inCooldown: boolean;
+  /** Unix timestamp (seconds) when the cooldown ends, or null if no cooldown is active. */
+  cooldownEndsAt: number | null;
+}
+
+/** A structured cross-chain reference attached to an invoice. */
+export interface CrossChainRef {
+  /** Source chain identifier (e.g. "ethereum", "solana"). */
+  chain: string;
+  /** Transaction hash on the source chain. */
+  transactionHash: string;
+  /** Optional block number on the source chain. */
+  blockNumber?: string;
+}
+
+/** Parameters for setting a cross-chain reference on an invoice. */
+export interface SetCrossChainRefParams {
+  /** Invoice ID to attach the reference to. */
+  invoiceId: string;
+  /** Stellar address of the invoice creator (must sign). */
+  creator: string;
+  /** Cross-chain reference data. */
+  ref: CrossChainRef;
+}

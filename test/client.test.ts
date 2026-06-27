@@ -1122,3 +1122,259 @@ describe("trackVelocity", () => {
     expect(report.invoices[0]!.trend).toBe("steady");
   });
 });
+
+describe("getPaymentHistory", () => {
+  it("fetches all 8 shards in parallel and merges results sorted chronologically", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    const payer1 = Keypair.random().publicKey();
+    const payer2 = Keypair.random().publicKey();
+    const payer3 = Keypair.random().publicKey();
+    const payer4 = Keypair.random().publicKey();
+
+    const shard0 = [
+      { payer: payer1, amount: "10000000", ledger: 100, timestamp: 1000 },
+      { payer: payer2, amount: "5000000", ledger: 101, timestamp: 1001 },
+    ];
+    const shard1 = [
+      { payer: payer3, amount: "2000000", ledger: 150, timestamp: 1500 },
+    ];
+    const shard7 = [
+      { payer: payer4, amount: "8000000", ledger: 200, timestamp: 2000 },
+    ];
+    const emptyShard: unknown[] = [];
+
+    const allCalls = [
+      Promise.resolve(shard0),
+      Promise.resolve(shard1),
+      ...Array.from({ length: 5 }, () => Promise.resolve(emptyShard)),
+      Promise.resolve(shard7),
+    ];
+
+    let callIndex = 0;
+    vi.spyOn(client as any, "_simulateView").mockImplementation(() => {
+      return allCalls[callIndex++] ?? Promise.resolve(emptyShard);
+    });
+
+    const payments = await client.getPaymentHistory("42");
+
+    expect(payments).toHaveLength(4);
+    expect(payments[0]!.payer).toBe(payer1);
+    expect(payments[1]!.payer).toBe(payer2);
+    expect(payments[2]!.payer).toBe(payer3);
+    expect(payments[3]!.payer).toBe(payer4);
+  });
+
+  it("handles missing shards gracefully", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    vi.spyOn(client as any, "_simulateView").mockResolvedValue([]);
+
+    const payments = await client.getPaymentHistory("42");
+    expect(payments).toEqual([]);
+  });
+});
+
+describe("adminFreeze / adminUnfreeze", () => {
+  const admin = Keypair.random().publicKey();
+
+  it("adminFreeze submits transaction and returns txHash", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    vi.spyOn(client as any, "_submitTx").mockResolvedValue({
+      txHash: "freeze-tx-hash",
+      returnValue: {} as any,
+    });
+
+    const result = await client.adminFreeze("42", admin);
+    expect(result.txHash).toBe("freeze-tx-hash");
+  });
+
+  it("adminUnfreeze submits transaction and returns txHash", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    vi.spyOn(client as any, "_submitTx").mockResolvedValue({
+      txHash: "unfreeze-tx-hash",
+      returnValue: {} as any,
+    });
+
+    const result = await client.adminUnfreeze("42", admin);
+    expect(result.txHash).toBe("unfreeze-tx-hash");
+  });
+
+  it("passes admin address as source to _submitTx", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    const submitSpy = vi.spyOn(client as any, "_submitTx").mockResolvedValue({
+      txHash: "tx",
+      returnValue: {} as any,
+    });
+
+    await client.adminFreeze("42", admin);
+    expect(submitSpy).toHaveBeenCalledWith(admin, expect.anything());
+  });
+});
+
+describe("getCrossChainRef / setCrossChainRef", () => {
+  const creator = Keypair.random().publicKey();
+
+  it("getCrossChainRef returns null when no ref is set", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    vi.spyOn(client as any, "_simulateView").mockResolvedValue(null);
+
+    const result = await client.getCrossChainRef("42");
+    expect(result).toBeNull();
+  });
+
+  it("getCrossChainRef parses cross-chain ref correctly", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    vi.spyOn(client as any, "_simulateView").mockResolvedValue({
+      chain: "ethereum",
+      tx_hash: "0xabc123",
+      block_number: "12345678",
+    });
+
+    const result = await client.getCrossChainRef("42");
+
+    expect(result).not.toBeNull();
+    expect(result!.chain).toBe("ethereum");
+    expect(result!.transactionHash).toBe("0xabc123");
+    expect(result!.blockNumber).toBe("12345678");
+  });
+
+  it("setCrossChainRef submits transaction and returns txHash", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    vi.spyOn(client as any, "_submitTx").mockResolvedValue({
+      txHash: "cross-chain-tx",
+      returnValue: {} as any,
+    });
+
+    const result = await client.setCrossChainRef({
+      invoiceId: "42",
+      creator,
+      ref: {
+        chain: "solana",
+        transactionHash: "0xsol123",
+        blockNumber: "987654",
+      },
+    });
+
+    expect(result.txHash).toBe("cross-chain-tx");
+  });
+
+  it("setCrossChainRef passes creator as source to _submitTx", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    const submitSpy = vi.spyOn(client as any, "_submitTx").mockResolvedValue({
+      txHash: "tx",
+      returnValue: {} as any,
+    });
+
+    await client.setCrossChainRef({
+      invoiceId: "42",
+      creator,
+      ref: {
+        chain: "ethereum",
+        transactionHash: "0xeth123",
+      },
+    });
+
+    expect(submitSpy).toHaveBeenCalledWith(creator, expect.anything());
+  });
+});
+
+describe("getPaymentCooldown", () => {
+  const payerAddr = Keypair.random().publicKey();
+
+  it("returns cooldown status when payer is in cooldown", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    const now = Math.floor(Date.now() / 1000);
+    const mockCooldown = { in_cooldown: true, cooldown_ends_at: now + 3600 };
+    vi.spyOn(client as any, "_simulateView").mockResolvedValue(mockCooldown);
+
+    const result = await client.getPaymentCooldown("42", payerAddr);
+
+    expect(result.inCooldown).toBe(true);
+    expect(result.cooldownEndsAt).toBe(now + 3600);
+  });
+
+  it("returns cooldown false when no cooldown is active", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    vi.spyOn(client as any, "_simulateView").mockResolvedValue({
+      in_cooldown: false,
+      cooldown_ends_at: null,
+    });
+
+    const result = await client.getPaymentCooldown("42", payerAddr);
+
+    expect(result.inCooldown).toBe(false);
+    expect(result.cooldownEndsAt).toBeNull();
+  });
+
+  it("handles camelCase keys from scValToNative", async () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    vi.spyOn(client as any, "_simulateView").mockResolvedValue({
+      inCooldown: true,
+      cooldownEndsAt: 1_800_000_000,
+    });
+
+    const result = await client.getPaymentCooldown("42", payerAddr);
+
+    expect(result.inCooldown).toBe(true);
+    expect(result.cooldownEndsAt).toBe(1_800_000_000);
+  });
+});

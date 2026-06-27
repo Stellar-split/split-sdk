@@ -38,6 +38,21 @@ export class StellarSplitTxBuilder {
     return this;
   }
 
+  addRolloverInvoice(
+    invoiceId: string,
+    newDeadline: number,
+    caller: string
+  ): this {
+    const op = this.contract.call(
+      "rollover_invoice",
+      nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+      nativeToScVal(BigInt(newDeadline), { type: "u64" }),
+      nativeToScVal(caller, { type: "address" })
+    );
+    this.operations.push(op);
+    return this;
+  }
+
   addRelease(invoiceId: string): this {
     const op = this.contract.call(
       "release_invoice",
