@@ -100,6 +100,36 @@ export class ForwardChainTooDeepError extends StellarSplitError {
   }
 }
 
+/** Thrown when a prerequisite chain exceeds the maximum traversal depth. */
+export class ChainTooDeepError extends StellarSplitError {
+  readonly maxDepth: number;
+
+  constructor(maxDepth: number, raw?: string) {
+    super(
+      `Prerequisite chain exceeded maximum depth of ${maxDepth}`,
+      raw ?? `Prerequisite chain exceeded maximum depth of ${maxDepth}`
+    );
+    this.name = "ChainTooDeepError";
+    this.maxDepth = maxDepth;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a prerequisite chain contains a cycle. */
+export class CircularPrerequisiteError extends StellarSplitError {
+  readonly invoiceId: string;
+
+  constructor(invoiceId: string, raw?: string) {
+    super(
+      `Circular prerequisite chain detected at invoice: ${invoiceId}`,
+      raw ?? `Circular prerequisite chain detected at invoice: ${invoiceId}`
+    );
+    this.name = "CircularPrerequisiteError";
+    this.invoiceId = invoiceId;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Error message patterns from the Soroban contract
 // ---------------------------------------------------------------------------

@@ -172,6 +172,8 @@ export {
   PaymentExceedsRemainingError,
   InvoiceFrozenError,
   CoCreatorApprovalNotRequiredError,
+  ChainTooDeepError,
+  CircularPrerequisiteError,
   parseSorobanError,
 } from "./errors.js";
 
@@ -394,3 +396,23 @@ export type {
   ForecastConfig,
   HistoricalInvoiceSample,
 } from "./forecast.js";
+
+export { getInvoiceStats, computeInvoiceStats } from "./invoiceStats.js";
+
+export { previewSplitRules } from "./splitPreview.js";
+
+export { simulateAutoResolve } from "./autoResolveSimulator.js";
+
+export {
+  resolvePrerequisiteChain,
+  MAX_PREREQUISITE_CHAIN_DEPTH,
+} from "./prerequisiteChain.js";
+
+export type {
+  SplitRule,
+  SplitPreviewEntry,
+  AutoResolveRule,
+  AutoResolveSimulation,
+  InvoiceStats,
+  PrerequisiteChainEntry,
+} from "./types.js";
