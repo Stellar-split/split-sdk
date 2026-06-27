@@ -13,6 +13,8 @@ export type {
   TxResult,
   StellarSplitPlugin,
 } from "./client.js";
+export { getScheduledReleaseCountdown } from "./client.js";
+export { verifyCompletionProof } from "./client.js";
 export { MultiTenantClient } from "./multiTenant.js";
 export { ProfilerSession } from "./profiler.js";
 export type { ProfileReport } from "./profiler.js";
@@ -231,6 +233,7 @@ export type {
   AuctionInfo,
   TimelockAction,
   QueueActionParams,
+  CompletionProof,
 } from "./types.js";
 export { InvalidTransitionError } from "./types.js";
 

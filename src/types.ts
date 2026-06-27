@@ -625,6 +625,73 @@ export interface RolloverResult {
   txHash: string;
 }
 
+/** Countdown until a scheduled release fires. */
+export interface ScheduledReleaseCountdown {
+  /** Total seconds remaining (0 when overdue). */
+  total_seconds: number;
+  days: number;
+  hours: number;
+  minutes: number;
+  seconds: number;
+  overdue: boolean;
+}
+
+/** Dispute status returned from the contract. */
+export interface DisputeStatus {
+  invoiceId: string;
+  disputed: boolean;
+  arbiter: string;
+  resolved: boolean;
+  resolution: "approved" | "rejected" | null;
+}
+
+/** A single auction bid. */
+export interface AuctionBid {
+  bidder: string;
+  amount: bigint;
+  timestamp: number;
+}
+
+/** Auction state for an invoice. */
+export interface AuctionInfo {
+  invoiceId: string;
+  active: boolean;
+  highestBid: AuctionBid | null;
+  endTime: number;
+}
+
+/** Parameters for queuing a timelock action. */
+export interface QueueActionParams {
+  caller: string;
+  actionType: string;
+  target: string;
+  value: bigint;
+  eta: number;
+}
+
+/** A queued timelock action. */
+export interface TimelockAction {
+  actionId: string;
+  actionType: string;
+  target: string;
+  value: bigint;
+  eta: number;
+  executed: boolean;
+  cancelled: boolean;
+}
+
+/** Cryptographic completion proof returned by get_completion_proof. */
+export interface CompletionProof {
+  /** Invoice ID. */
+  invoiceId: string;
+  /** Address that released the invoice. */
+  releasedBy: string;
+  /** Unix timestamp of the release. */
+  releasedAt: number;
+  /** Total amount released in stroops. */
+  totalAmount: bigint;
+  /** On-chain cert hash to verify against. */
+  cert_hash: string;
 /** Current velocity-window state for a payer on a velocity-limited invoice. */
 export interface VelocityWindowStatus {
   /** Unix timestamp (seconds) when the current window opened. */

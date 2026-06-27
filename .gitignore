@@ -4,8 +4,10 @@ coverage/
 .vitest/
 .nyc_output/
 test-results/
-__snapshots__/
+**/__snapshots__/
 *.snap
+*.snapshot
+*.snapshot.json
 testsnapshot/
 testSnapshot/
 test-snapshot/
@@ -15,11 +17,6 @@ test-snapshots/
 *.tsbuildinfo
 .DS_Store
 Thumbs.db
-coverage/
-test-results/
-**/__snapshots__/
-*.snap
-*.snapshot
-*.snapshot.json
+*.log
 task1.md
 somzilla.md

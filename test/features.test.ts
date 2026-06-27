@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { StellarSplitClient } from "../src/client.js";
 import { StrKey, Keypair, nativeToScVal } from "@stellar/stellar-sdk";
 
@@ -16,22 +17,22 @@ describe("getScheduledReleaseCountdown", () => {
     const result = client.getScheduledReleaseCountdown(
       Math.floor(Date.now() / 1000) - 3600
     );
-    expect(result.overdue).toBe(true);
-    expect(result.days).toBe(0);
-    expect(result.hours).toBe(0);
-    expect(result.minutes).toBe(0);
-    expect(result.seconds).toBe(0);
+    expect(result!.overdue).toBe(true);
+    expect(result!.days).toBe(0);
+    expect(result!.hours).toBe(0);
+    expect(result!.minutes).toBe(0);
+    expect(result!.seconds).toBe(0);
   });
 
   it("computes correct countdown for a future timestamp", () => {
     const client = createClient();
     const future = Math.floor(Date.now() / 1000) + 90061;
     const result = client.getScheduledReleaseCountdown(future);
-    expect(result.days).toBe(1);
-    expect(result.hours).toBe(1);
-    expect(result.minutes).toBe(1);
-    expect(result.seconds).toBe(1);
-    expect(result.overdue).toBe(false);
+    expect(result!.days).toBe(1);
+    expect(result!.hours).toBe(1);
+    expect(result!.minutes).toBe(1);
+    expect(result!.seconds).toBe(1);
+    expect(result!.overdue).toBe(false);
   });
 
   it("uses scheduledReleaseDate from invoice when available", () => {
@@ -48,14 +49,14 @@ describe("getScheduledReleaseCountdown", () => {
       payments: [],
       scheduledReleaseDate: future,
     });
-    expect(result.days).toBe(1);
-    expect(result.hours).toBe(0);
-    expect(result.minutes).toBe(0);
-    expect(result.seconds).toBe(0);
-    expect(result.overdue).toBe(false);
+    expect(result!.days).toBe(1);
+    expect(result!.hours).toBe(0);
+    expect(result!.minutes).toBe(0);
+    expect(result!.seconds).toBe(0);
+    expect(result!.overdue).toBe(false);
   });
 
-  it("falls back to deadline when no scheduledReleaseDate", () => {
+  it("returns null when invoice has no scheduled_release_at", () => {
     const client = createClient();
     const future = Math.floor(Date.now() / 1000) + 172800;
     const result = client.getScheduledReleaseCountdown({
@@ -68,8 +69,7 @@ describe("getScheduledReleaseCountdown", () => {
       status: "Pending",
       payments: [],
     });
-    expect(result.days).toBe(2);
-    expect(result.overdue).toBe(false);
+    expect(result).toBeNull();
   });
 });
 

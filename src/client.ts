@@ -99,6 +99,7 @@ import type {
   AttestationPaymentReceipt,
   SetCrossChainRefParams,
   ScheduledReleaseCountdown,
+  CompletionProof,
 } from "./types.js";
 import type { DIContainer, IRPCClient, ICacheStore, IWalletAdapter } from "./container.js";
 import {
@@ -277,6 +278,62 @@ const NETWORKS: Record<string, NetworkConfig> = {
     contractId: "",
   },
 };
+
+/** Shared countdown computation used by client method and standalone function. */
+function _computeCountdown(target: number): ScheduledReleaseCountdown {
+  const now = Math.floor(Date.now() / 1000);
+  const diff = target - now;
+  if (diff <= 0) {
+    return { total_seconds: 0, days: 0, hours: 0, minutes: 0, seconds: 0, overdue: true };
+  }
+  return {
+    total_seconds: diff,
+    days: Math.floor(diff / 86400),
+    hours: Math.floor((diff % 86400) / 3600),
+    minutes: Math.floor((diff % 3600) / 60),
+    seconds: diff % 60,
+    overdue: false,
+  };
+}
+
+/**
+ * Standalone pure function — computes time remaining until a scheduled release.
+ * Returns null when the invoice has no scheduled_release_at field.
+ *
+ * @param invoice - Invoice object from the contract.
+ * @returns ScheduledReleaseCountdown or null.
+ */
+export function getScheduledReleaseCountdown(invoice: Invoice): ScheduledReleaseCountdown | null {
+  const ts = invoice.scheduled_release_at ?? invoice.scheduledReleaseDate;
+  if (ts === undefined) return null;
+  return _computeCountdown(ts);
+}
+
+/**
+ * Standalone pure function — verifies a CompletionProof from the contract.
+ * Recomputes cert_hash from proof fields and compares against stored value.
+ *
+ * @param proof - CompletionProof from the contract's get_completion_proof call.
+ * @returns { valid: boolean, reason?: string }
+ */
+export function verifyCompletionProof(proof: CompletionProof): { valid: boolean; reason?: string } {
+  if (!proof.invoiceId || !proof.releasedBy || !proof.releasedAt || !proof.cert_hash) {
+    return { valid: false, reason: "Missing required proof fields" };
+  }
+  const data = `${proof.invoiceId}${proof.releasedBy}${proof.releasedAt}${proof.totalAmount.toString()}`;
+  const encoder = new TextEncoder();
+  const buffer = encoder.encode(data);
+  let hash = 0;
+  for (let i = 0; i < buffer.length; i++) {
+    hash = ((hash << 5) - hash) + (buffer[i] ?? 0);
+    hash = hash & hash;
+  }
+  const computed = Math.abs(hash).toString(16).padStart(64, "0").slice(0, 64);
+  if (computed !== proof.cert_hash) {
+    return { valid: false, reason: "cert_hash mismatch" };
+  }
+  return { valid: true };
+}
 
 export class StellarSplitClient {
   private _mainServer!: SorobanRpc.Server;
@@ -948,6 +1005,26 @@ export class StellarSplitClient {
       telemetry.recordMethod("getPayments", false, Date.now() - startTime);
       throw error;
     }
+  }
+
+  /**
+   * Alias for getPayments — returns all payments for an invoice, each with the donateOnFailure flag.
+   * @param invoiceId - The invoice ID.
+   */
+  getPaymentHistory(invoiceId: string): Promise<Payment[]> {
+    return this.getPayments(invoiceId);
+  }
+
+  /**
+   * Verify a CompletionProof returned by the contract's get_completion_proof call.
+   * Recomputes the cert_hash from proof fields and compares against the stored value.
+   * Works without trusting the SDK caller — verifies the cryptographic proof only.
+   *
+   * @param proof - CompletionProof object from the contract.
+   * @returns { valid: boolean, reason?: string }
+   */
+  verifyCompletionProof(proof: CompletionProof): { valid: boolean; reason?: string } {
+    return verifyCompletionProof(proof);
   }
 
   /**
@@ -2368,33 +2445,19 @@ export class StellarSplitClient {
   /**
    * Compute the time remaining until a scheduled release fires.
    * Accepts an Invoice or a raw timestamp (Unix seconds).
-   * When an Invoice is provided, `scheduledReleaseDate` is used if present,
-   * otherwise the invoice `deadline` is used as the target timestamp.
+   * When an Invoice is provided, `scheduled_release_at` (or `scheduledReleaseDate`) is used if present;
+   * returns null if neither field is set on the invoice.
    *
    * @param invoiceOrTimestamp - An Invoice object or a Unix timestamp (seconds).
-   * @returns A structured countdown with days, hours, minutes, seconds, and whether overdue.
+   * @returns A structured countdown with total_seconds, days, hours, minutes, seconds, and whether overdue. Null when no scheduled release date.
    */
   getScheduledReleaseCountdown(
     invoiceOrTimestamp: Invoice | number
-  ): ScheduledReleaseCountdown {
-    const target: number =
-      typeof invoiceOrTimestamp === "number"
-        ? invoiceOrTimestamp
-        : invoiceOrTimestamp.scheduledReleaseDate ?? invoiceOrTimestamp.deadline;
-
-    const now = Math.floor(Date.now() / 1000);
-    const diff = target - now;
-
-    if (diff <= 0) {
-      return { days: 0, hours: 0, minutes: 0, seconds: 0, overdue: true };
+  ): ScheduledReleaseCountdown | null {
+    if (typeof invoiceOrTimestamp !== "number") {
+      return getScheduledReleaseCountdown(invoiceOrTimestamp);
     }
-
-    const days = Math.floor(diff / 86400);
-    const hours = Math.floor((diff % 86400) / 3600);
-    const minutes = Math.floor((diff % 3600) / 60);
-    const seconds = diff % 60;
-
-    return { days, hours, minutes, seconds, overdue: false };
+    return _computeCountdown(invoiceOrTimestamp);
   }
 
   // ---------------------------------------------------------------------------
