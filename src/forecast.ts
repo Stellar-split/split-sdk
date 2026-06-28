@@ -49,9 +49,10 @@ export function computePaymentForecast(
   const tolerance = config?.amountRangeTolerance ?? 0.5;
   const minSamples = config?.minHistoricalSamples ?? 3;
 
+  const invTotal = invoice.recipients.reduce((sum, r) => sum + r.amount, 0n);
   const currentPrediction = computePrediction(
     invoice.payments,
-    invoice.recipients.reduce((sum, r) => sum + r.amount, 0n),
+    invTotal,
     invoice.funded
   );
 
@@ -61,7 +62,6 @@ export function computePaymentForecast(
 
   const similarAmount = sameCreator.filter((h) => {
     const hTotal = h.recipients.reduce((sum, r) => sum + r.amount, 0n);
-    const invTotal = invoice.recipients.reduce((sum, r) => sum + r.amount, 0n);
     return isSimilarAmount(invTotal, hTotal, tolerance);
   });
 
@@ -80,19 +80,11 @@ export function computePaymentForecast(
 
   if (historicalSamples.length >= minSamples) {
     const allPayments = historicalSamples.flatMap((s) => s.payments);
-    const maxTotal = historicalSamples.reduce(
-      (max, s) => (s.total > max ? s.total : max),
-      0n
-    );
-    const totalFunded = historicalSamples.reduce(
-      (sum, s) => sum + s.funded,
-      0n
-    );
 
     historicalPrediction = computePrediction(
       allPayments,
-      maxTotal,
-      totalFunded
+      invTotal,
+      invoice.funded
     );
   }
 

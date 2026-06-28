@@ -56,7 +56,7 @@ const PASSPHRASE = "Test SDF Network ; September 2015";
 const BASE_CONFIG = {
   rpcUrl: "https://soroban-testnet.stellar.org",
   networkPassphrase: PASSPHRASE,
-  contractId: "CCTEST00000000000000000000000000000000000000000000000000000",
+  contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
   horizonUrl: HORIZON_URL,
 };
 
@@ -324,7 +324,7 @@ describe("StellarSplitClient.refundInvoice", () => {
   const clientConfig = {
     rpcUrl: "https://soroban-testnet.stellar.org",
     networkPassphrase: PASSPHRASE,
-    contractId: "CCTEST00000000000000000000000000000000000000000000000000000",
+    contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
     horizonUrl: HORIZON_URL,
   };
 

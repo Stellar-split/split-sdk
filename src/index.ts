@@ -13,6 +13,17 @@ export type {
   TxResult,
   StellarSplitPlugin,
 } from "./client.js";
+
+export { PluginRegistry, LoggingPlugin } from "./plugin.js";
+export type { SdkPlugin, SdkMethodName, PluginArgs, PluginResult } from "./plugin.js";
+
+export {
+  serializeInvoiceTemplate,
+  deserializeInvoiceTemplate,
+  ValidationError,
+} from "./invoiceTemplate.js";
+export { getScheduledReleaseCountdown } from "./client.js";
+export { verifyCompletionProof } from "./client.js";
 export { MultiTenantClient } from "./multiTenant.js";
 export { ProfilerSession } from "./profiler.js";
 export type { ProfileReport } from "./profiler.js";
@@ -177,6 +188,7 @@ export {
   ForwardChainTooDeepError,
   UnauthorizedError,
   parseSorobanError,
+  NftGateRequiredError,
 } from "./errors.js";
 
 export { SimpleCache } from "./cache.js";
@@ -215,6 +227,7 @@ export type {
   OverflowBehavior,
   InvoiceExt,
   PaymentOptions,
+  NftGateResult,
   ClaimPayoutResult,
   PayWithAttestationParams,
   AttestationPaymentReceipt,
@@ -229,6 +242,7 @@ export type {
   AuctionInfo,
   TimelockAction,
   QueueActionParams,
+  CompletionProof,
 } from "./types.js";
 export { InvalidTransitionError } from "./types.js";
 
@@ -278,6 +292,19 @@ export async function generatePaymentProof(
   return m.generatePaymentProof(txHash, config);
 }
 
+// Payment receipt generator
+export {
+  compilePaymentReceipt,
+  generatePaymentReceipt,
+  serializePaymentReceipt,
+  deserializePaymentReceipt,
+} from "./receipt.js";
+export type {
+  PaymentReceipt,
+  PaymentReceiptJSON,
+  InvoiceFetcher,
+} from "./receipt.js";
+
 // Merkle proof functionality
 export { generateMerkleProof, verifyMerkleProof } from "./merkle.js";
 export type { MerkleProof } from "./merkle.js";
@@ -316,6 +343,18 @@ export type {
 // Payment velocity tracking
 export { trackVelocity } from "./velocityTracker.js";
 export type { VelocityReport, InvoiceVelocity, PaymentTrend } from "./velocityTracker.js";
+export type { VelocityStatus, VelocityWindowStatus } from "./types.js";
+
+// Tranche release progress tracking
+export { getTrancheProgress } from "./trancheProgress.js";
+export type {
+  TrancheProgress,
+  TrancheProgressReport,
+  TrancheProgressOptions,
+  TrancheConfig,
+  TranchedInvoice,
+  TrancheStatus,
+} from "./trancheProgress.js";
 export { Sep41Adapter, createSep41Adapter } from "./sep41Adapter.js";
 export type { Sep41TokenCapabilities } from "./sep41Adapter.js";
 
@@ -356,7 +395,7 @@ export {
 } from "./configValidator.js";
 export type {
   ConfigValidation,
-  ConfigValidationError as ConfigValidationErrorType,
+  ConfigValidationErrorType,
 } from "./configValidator.js";
 
 export { FundingVelocityAlert } from "./velocityAlert.js";
@@ -429,6 +468,15 @@ export type {
   HistoricalInvoiceSample,
 } from "./forecast.js";
 
+export {
+  reconcileChannel,
+  registerChannelStateFetcher,
+} from "./channelReconciler.js";
+export type {
+  ChannelState,
+  ChannelReconciliationResult,
+  ChannelStateFetcher,
+} from "./channelReconciler.js";
 export { getInvoiceStats, computeInvoiceStats } from "./invoiceStats.js";
 
 export { previewSplitRules } from "./splitPreview.js";

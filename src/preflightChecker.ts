@@ -36,7 +36,7 @@ export async function checkPayerReadiness(
   }
 
   const isNative = token === "native";
-  const balances = account.balances as Array<{
+  const balances = ((account as unknown as Record<string, unknown>).balances ?? []) as Array<{
     balance: string;
     asset_type: string;
     asset_code?: string;

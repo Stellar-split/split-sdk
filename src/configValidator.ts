@@ -2,7 +2,7 @@ import type { StellarSplitClientConfig } from "./client.js";
 import { isValidAddress } from "./utils.js";
 import { StrKey } from "@stellar/stellar-sdk";
 
-export interface ConfigValidationError {
+export interface ConfigValidationErrorType {
   field: string;
   message: string;
   severity: "error" | "warning";
@@ -10,7 +10,7 @@ export interface ConfigValidationError {
 
 export interface ConfigValidation {
   valid: boolean;
-  errors: ConfigValidationError[];
+  errors: ConfigValidationErrorType[];
 }
 
 const KNOWN_NETWORKS = [
@@ -23,7 +23,7 @@ const KNOWN_NETWORKS = [
 export function validateClientConfig(
   config: StellarSplitClientConfig
 ): ConfigValidation {
-  const errors: ConfigValidationError[] = [];
+  const errors: ConfigValidationErrorType[] = [];
 
   if (!config.rpcUrl) {
     errors.push({
@@ -259,9 +259,9 @@ export function validateOrThrow(config: StellarSplitClientConfig): void {
 }
 
 export class ConfigValidationError extends Error {
-  readonly validationErrors: ConfigValidationError[];
+  readonly validationErrors: ConfigValidationErrorType[];
 
-  constructor(message: string, validationErrors: ConfigValidationError[]) {
+  constructor(message: string, validationErrors: ConfigValidationErrorType[]) {
     super(message);
     this.name = "ConfigValidationError";
     this.validationErrors = validationErrors;

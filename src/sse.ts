@@ -15,6 +15,9 @@ export interface SSEInvoiceEvent {
   data: Record<string, unknown>;
 }
 
+/** Alias for {@link SSEInvoiceEvent} — the typed event delivered to SSE handlers. */
+export type InvoiceEvent = SSEInvoiceEvent;
+
 /** Handler function called for each incoming event. */
 export type InvoiceEventHandler = (event: SSEInvoiceEvent) => void;
 

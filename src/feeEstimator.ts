@@ -51,7 +51,7 @@ export async function estimateOperationCost(
 
     const simResult = await server.simulateTransaction(tx);
 
-    if (SorobanRpc.Api.isSimulationError(simResult)) {
+    if ("error" in simResult && (simResult as any).error) {
       return {
         error: "Simulation failed",
         baseFee: BASE_FEE.toString(),

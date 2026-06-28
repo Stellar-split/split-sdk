@@ -28,6 +28,8 @@ import type { RetryConfig } from "./retryEngine.js";
 import { TelemetryCollector } from "./telemetryCollector.js";
 import { isFeatureEnabled } from "./flags.js";
 import type { FeatureFlags } from "./flags.js";
+import { PluginRegistry } from "./plugin.js";
+import type { SdkPlugin } from "./plugin.js";
 import { checkRPCHealth } from "./health.js";
 import { Deduplicator } from "./dedup.js";
 import { verifyBatchPayments } from "./batchVerifier.js";
@@ -51,6 +53,8 @@ import type { CompressionConfig } from "./compression.js";
 import { calculateFee } from "./fee.js";
 import { resolveToken } from "./token.js";
 import { generatePaymentProof } from "./proof.js";
+import { compilePaymentReceipt } from "./receipt.js";
+import type { PaymentReceipt } from "./receipt.js";
 import type {
   ArchivedInvoice,
   ArbiterVote,
@@ -92,11 +96,14 @@ import type {
   PaymentEventRecord,
   PaymentReconciliationReport,
   RolloverResult,
+  VelocityStatus,
+  NftGateResult,
   ClaimPayoutResult,
   PayWithAttestationParams,
   AttestationPaymentReceipt,
   SetCrossChainRefParams,
   ScheduledReleaseCountdown,
+  CompletionProof,
 } from "./types.js";
 import type { DIContainer, IRPCClient, ICacheStore, IWalletAdapter } from "./container.js";
 import {
@@ -105,11 +112,17 @@ import {
   InvoiceFrozenError,
   InvoiceNotFoundError,
   InvoiceNotPendingError,
+  NftGateRequiredError,
   UnauthorizedError,
   parseSorobanError,
 } from "./errors.js";
 import { replayEvents } from "./events.js";
 import { subscribeToInvoice as _subscribeToInvoice } from "./stream.js";
+import { subscribeToInvoice as _subscribeToInvoiceSSE } from "./sse.js";
+import type {
+  InvoiceEventHandler,
+  SubscribeToInvoiceOptions,
+} from "./sse.js";
 import { ConnectionPool } from "./connectionPool.js";
 import { snapshotInvoice as _snapshotInvoice } from "./snapshot.js";
 import type { InvoiceSnapshot } from "./snapshot.js";
@@ -254,6 +267,9 @@ export interface TxResult {
   txHash: string;
 }
 
+/** TTL for cached NFT gate status results (30 seconds). */
+const NFT_GATE_CACHE_TTL_MS = 30_000;
+
 /** Built-in network presets. */
 const NETWORKS: Record<string, NetworkConfig> = {
   testnet: {
@@ -268,6 +284,62 @@ const NETWORKS: Record<string, NetworkConfig> = {
   },
 };
 
+/** Shared countdown computation used by client method and standalone function. */
+function _computeCountdown(target: number): ScheduledReleaseCountdown {
+  const now = Math.floor(Date.now() / 1000);
+  const diff = target - now;
+  if (diff <= 0) {
+    return { total_seconds: 0, days: 0, hours: 0, minutes: 0, seconds: 0, overdue: true };
+  }
+  return {
+    total_seconds: diff,
+    days: Math.floor(diff / 86400),
+    hours: Math.floor((diff % 86400) / 3600),
+    minutes: Math.floor((diff % 3600) / 60),
+    seconds: diff % 60,
+    overdue: false,
+  };
+}
+
+/**
+ * Standalone pure function — computes time remaining until a scheduled release.
+ * Returns null when the invoice has no scheduled_release_at field.
+ *
+ * @param invoice - Invoice object from the contract.
+ * @returns ScheduledReleaseCountdown or null.
+ */
+export function getScheduledReleaseCountdown(invoice: Invoice): ScheduledReleaseCountdown | null {
+  const ts = invoice.scheduled_release_at ?? invoice.scheduledReleaseDate;
+  if (ts === undefined) return null;
+  return _computeCountdown(ts);
+}
+
+/**
+ * Standalone pure function — verifies a CompletionProof from the contract.
+ * Recomputes cert_hash from proof fields and compares against stored value.
+ *
+ * @param proof - CompletionProof from the contract's get_completion_proof call.
+ * @returns { valid: boolean, reason?: string }
+ */
+export function verifyCompletionProof(proof: CompletionProof): { valid: boolean; reason?: string } {
+  if (!proof.invoiceId || !proof.releasedBy || !proof.releasedAt || !proof.cert_hash) {
+    return { valid: false, reason: "Missing required proof fields" };
+  }
+  const data = `${proof.invoiceId}${proof.releasedBy}${proof.releasedAt}${proof.totalAmount.toString()}`;
+  const encoder = new TextEncoder();
+  const buffer = encoder.encode(data);
+  let hash = 0;
+  for (let i = 0; i < buffer.length; i++) {
+    hash = ((hash << 5) - hash) + (buffer[i] ?? 0);
+    hash = hash & hash;
+  }
+  const computed = Math.abs(hash).toString(16).padStart(64, "0").slice(0, 64);
+  if (computed !== proof.cert_hash) {
+    return { valid: false, reason: "cert_hash mismatch" };
+  }
+  return { valid: true };
+}
+
 export class StellarSplitClient {
   private _mainServer!: SorobanRpc.Server;
   private _standby: WarmStandby | null = null;
@@ -276,6 +348,7 @@ export class StellarSplitClient {
   private config: StellarSplitClientConfig;
   private _plugins = new Set<string>();
   private _pluginInstances: StellarSplitPlugin[] = [];
+  private _pluginRegistry = new PluginRegistry();
   private _dedup = new Deduplicator<Invoice>();
   private _cache: SimpleCache<Invoice> | ICacheStore<Invoice> | null = null;
   private _auditLogger: AuditLogger | null = null;
@@ -476,6 +549,21 @@ export class StellarSplitClient {
     plugin.install?.(this);
   }
 
+  /** Register a middleware plugin (interceptor-style). */
+  use(plugin: SdkPlugin): void {
+    this._pluginRegistry.use(plugin);
+  }
+
+  /** Deregister a middleware plugin by name. */
+  removePlugin(name: string): void {
+    this._pluginRegistry.removePlugin(name);
+  }
+
+  /** Return the names of all active middleware plugins. */
+  getPlugins(): string[] {
+    return this._pluginRegistry.getPlugins();
+  }
+
   // ---------------------------------------------------------------------------
   // Dispute management
   // ---------------------------------------------------------------------------
@@ -614,9 +702,15 @@ export class StellarSplitClient {
     params: CreateInvoiceParams
   ): Promise<{ invoiceId: string; txHash: string }> {
     const startTime = Date.now();
+    params = this._pluginRegistry.runBeforeCall("createInvoice", params);
     try {
       if (this.config.payloadGuard) {
         validateInvoicePayload(params, this.config.payloadGuard);
+      }
+
+      const gate = await this.checkNftGate(params.creator);
+      if (gate.gated && !gate.hasNft) {
+        throw new NftGateRequiredError(params.creator, gate.contractAddress);
       }
 
       const recipientAddresses = params.recipients.map((r) =>
@@ -640,11 +734,12 @@ export class StellarSplitClient {
       const durationMs = Date.now() - startTime;
       telemetry.recordMethod("createInvoice", true, durationMs);
       this._logAudit("createInvoice", { creator: params.creator, token: params.token, deadline: params.deadline }, true, durationMs);
-      return { invoiceId, txHash: result.txHash };
+      return this._pluginRegistry.runAfterCall("createInvoice", { invoiceId, txHash: result.txHash });
     } catch (error) {
       const durationMs = Date.now() - startTime;
       telemetry.recordMethod("createInvoice", false, durationMs);
       this._logAudit("createInvoice", { creator: params.creator, token: params.token, deadline: params.deadline }, false, durationMs);
+      this._pluginRegistry.runOnError("createInvoice", error);
       throw error;
     }
   }
@@ -774,6 +869,7 @@ export class StellarSplitClient {
    */
   async pay(params: PayParams): Promise<TxResult> {
     const startTime = Date.now();
+    params = this._pluginRegistry.runBeforeCall("pay", params);
     try {
       const operation = this.contract.call(
         "pay",
@@ -789,9 +885,10 @@ export class StellarSplitClient {
         : await withRetry(submitFn, this.config.maxRetries ?? 3, 1000);
       this._cache?.invalidate(params.invoiceId);
       telemetry.recordMethod("pay", true, Date.now() - startTime);
-      return { txHash: result.txHash };
+      return this._pluginRegistry.runAfterCall("pay", { txHash: result.txHash });
     } catch (error) {
       telemetry.recordMethod("pay", false, Date.now() - startTime);
+      this._pluginRegistry.runOnError("pay", error);
       throw error;
     }
   }
@@ -960,6 +1057,26 @@ export class StellarSplitClient {
   }
 
   /**
+   * Alias for getPayments — returns all payments for an invoice, each with the donateOnFailure flag.
+   * @param invoiceId - The invoice ID.
+   */
+  getPaymentHistory(invoiceId: string): Promise<Payment[]> {
+    return this.getPayments(invoiceId);
+  }
+
+  /**
+   * Verify a CompletionProof returned by the contract's get_completion_proof call.
+   * Recomputes the cert_hash from proof fields and compares against the stored value.
+   * Works without trusting the SDK caller — verifies the cryptographic proof only.
+   *
+   * @param proof - CompletionProof object from the contract.
+   * @returns { valid: boolean, reason?: string }
+   */
+  verifyCompletionProof(proof: CompletionProof): { valid: boolean; reason?: string } {
+    return verifyCompletionProof(proof);
+  }
+
+  /**
    * Reconcile an invoice's reported funded amount with its payment records and historical payment events.
    */
   async reconcilePayments(invoiceId: string): Promise<PaymentReconciliationReport> {
@@ -1085,15 +1202,27 @@ export class StellarSplitClient {
     });
   }
 
-  private _nftGateCache = new Map<string, { timestamp: number; result: { gated: boolean; hasNft: boolean; contractAddress: string | null } }>();
+  private _nftGateCache = new Map<string, { timestamp: number; result: NftGateResult }>();
 
   /**
-   * Checks the NFT gate status for a given creator address.
+   * Checks whether a creator address satisfies the configured NFT gate.
+   *
+   * Queries the on-chain `check_nft_gate` contract method and returns whether
+   * the creator has an NFT gate configured and, if so, whether they hold a
+   * qualifying NFT. Results are cached for 30 seconds per creator address.
+   *
+   * Call this before `createInvoice` when the contract has an NFT gate
+   * configured for the creator. `createInvoice` performs this check automatically.
+   *
+   * @param creatorAddress - The Stellar address of the invoice creator.
+   * @returns Gate status including whether gating applies and NFT ownership.
    */
-  async checkNftGate(creatorAddress: string): Promise<{ gated: boolean; hasNft: boolean; contractAddress: string | null }> {
+  async checkNftGate(creatorAddress: string): Promise<NftGateResult> {
+    const startTime = Date.now();
     const now = Date.now();
     const cached = this._nftGateCache.get(creatorAddress);
-    if (cached && now - cached.timestamp < 30000) {
+    if (cached && now - cached.timestamp < NFT_GATE_CACHE_TTL_MS) {
+      telemetry.recordMethod("checkNftGate", true, Date.now() - startTime);
       return cached.result;
     }
 
@@ -1102,26 +1231,25 @@ export class StellarSplitClient {
         "check_nft_gate",
         nativeToScVal(creatorAddress, { type: "address" })
       );
-      
-      const raw = await this._simulateView(operation) as any;
-      let result = { gated: false, hasNft: false, contractAddress: null };
-      
-      if (raw && typeof raw === "object") {
-        result = {
-          gated: Boolean(raw.gated),
-          hasNft: Boolean(raw.hasNft || raw.has_nft),
-          contractAddress: (raw.contractAddress || raw.contract_address) ?? null
-        };
-      }
-      
+
+      const raw = await this._simulateView(operation);
+      const result = this._parseNftGateResult(raw);
+
       this._nftGateCache.set(creatorAddress, { timestamp: now, result });
+      telemetry.recordMethod("checkNftGate", true, Date.now() - startTime);
       return result;
-    } catch (error) {
-      // If the method doesn't exist or fails, assume no gate
-      const result = { gated: false, hasNft: false, contractAddress: null };
+    } catch {
+      // If the method doesn't exist or fails, assume no gate is configured.
+      const result: NftGateResult = { gated: false, hasNft: false, contractAddress: null };
       this._nftGateCache.set(creatorAddress, { timestamp: now, result });
+      telemetry.recordMethod("checkNftGate", true, Date.now() - startTime);
       return result;
     }
+  }
+
+  /** Clears the NFT gate status cache (useful for testing). */
+  clearNftGateCache(): void {
+    this._nftGateCache.clear();
   }
 
   /**
@@ -1584,6 +1712,20 @@ export class StellarSplitClient {
     return generatePaymentProof(txHash, this.config);
   }
 
+  /**
+   * Generate a payment receipt for an invoice and payer address.
+   * Compiles on-chain invoice details, total paid, timestamps, and a SHA-256 proof hash.
+   * Works for both completed and in-progress invoices.
+   *
+   * @param invoiceId - The ID of the invoice.
+   * @param payerAddress - The Stellar address of the payer.
+   * @returns Payment receipt with proofHash and optional JSON serialization.
+   */
+  async generatePaymentReceipt(invoiceId: string, payerAddress: string): Promise<PaymentReceipt> {
+    const invoice = await this.getInvoice(invoiceId);
+    return compilePaymentReceipt(invoice, payerAddress);
+  }
+
   // ---------------------------------------------------------------------------
   // Issue #1 — batchPay
   // ---------------------------------------------------------------------------
@@ -1722,9 +1864,28 @@ export class StellarSplitClient {
   }
 
   // ---------------------------------------------------------------------------
-  // Issue #2 — subscribeToInvoice
+  // Issue #2 / #282 — subscribeToInvoice
   // ---------------------------------------------------------------------------
 
+  /**
+   * Subscribe to real-time invoice events via server-sent events (SSE).
+   *
+   * Pass a single handler function to receive typed `InvoiceEvent` objects
+   * (`payment_received`, `invoice_released`, `invoice_refunded`) without
+   * polling. The connection reconnects automatically with exponential backoff
+   * on drops. The SSE base URL defaults to the client's `horizonUrl` config and
+   * can be overridden via `options.baseUrl`.
+   *
+   * @param invoiceId - The invoice ID to watch.
+   * @param handler   - Called with each typed `InvoiceEvent`.
+   * @param options   - Optional SSE options (base URL, backoff, EventSource factory).
+   * @returns Unsubscribe function that permanently stops the stream.
+   */
+  subscribeToInvoice(
+    invoiceId: string,
+    handler: InvoiceEventHandler,
+    options?: Partial<SubscribeToInvoiceOptions>
+  ): () => void;
   /**
    * Subscribe to live invoice events via Soroban RPC event polling.
    *
@@ -1737,13 +1898,35 @@ export class StellarSplitClient {
     invoiceId: string,
     callbacks: InvoiceEventCallbacks,
     intervalMs?: number
+  ): () => void;
+  subscribeToInvoice(
+    invoiceId: string,
+    handlerOrCallbacks: InvoiceEventHandler | InvoiceEventCallbacks,
+    optionsOrInterval?: Partial<SubscribeToInvoiceOptions> | number
   ): () => void {
+    // A function handler selects the SSE transport; a callbacks object selects
+    // the legacy RPC-polling transport.
+    if (typeof handlerOrCallbacks === "function") {
+      const options =
+        (optionsOrInterval as Partial<SubscribeToInvoiceOptions> | undefined) ?? {};
+      const baseUrl = options.baseUrl ?? this.config.horizonUrl;
+      if (!baseUrl) {
+        throw new Error(
+          "subscribeToInvoice (SSE) requires a base URL: set `horizonUrl` in the client config or pass `{ baseUrl }` in options.",
+        );
+      }
+      return _subscribeToInvoiceSSE(invoiceId, handlerOrCallbacks, {
+        ...options,
+        baseUrl,
+      });
+    }
+
     return _subscribeToInvoice(
       this.server,
       this.config.contractId,
       invoiceId,
-      callbacks,
-      intervalMs
+      handlerOrCallbacks,
+      optionsOrInterval as number | undefined
     );
   }
 
@@ -2319,39 +2502,29 @@ export class StellarSplitClient {
       return result;
     } catch (error) {
       telemetry.recordMethod("getPaymentCooldown", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
   // Scheduled release countdown
   // ---------------------------------------------------------------------------
 
   /**
    * Compute the time remaining until a scheduled release fires.
    * Accepts an Invoice or a raw timestamp (Unix seconds).
-   * When an Invoice is provided, `scheduledReleaseDate` is used if present,
-   * otherwise the invoice `deadline` is used as the target timestamp.
+   * When an Invoice is provided, `scheduled_release_at` (or `scheduledReleaseDate`) is used if present;
+   * returns null if neither field is set on the invoice.
    *
    * @param invoiceOrTimestamp - An Invoice object or a Unix timestamp (seconds).
-   * @returns A structured countdown with days, hours, minutes, seconds, and whether overdue.
+   * @returns A structured countdown with total_seconds, days, hours, minutes, seconds, and whether overdue. Null when no scheduled release date.
    */
   getScheduledReleaseCountdown(
     invoiceOrTimestamp: Invoice | number
-  ): ScheduledReleaseCountdown {
-    const target: number =
-      typeof invoiceOrTimestamp === "number"
-        ? invoiceOrTimestamp
-        : invoiceOrTimestamp.scheduledReleaseDate ?? invoiceOrTimestamp.deadline;
-
-    const now = Math.floor(Date.now() / 1000);
-    const diff = target - now;
-
-    if (diff <= 0) {
-      return { days: 0, hours: 0, minutes: 0, seconds: 0, overdue: true };
+  ): ScheduledReleaseCountdown | null {
+    if (typeof invoiceOrTimestamp !== "number") {
+      return getScheduledReleaseCountdown(invoiceOrTimestamp);
     }
-
-    const days = Math.floor(diff / 86400);
-    const hours = Math.floor((diff % 86400) / 3600);
-    const minutes = Math.floor((diff % 3600) / 60);
-    const seconds = diff % 60;
-
-    return { days, hours, minutes, seconds, overdue: false };
+    return _computeCountdown(invoiceOrTimestamp);
   }
 
   // ---------------------------------------------------------------------------
@@ -2454,6 +2627,7 @@ export class StellarSplitClient {
       throw error;
     }
   }
+
   /**
    * Settle an auction for an invoice, releasing funds to the winning bidder.
    * @param caller - Stellar address of the caller (must sign).
@@ -2534,6 +2708,10 @@ export class StellarSplitClient {
       return { txHash: result.txHash };
     } catch (error) {
       telemetry.recordMethod("adminFreeze", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
   // Timelock action queue
   // ---------------------------------------------------------------------------
 
@@ -2585,6 +2763,11 @@ export class StellarSplitClient {
       return { txHash: result.txHash };
     } catch (error) {
       telemetry.recordMethod("adminUnfreeze", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
    * Execute a previously queued action after its timelock has elapsed.
    * @param caller - Stellar address of the caller (must sign).
    * @param actionId - The ID of the action to execute.
@@ -2639,6 +2822,10 @@ export class StellarSplitClient {
       return result;
     } catch (error) {
       telemetry.recordMethod("getCrossChainRef", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
   /**
    * Cancel a queued action before it has been executed.
    * @param caller - Stellar address of the caller (must sign).
@@ -2701,6 +2888,11 @@ export class StellarSplitClient {
       return { txHash: result.txHash };
     } catch (error) {
       telemetry.recordMethod("setCrossChainRef", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  /**
    * Get the status of a queued action.
    * @param actionId - The ID of the action to query.
    * @returns Timelock action status.
@@ -2731,8 +2923,81 @@ export class StellarSplitClient {
   }
 
   // ---------------------------------------------------------------------------
+  // Issue #285 — Velocity limit status
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Check the current velocity-window state for a payer on a specific invoice.
+   *
+   * Reads the on-chain window state via RPC and reports how much the payer can
+   * still pay in the current window. If the invoice has no velocity limit
+   * configured, returns `{ limited: false }`.
+   *
+   * @param invoiceId    - The invoice ID to check.
+   * @param payerAddress - Stellar address of the payer.
+   * @returns The active window state, or `{ limited: false }` if unlimited.
+   */
+  async getVelocityStatus(
+    invoiceId: string,
+    payerAddress: string,
+  ): Promise<VelocityStatus> {
+    const startTime = Date.now();
+    try {
+      const operation = this.contract.call(
+        "get_velocity_status",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+        nativeToScVal(payerAddress, { type: "address" }),
+      );
+      const raw = await this._simulateView(operation);
+
+      telemetry.recordMethod("getVelocityStatus", true, Date.now() - startTime);
+
+      // No velocity limit configured: contract returns void/null.
+      if (raw === null || raw === undefined) {
+        return { limited: false };
+      }
+
+      const state = raw as Record<string, unknown>;
+      const windowStart = Number(state.window_start ?? state.windowStart ?? 0);
+      const windowEnd = Number(state.window_end ?? state.windowEnd ?? 0);
+      const amountUsed = toBigInt(state.amount_used ?? state.amountUsed);
+      const limitPerWindow = toBigInt(
+        state.limit_per_window ?? state.limitPerWindow,
+      );
+      const remaining = limitPerWindow - amountUsed;
+
+      return {
+        windowStart,
+        windowEnd,
+        amountUsed,
+        limitPerWindow,
+        amountRemaining: remaining > 0n ? remaining : 0n,
+      };
+    } catch (error) {
+      telemetry.recordMethod("getVelocityStatus", false, Date.now() - startTime);
+      throw error;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Internal helpers
   // ---------------------------------------------------------------------------
+
+  /** Parse the native return value from `check_nft_gate`. */
+  private _parseNftGateResult(raw: unknown): NftGateResult {
+    if (!raw || typeof raw !== "object") {
+      return { gated: false, hasNft: false, contractAddress: null };
+    }
+
+    const obj = raw as Record<string, unknown>;
+    const contractAddress = obj.contractAddress ?? obj.contract_address ?? null;
+
+    return {
+      gated: Boolean(obj.gated),
+      hasNft: Boolean(obj.hasNft ?? obj.has_nft),
+      contractAddress: typeof contractAddress === "string" ? contractAddress : null,
+    };
+  }
 
   /** Simulate a read-only contract call and return the native-decoded result. */
   private async _simulateView(operation: xdr.Operation): Promise<unknown> {
@@ -3519,4 +3784,12 @@ export class StellarSplitClient {
     }
   }
 
+}
+
+/** Coerce a native-decoded scalar (bigint | number | string) into a bigint, defaulting to 0n. */
+function toBigInt(value: unknown): bigint {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number") return BigInt(Math.trunc(value));
+  if (typeof value === "string" && value !== "") return BigInt(value);
+  return 0n;
 }

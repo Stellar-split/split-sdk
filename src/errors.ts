@@ -91,6 +91,24 @@ export class CoCreatorApprovalNotRequiredError extends StellarSplitError {
   }
 }
 
+/** Thrown when createInvoice is attempted without the required qualifying NFT. */
+export class NftGateRequiredError extends StellarSplitError {
+  readonly creatorAddress: string;
+  readonly nftContractAddress: string | null;
+
+  constructor(creatorAddress: string, nftContractAddress: string | null, raw?: string) {
+    const contract = nftContractAddress ?? "unknown";
+    super(
+      `Creator ${creatorAddress} must hold a qualifying NFT from ${contract} to create invoices`,
+      raw ?? `NFT gate required for creator: ${creatorAddress}`,
+    );
+    this.name = "NftGateRequiredError";
+    this.creatorAddress = creatorAddress;
+    this.nftContractAddress = nftContractAddress;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Thrown when resolving a forward chain exceeds the maximum depth limit. */
 export class ForwardChainTooDeepError extends StellarSplitError {
   constructor(message: string, raw?: string) {
@@ -126,6 +144,10 @@ export class CircularPrerequisiteError extends StellarSplitError {
     );
     this.name = "CircularPrerequisiteError";
     this.invoiceId = invoiceId;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Thrown when an operation is attempted without proper authorization. */
 export class UnauthorizedError extends StellarSplitError {
   constructor(message: string = "Unauthorized", raw?: string) {

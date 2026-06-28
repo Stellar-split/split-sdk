@@ -18,6 +18,16 @@ export interface ApprovalResult {
   reason?: string;
 }
 
+/** Result of an NFT gate status check for a creator address. */
+export interface NftGateResult {
+  /** Whether an NFT gate is configured for this creator. */
+  gated: boolean;
+  /** Whether the creator holds a qualifying NFT (only meaningful when gated is true). */
+  hasNft: boolean;
+  /** Address of the NFT contract used for gating, or null when not gated. */
+  contractAddress: string | null;
+}
+
 /** Parameters for an arbiter's vote on a dispute. */
 export interface ArbiterVote {
   invoiceId: string;
@@ -123,6 +133,8 @@ export interface Invoice {
   recurring?: boolean;
   /** Optional memo / description attached to the invoice. */
   memo?: string;
+  /** Optional scheduled release date timestamp. */
+  scheduledReleaseDate?: number;
   /** ID of the source invoice this was cloned from. */
   clonedFrom?: string;
   /** ID of the group this invoice belongs to. */
@@ -273,6 +285,8 @@ export interface CreateInvoiceParams {
   token: string;
   /** Unix timestamp deadline (seconds). */
   deadline: number;
+  /** Optional memo / description. */
+  memo?: string;
 }
 
 /** Generic hardware/software wallet adapter interface. */
@@ -615,6 +629,92 @@ export interface RolloverResult {
   txHash: string;
 }
 
+/** Countdown until a scheduled release fires. */
+export interface ScheduledReleaseCountdown {
+  /** Total seconds remaining (0 when overdue). */
+  total_seconds: number;
+  days: number;
+  hours: number;
+  minutes: number;
+  seconds: number;
+  overdue: boolean;
+}
+
+/** Dispute status returned from the contract. */
+export interface DisputeStatus {
+  invoiceId: string;
+  disputed: boolean;
+  arbiter: string;
+  resolved: boolean;
+  resolution: "approved" | "rejected" | null;
+}
+
+/** A single auction bid. */
+export interface AuctionBid {
+  bidder: string;
+  amount: bigint;
+  timestamp: number;
+}
+
+/** Auction state for an invoice. */
+export interface AuctionInfo {
+  invoiceId: string;
+  active: boolean;
+  highestBid: AuctionBid | null;
+  endTime: number;
+}
+
+/** Parameters for queuing a timelock action. */
+export interface QueueActionParams {
+  caller: string;
+  actionType: string;
+  target: string;
+  value: bigint;
+  eta: number;
+}
+
+/** A queued timelock action. */
+export interface TimelockAction {
+  actionId: string;
+  actionType: string;
+  target: string;
+  value: bigint;
+  eta: number;
+  executed: boolean;
+  cancelled: boolean;
+}
+
+/** Cryptographic completion proof returned by get_completion_proof. */
+export interface CompletionProof {
+  /** Invoice ID. */
+  invoiceId: string;
+  /** Address that released the invoice. */
+  releasedBy: string;
+  /** Unix timestamp of the release. */
+  releasedAt: number;
+  /** Total amount released in stroops. */
+  totalAmount: bigint;
+  /** On-chain cert hash to verify against. */
+  cert_hash: string;
+/** Current velocity-window state for a payer on a velocity-limited invoice. */
+export interface VelocityWindowStatus {
+  /** Unix timestamp (seconds) when the current window opened. */
+  windowStart: number;
+  /** Unix timestamp (seconds) when the current window closes. */
+  windowEnd: number;
+  /** Amount already paid by the payer in the current window, in stroops. */
+  amountUsed: bigint;
+  /** Amount the payer may still pay in the current window, in stroops. */
+  amountRemaining: bigint;
+  /** Maximum amount payable per window, in stroops. */
+  limitPerWindow: bigint;
+}
+
+/**
+ * Result of {@link StellarSplitClient.getVelocityStatus}. Either the active
+ * window state, or `{ limited: false }` when the invoice has no velocity limit.
+ */
+export type VelocityStatus = VelocityWindowStatus | { limited: false };
 /** Result of claiming a pending payout. */
 export interface ClaimPayoutResult {
   /** Transaction hash of the claim submission. */
@@ -661,6 +761,8 @@ export interface CreatorVolumeCap {
   used: bigint;
   /** Remaining volume (cap - used), or Infinity if uncapped. */
   remaining: bigint | typeof Infinity;
+}
+
 /** Cooldown status for a payer on a given invoice. */
 export interface PaymentCooldown {
   /** Whether the payer is currently in their cooldown period. */
@@ -687,4 +789,51 @@ export interface SetCrossChainRefParams {
   creator: string;
   /** Cross-chain reference data. */
   ref: CrossChainRef;
+}
+
+export interface ScheduledReleaseCountdown {
+  days: number;
+  hours: number;
+  minutes: number;
+  seconds: number;
+  overdue: boolean;
+}
+
+export interface DisputeStatus {
+  invoiceId: string;
+  disputed: boolean;
+  arbiter: string;
+  resolved: boolean;
+  resolution: "approved" | "rejected" | null;
+}
+
+export interface AuctionBid {
+  bidder: string;
+  amount: bigint;
+  timestamp: number;
+}
+
+export interface AuctionInfo {
+  invoiceId: string;
+  active: boolean;
+  highestBid: AuctionBid | null;
+  endTime: number;
+}
+
+export interface QueueActionParams {
+  caller: string;
+  actionType: string;
+  target: string;
+  value: bigint;
+  eta: number;
+}
+
+export interface TimelockAction {
+  actionId: string;
+  actionType: string;
+  target: string;
+  value: bigint;
+  eta: number;
+  executed: boolean;
+  cancelled: boolean;
 }
