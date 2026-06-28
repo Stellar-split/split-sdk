@@ -23,8 +23,8 @@ import type { ExportFormat } from "./export.js";
 import { computePaymentValidation } from "./paymentValidator.js";
 import type { PaymentValidation } from "./paymentValidator.js";
 import { withRetry } from "./retry.js";
-import { RetryEngine } from "./retryEngine.js";
-import type { RetryConfig } from "./retryEngine.js";
+import { executeWithRetry } from "./retryPolicy.js";
+import type { RetryOptions, PerMethodRetryOptions } from "./retryPolicy.js";
 import { TelemetryCollector } from "./telemetryCollector.js";
 import { isFeatureEnabled } from "./flags.js";
 import type { FeatureFlags } from "./flags.js";
@@ -229,8 +229,8 @@ export interface StellarSplitClientConfig {
   compression?: CompressionConfig;
   /** Optional invoice lifecycle hooks. */
   hooks?: InvoiceLifecycleHooks;
-  /** Optional adaptive retry configuration. When provided, replaces legacy maxRetries for pay/cloneInvoice. */
-  retry?: RetryConfig;
+  /** Optional retry configuration. Enables automatic retry with exponential backoff and jitter. */
+  retry?: RetryOptions;
   /**
    * Optional Horizon API base URL (e.g. "https://horizon.stellar.org").
    * When provided, read-only account lookups fall back to Horizon automatically
@@ -391,7 +391,7 @@ export class StellarSplitClient {
   private _rpcClient: IRPCClient | null = null;
   private _adapter: WalletAdapter | null = null;
   private _hooks: InvoiceLifecycleHooks = {};
-  private _retryEngine: RetryEngine | null = null;
+  private _retryOptions: RetryOptions | null = null;
   private _horizonReader: HorizonFallbackReader | null = null;
   private _idempotency: IdempotencyManager | null = null;
   private _pool: ConnectionPool | null = null;
@@ -539,7 +539,7 @@ export class StellarSplitClient {
     this._hooks = config.hooks ?? {};
 
     if (config.retry) {
-      this._retryEngine = new RetryEngine(config.retry, new TelemetryCollector());
+      this._retryOptions = config.retry;
     }
 
     if (config.horizonUrl) {
@@ -907,8 +907,8 @@ export class StellarSplitClient {
 
     try {
       const submitFn = () => this._submitTx(sourceInvoice.creator, operation);
-      const result = this._retryEngine
-        ? await this._retryEngine.execute(submitFn, "cloneInvoice")
+      const result = this._retryOptions
+        ? await executeWithRetry(submitFn, this._retryOptions)
         : await withRetry(submitFn, this.config.maxRetries ?? 3, 1000);
 
       const id = scValToNative(result.returnValue).toString() as string;
@@ -968,8 +968,8 @@ export class StellarSplitClient {
       );
 
       const submitFn = () => this._submitTx(params.payer, operation);
-      const result = this._retryEngine
-        ? await this._retryEngine.execute(submitFn, "pay")
+      const result = this._retryOptions
+        ? await executeWithRetry(submitFn, this._retryOptions)
         : await withRetry(submitFn, this.config.maxRetries ?? 3, 1000);
       this._cache?.invalidate(params.invoiceId);
       telemetry.recordMethod("pay", true, Date.now() - startTime);
@@ -1072,11 +1072,23 @@ export class StellarSplitClient {
   /**
    * Fetch an invoice by ID. Returns cached result if within TTL.
    */
-  async getInvoice(invoiceId: string): Promise<Invoice> {
+  async getInvoice(
+    invoiceId: string,
+    opts?: { retry?: PerMethodRetryOptions }
+  ): Promise<Invoice> {
     return this._withCache("getInvoice", [invoiceId], async () => {
       const fetcher = this._batcher
         ? () => this._batcher!.getInvoice(invoiceId)
         : () => this._fetchInvoice(invoiceId);
+
+      const effectiveRetry = opts?.retry ?? (this._retryOptions ? {} : undefined);
+      if (this._retryOptions && effectiveRetry !== undefined) {
+        return await executeWithRetry(
+          () => this._dedup.dedupe(invoiceId, fetcher),
+          this._retryOptions,
+          opts?.retry
+        );
+      }
       return await this._dedup.dedupe(invoiceId, fetcher);
     });
   }

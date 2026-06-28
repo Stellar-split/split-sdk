@@ -14,6 +14,9 @@ export type {
   StellarSplitPlugin,
 } from "./client.js";
 
+export type { RetryOptions, PerMethodRetryOptions } from "./retryPolicy.js";
+export { isRetryable, executeWithRetry } from "./retryPolicy.js";
+
 export { PluginRegistry, LoggingPlugin } from "./plugin.js";
 export type { SdkPlugin, SdkMethodName, PluginArgs, PluginResult } from "./plugin.js";
 

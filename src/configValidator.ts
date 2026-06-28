@@ -154,24 +154,26 @@ export function validateClientConfig(
   }
 
   if (config.retry) {
-    if (
-      config.retry.maxRetries !== undefined &&
-      typeof config.retry.maxRetries !== "number"
-    ) {
+    if (typeof config.retry.maxAttempts !== "number" || config.retry.maxAttempts < 1) {
       errors.push({
-        field: "retry.maxRetries",
-        message: "retry.maxRetries must be a number",
+        field: "retry.maxAttempts",
+        message: "retry.maxAttempts must be a positive number",
         severity: "error",
       });
     }
 
-    if (
-      config.retry.baseDelayMs !== undefined &&
-      typeof config.retry.baseDelayMs !== "number"
-    ) {
+    if (typeof config.retry.baseDelayMs !== "number" || config.retry.baseDelayMs < 0) {
       errors.push({
         field: "retry.baseDelayMs",
-        message: "retry.baseDelayMs must be a number",
+        message: "retry.baseDelayMs must be a non-negative number",
+        severity: "error",
+      });
+    }
+
+    if (typeof config.retry.maxDelayMs !== "number" || config.retry.maxDelayMs < 0) {
+      errors.push({
+        field: "retry.maxDelayMs",
+        message: "retry.maxDelayMs must be a non-negative number",
         severity: "error",
       });
     }
