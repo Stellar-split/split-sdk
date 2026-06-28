@@ -20,8 +20,124 @@ export type { SdkPlugin, SdkMethodName, PluginArgs, PluginResult } from "./plugi
 export {
   serializeInvoiceTemplate,
   deserializeInvoiceTemplate,
-  ValidationError,
 } from "./invoiceTemplate.js";
+export {
+  StellarSplitError,
+  InvoiceNotFoundError,
+  InvoiceNotPendingError,
+  DeadlinePassedError,
+  InsufficientBalanceError,
+  PaymentExceedsRemainingError,
+  InvoiceFrozenError,
+  CoCreatorApprovalNotRequiredError,
+  ChainTooDeepError,
+  CircularPrerequisiteError,
+  CircularForwardChainError,
+  ForwardChainTooDeepError,
+  UnauthorizedError,
+  parseSorobanError,
+  NftGateRequiredError,
+  WalletNotConnectedError,
+  RpcError,
+  ContractError,
+  CircuitOpenError,
+  ValidationError,
+  PluginAlreadyRegisteredError,
+  InvalidBatchSizeError,
+  InvoiceNotReleasedError,
+  TransactionFailedError,
+  TransactionNotConfirmedError,
+  SimulationFailedError,
+  NoReturnValueError,
+  UnknownNetworkError,
+  InsufficientSignaturesError,
+  CloneChainTooDeepError,
+  NoPendingPayoutError,
+  InvalidAttestationError,
+  InvoiceFlowFetcherNotRegisteredError,
+  InvoiceFetcherNotRegisteredError,
+  UnknownEndpointError,
+  RpcUnavailableError,
+  DiscoveryFetchError,
+  PayerAddressRequiredError,
+  SignerFailedError,
+  NoSignerProvidedError,
+  ConnectionPoolConfigError,
+  ConnectionPoolDisposedError,
+  SearchFailedError,
+  TransactionNotSuccessfulError,
+  QueueFailedError,
+  UnknownExportFormatError,
+  DexQuoteFailedError,
+  TtlExtensionFailedError,
+  TestHarnessNotInitializedError,
+  UnknownTestWalletError,
+  RelationshipTrackerNotInitializedError,
+  FriendbotFailedError,
+  DisputeEvidenceError,
+  OraclePriceError,
+  Sep41AdapterError,
+  TrancheProgressError,
+  RefundGraceError,
+  ChannelReconciliationError,
+  isStellarSplitError,
+  isInvoiceNotFoundError,
+  isInvoiceNotPendingError,
+  isDeadlinePassedError,
+  isInsufficientBalanceError,
+  isPaymentExceedsRemainingError,
+  isInvoiceFrozenError,
+  isCoCreatorApprovalNotRequiredError,
+  isChainTooDeepError,
+  isCircularPrerequisiteError,
+  isForwardChainTooDeepError,
+  isUnauthorizedError,
+  isWalletNotConnectedError,
+  isRpcError,
+  isContractError,
+  isCircuitOpenError,
+  isCircularForwardChainError,
+  isValidationError,
+  isNftGateRequiredError,
+  isPluginAlreadyRegisteredError,
+  isInvalidBatchSizeError,
+  isInvoiceNotReleasedError,
+  isTransactionFailedError,
+  isTransactionNotConfirmedError,
+  isSimulationFailedError,
+  isNoReturnValueError,
+  isUnknownNetworkError,
+  isInsufficientSignaturesError,
+  isCloneChainTooDeepError,
+  isNoPendingPayoutError,
+  isInvalidAttestationError,
+  isInvoiceFlowFetcherNotRegisteredError,
+  isInvoiceFetcherNotRegisteredError,
+  isUnknownEndpointError,
+  isRpcUnavailableError,
+  isDiscoveryFetchError,
+  isPayerAddressRequiredError,
+  isSignerFailedError,
+  isNoSignerProvidedError,
+  isConnectionPoolConfigError,
+  isConnectionPoolDisposedError,
+  isSearchFailedError,
+  isTransactionNotSuccessfulError,
+  isQueueFailedError,
+  isUnknownExportFormatError,
+  isDexQuoteFailedError,
+  isTtlExtensionFailedError,
+  isTestHarnessNotInitializedError,
+  isUnknownTestWalletError,
+  isRelationshipTrackerNotInitializedError,
+  isFriendbotFailedError,
+  isDisputeEvidenceError,
+  isOraclePriceError,
+  isSep41AdapterError,
+  isTrancheProgressError,
+  isRefundGraceError,
+  isChannelReconciliationError,
+} from "./errors.js";
 export { getScheduledReleaseCountdown } from "./client.js";
 export { verifyCompletionProof } from "./client.js";
 export { MultiTenantClient } from "./multiTenant.js";
@@ -65,131 +181,6 @@ export { watchExpiry } from "./watcher.js";
 export { DeadlineEngine } from "./deadlineEngine.js";
 
 export { StellarSplitTxBuilder } from "./txBuilder.js";
-
-export {
-  formatAmount,
-  parseAmount,
-  isValidAddress,
-  deadlineFromDays,
-  isExpired,
-  truncateAddress,
-} from "./utils.js";
-
-export { pollUSDCBalance, initPoller } from "./poller.js";
-
-export { telemetry } from "./telemetry.js";
-export { TelemetryCollector } from "./telemetryCollector.js";
-export type { TelemetryReport } from "./telemetryCollector.js";
-export { DIContainer } from "./container.js";
-export type { IRPCClient, ICacheStore, IWalletAdapter } from "./container.js";
-export { PaymentAggregator } from "./paymentAggregator.js";
-export type {
-  PaymentLedger,
-  PaymentSnapshot,
-  PaymentSnapshotPayer,
-  PaymentSnapshotPayment,
-  PaymentSummary,
-  TopPayer,
-} from "./paymentAggregator.js";
-export type { PaymentValidation } from "./paymentValidator.js";
-
-export { generateGraphQLSchema } from "./graphql.js";
-
-export { registerWebhook, triggerWebhook } from "./webhook.js";
-export { validateWebhookSignature } from "./webhookValidator.js";
-export type { WebhookConfig, WebhookEvent } from "./webhook.js";
-
-export {
-  detectContractFeatures,
-  clearFeatureCache,
-} from "./featureDetection.js";
-
-export { ExportPipeline } from "./exportPipeline.js";
-export type { PipelineStage, PipelineSink } from "./exportPipeline.js";
-
-export type { WalletAdapter } from "./adapters/types.js";
-export { WalletConnectAdapter } from "./adapters/walletconnect.js";
-
-export { validateTransition } from "./stateMachineValidator.js";
-
-export {
-  addRequestInterceptor,
-  addResponseInterceptor,
-} from "./interceptors.js";
-export { verifyBatchPayments } from "./batchVerifier.js";
-export type {
-  BatchVerificationResult,
-  BatchInvoiceValidation,
-  VerifyBatchPayResult,
-} from "./batchVerifier.js";
-export { createRequestSigningInterceptor } from "./requestSigner.js";
-export type {
-  RequestInterceptor,
-  ResponseInterceptor,
-  RPCRequest,
-  RPCResponse,
-} from "./interceptors.js";
-
-export { diffInvoice } from "./diff.js";
-
-export { getSDKHealth, resetSDKHealth } from "./healthDashboard.js";
-
-export { getInvoiceAtTime } from "./timeMachine.js";
-export { NotificationCenter } from "./notificationCenter.js";
-export {
-  renderTemplate,
-  builtInNotificationTemplates,
-} from "./notificationTemplates.js";
-export type {
-  InvoiceEvent,
-  InvoiceEventType,
-} from "./notificationTemplates.js";
-export { LoadBalancer } from "./loadBalancer.js";
-export type { EndpointState, LoadBalancerOptions } from "./loadBalancer.js";
-
-export { AutoRecoveryMonitor } from "./autoRecovery.js";
-export type { AutoRecoveryOptions } from "./autoRecovery.js";
-
-export { generateReceiptPdf } from "./pdfReceipt.js";
-
-export { estimateOperationCost } from "./feeEstimator.js";
-export type { FeeEstimate, FeeEstimateError } from "./feeEstimator.js";
-
-export { AclManager } from "./accessControl.js";
-export type { AsyncAclStore } from "./accessControl.js";
-export {
-  generateFlowDiagram,
-  registerInvoiceFlowFetcher,
-} from "./flowVisualizer.js";
-export type { InvoiceFlowFetcher } from "./flowVisualizer.js";
-export {
-  compressPayload,
-  decompressPayload,
-  createCompressionRequestInterceptor,
-  createCompressionResponseInterceptor,
-} from "./compression.js";
-export type {
-  CompressionAlgorithm,
-  CompressionConfig,
-  CompressionPayload,
-  CompressedPayload,
-} from "./compression.js";
-
-export {
-  StellarSplitError,
-  InvoiceNotFoundError,
-  InvoiceNotPendingError,
-  DeadlinePassedError,
-  PaymentExceedsRemainingError,
-  InvoiceFrozenError,
-  CoCreatorApprovalNotRequiredError,
-  ChainTooDeepError,
-  CircularPrerequisiteError,
-  ForwardChainTooDeepError,
-  UnauthorizedError,
-  parseSorobanError,
-  NftGateRequiredError,
-} from "./errors.js";
 
 export { SimpleCache } from "./cache.js";
 export { Recorder, createRecorder } from "./recorder.js";
@@ -262,6 +253,7 @@ export {
   replayWebhook,
   configureReplayStore,
   RingBufferStore,
+  WebhookEventNotFoundError,
 } from "./webhookReplay.js";
 export type { WebhookRecord, WebhookReplayStore } from "./webhookReplay.js";
 // ---------------------------------------------------------------------------

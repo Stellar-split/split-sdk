@@ -94,7 +94,7 @@ export function getSuggestion(error: Error): string {
 
   if (error instanceof StellarSplitError) {
     for (const { pattern, suggestion } of RAW_PATTERN_TABLE) {
-      if (pattern.test(error.raw) || pattern.test(error.message)) {
+      if (pattern.test(error.raw ?? "") || pattern.test(error.message)) {
         return suggestion;
       }
     }

@@ -13,6 +13,7 @@ import {
   nativeToScVal,
   scValToNative,
 } from "@stellar/stellar-sdk";
+import { OraclePriceError, NoReturnValueError } from "./errors.js";
 
 export interface ConvertedAmount {
   original: bigint;
@@ -69,11 +70,11 @@ async function fetchOraclePrice(
 
   const simResult = await server.simulateTransaction(tx);
   if (SorobanRpc.Api.isSimulationError(simResult)) {
-    throw new Error(`Oracle simulation failed: ${simResult.error}`);
+    throw new OraclePriceError(`Oracle simulation failed: ${simResult.error}`);
   }
 
   const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
-  if (!returnVal) throw new Error("No return value from oracle get_price");
+  if (!returnVal) throw new NoReturnValueError("oracle get_price");
 
   return BigInt(scValToNative(returnVal));
 }

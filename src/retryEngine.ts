@@ -1,4 +1,5 @@
 import { TelemetryCollector } from "./telemetryCollector.js";
+import { CircuitOpenError } from "./errors.js";
 
 export interface RetryStrategy {
   maxAttempts: number;
@@ -55,7 +56,7 @@ export class RetryEngine {
 
   async execute<T>(fn: () => Promise<T>, methodName: string): Promise<T> {
     if (this.isCircuitOpen) {
-      throw new Error("circuit open");
+      throw new CircuitOpenError({ methodName });
     }
 
     let lastError: unknown;
@@ -90,7 +91,7 @@ export class RetryEngine {
           this._consecutiveTransientFailures += 1;
           if (this._consecutiveTransientFailures >= this.config.circuitBreakerThreshold) {
             this._circuitOpenedAt = Date.now();
-            throw new Error("circuit open");
+            throw new CircuitOpenError({ methodName });
           }
         }
 

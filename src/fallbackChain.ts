@@ -1,16 +1,18 @@
+import { StellarSplitError } from "./errors.js";
+
 export interface FallbackAttemptLog {
   url: string;
   error: string;
   attemptMs: number;
 }
 
-export class FallbackExhaustedError extends Error {
+export class FallbackExhaustedError extends StellarSplitError {
   public readonly attempts: FallbackAttemptLog[];
 
   constructor(attempts: FallbackAttemptLog[]) {
     super(`Fallback chain exhausted after ${attempts.length} attempts.`);
-    Object.setPrototypeOf(this, FallbackExhaustedError.prototype);
     this.attempts = attempts;
+    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
@@ -22,7 +24,7 @@ export class FallbackChain {
 
   constructor(urls: string[], options?: { logger?: FallbackFailureLogger }) {
     if (!Array.isArray(urls) || urls.length === 0) {
-      throw new Error("FallbackChain requires at least one URL.");
+      throw new FallbackExhaustedError([{ url: "", error: "No URLs provided", attemptMs: 0 }]);
     }
 
     this.urls = [...urls];

@@ -1,3 +1,6 @@
+import { UnknownEndpointError } from "./errors.js";
+import { ValidationError } from "./errors.js";
+
 export interface EndpointState {
   url: string;
   healthy: boolean;
@@ -27,7 +30,7 @@ export class LoadBalancer {
 
   constructor(endpoints: string[], options: LoadBalancerOptions = {}) {
     if (endpoints.length === 0) {
-      throw new Error("LoadBalancer requires at least one endpoint.");
+      throw new ValidationError("LoadBalancer requires at least one endpoint.");
     }
 
     this.maxLatencySamples = options.maxLatencySamples ?? 10;
@@ -129,7 +132,7 @@ export class LoadBalancer {
   private findEndpoint(url: string): MutableEndpointState {
     const endpoint = this.endpoints.find((candidate) => candidate.url === url);
     if (!endpoint) {
-      throw new Error(`Unknown endpoint: ${url}`);
+      throw new UnknownEndpointError(url);
     }
     return endpoint;
   }

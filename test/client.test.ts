@@ -177,7 +177,7 @@ describe("generateReceipt", () => {
     } as any);
 
     await expect(client.generateReceipt("123")).rejects.toThrow(
-      "Invoice must be Released to generate a receipt"
+      "Invoice 123 is not in Released status"
     );
   });
 });
@@ -460,7 +460,7 @@ describe("generateReceipt", () => {
     } as any);
 
     await expect(client.generateReceipt("123")).rejects.toThrow(
-      "Invoice must be Released to generate a receipt"
+      "Invoice 123 is not in Released status"
     );
   });
 });
@@ -953,7 +953,7 @@ describe("resolveCloneChain", () => {
       });
     });
 
-    await expect(client.resolveCloneChain("x")).rejects.toThrow("clone chain depth exceeded");
+    await expect(client.resolveCloneChain("x")).rejects.toThrow("Clone chain depth exceeded");
   });
 });
 

@@ -1,4 +1,5 @@
 import type { Invoice, InvoiceRelationships } from "./types.js";
+import { RelationshipTrackerNotInitializedError } from "./errors.js";
 
 interface RelationshipClient {
   getInvoice(id: string): Promise<Invoice>;
@@ -13,7 +14,7 @@ export function initRelationshipTracker(client: RelationshipClient): void {
 
 export async function trackRelationships(invoiceId: string): Promise<InvoiceRelationships> {
   if (!_client) {
-    throw new Error("Call initRelationshipTracker() before trackRelationships().");
+    throw new RelationshipTrackerNotInitializedError();
   }
   const client = _client;
   const invoice = await client.getInvoice(invoiceId);

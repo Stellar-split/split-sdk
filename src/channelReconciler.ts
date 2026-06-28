@@ -6,6 +6,7 @@
  *
  * This is a read-only helper — it never submits any on-chain transaction.
  */
+import { ChannelReconciliationError } from "./errors.js";
 
 /** On-chain state for a single payment channel. */
 export interface ChannelState {
@@ -65,7 +66,7 @@ export async function reconcileChannel(
 ): Promise<ChannelReconciliationResult> {
   const resolveFetcher = fetcher ?? _fetcher;
   if (!resolveFetcher) {
-    throw new Error(
+    throw new ChannelReconciliationError(
       "No channel state fetcher registered. Call registerChannelStateFetcher() first."
     );
   }

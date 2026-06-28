@@ -1,4 +1,5 @@
 import type { Invoice } from "./types.js";
+import { InvoiceFetcherNotRegisteredError } from "./errors.js";
 
 export interface EnrichedInvoice extends Invoice {
   metadata: Record<string, unknown> | null;
@@ -41,7 +42,7 @@ export async function enrichInvoice(
 ): Promise<EnrichedInvoice> {
   const fetcher = getInvoice ?? invoiceFetcher;
   if (!fetcher) {
-    throw new Error("Invoice fetcher has not been registered.");
+    throw new InvoiceFetcherNotRegisteredError();
   }
 
   const invoice = await fetcher(invoiceId);

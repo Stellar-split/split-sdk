@@ -1,4 +1,5 @@
 import type { Invoice, InvoiceStatus } from "./types.js";
+import { ValidationError } from "./errors.js";
 
 export interface FilterCriteria {
   and?: FilterCriteria[];
@@ -59,7 +60,7 @@ function buildLeafPredicate(c: FilterCriteria): (invoice: Invoice) => boolean {
 
 function buildPredicate(criteria: FilterCriteria): (invoice: Invoice) => boolean {
   if (criteria.and !== undefined && criteria.or !== undefined) {
-    throw new Error('FilterCriteria cannot have both "and" and "or" at the same level');
+    throw new ValidationError('FilterCriteria cannot have both "and" and "or" at the same level');
   }
 
   if (criteria.and !== undefined) {

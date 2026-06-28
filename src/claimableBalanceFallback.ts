@@ -17,6 +17,7 @@ import {
   BASE_FEE,
 } from "@stellar/stellar-sdk";
 import type { StellarSplitClientConfig } from "./client.js";
+import { ValidationError } from "./errors.js";
 
 // ---------------------------------------------------------------------------
 // Error-pattern detection
@@ -110,7 +111,7 @@ export async function createClaimableRefund(
   config: StellarSplitClientConfig
 ): Promise<ClaimableRefundResult> {
   if (!config.horizonUrl) {
-    throw new Error(
+    throw new ValidationError(
       "createClaimableRefund requires config.horizonUrl to submit classic Stellar transactions"
     );
   }
@@ -173,7 +174,7 @@ export async function getClaimableRefunds(
   config: StellarSplitClientConfig
 ): Promise<ClaimableRefundEntry[]> {
   if (!config.horizonUrl) {
-    throw new Error(
+    throw new ValidationError(
       "getClaimableRefunds requires config.horizonUrl to query the Horizon API"
     );
   }

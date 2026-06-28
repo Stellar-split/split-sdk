@@ -1,5 +1,6 @@
 import { rpc as SorobanRpc } from "@stellar/stellar-sdk";
 import type { Invoice } from "./types.js";
+import { RefundGraceError } from "./errors.js";
 
 export interface RefundStatus {
   canRefund: boolean;
@@ -35,9 +36,7 @@ async function getLedgerTime(server: SorobanRpc.Server): Promise<number> {
   const ledger = await server.getLatestLedger();
   const raw = ledger as { closedAt?: string };
   if (!raw.closedAt) {
-    throw new Error(
-      "RPC getLatestLedger did not return closedAt; cannot determine ledger time",
-    );
+    throw new RefundGraceError("RPC getLatestLedger did not return closedAt; cannot determine ledger time");
   }
   return Math.floor(new Date(raw.closedAt).getTime() / 1000);
 }

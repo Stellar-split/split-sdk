@@ -1,4 +1,5 @@
 import { rpc as SorobanRpc } from "@stellar/stellar-sdk";
+import { ConnectionPoolConfigError, ConnectionPoolDisposedError } from "./errors.js";
 
 /** Maximum number of persistent connections the pool will maintain (issue #360). */
 export const MAX_POOL_SIZE = 5;
@@ -119,13 +120,13 @@ export class ConnectionPool {
     }
 
     if (!config?.rpcUrl || typeof config.rpcUrl !== "string") {
-      throw new Error("ConnectionPool: rpcUrl is required");
+      throw new ConnectionPoolConfigError("rpcUrl is required");
     }
 
     const requested = config.poolSize ?? DEFAULT_POOL_SIZE;
     if (!Number.isFinite(requested)) {
-      throw new Error(
-        `ConnectionPool: poolSize must be a finite number, received ${String(requested)}`,
+      throw new ConnectionPoolConfigError(
+        `poolSize must be a finite number, received ${String(requested)}`,
       );
     }
     const requestedFloor = Math.max(Math.trunc(requested), 1);
@@ -307,6 +308,6 @@ export class ConnectionPool {
   }
 
   private _assertAlive(): void {
-    if (this.disposed) throw new Error("ConnectionPool has been disposed");
+    if (this.disposed) throw new ConnectionPoolDisposedError();
   }
 }

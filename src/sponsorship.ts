@@ -36,20 +36,22 @@ const SPONSOR_MIN_BALANCE_STROOPS = 10_000_000n;
 // Error types
 // ---------------------------------------------------------------------------
 
+import { StellarSplitError } from "./errors.js";
+
 /** Thrown when `config.sponsorAccount` is absent. */
-export class MissingSponsorAccountError extends Error {
+export class MissingSponsorAccountError extends StellarSplitError {
   constructor() {
     super(
       "config.sponsorAccount is required for sponsored onboarding — " +
         "set it in StellarSplitClientConfig before calling buildSponsoredOnboarding."
     );
     this.name = "MissingSponsorAccountError";
-    Object.setPrototypeOf(this, MissingSponsorAccountError.prototype);
+    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
 /** Thrown when the sponsor's on-chain XLM balance is too low. */
-export class InsufficientReserveError extends Error {
+export class InsufficientReserveError extends StellarSplitError {
   readonly availableStroops: bigint;
   readonly requiredStroops: bigint;
 
@@ -62,7 +64,7 @@ export class InsufficientReserveError extends Error {
     this.name = "InsufficientReserveError";
     this.availableStroops = available;
     this.requiredStroops = required;
-    Object.setPrototypeOf(this, InsufficientReserveError.prototype);
+    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 

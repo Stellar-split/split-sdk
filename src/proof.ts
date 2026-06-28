@@ -4,6 +4,7 @@
 
 import { rpc as SorobanRpc, TransactionBuilder } from "@stellar/stellar-sdk";
 import type { StellarSplitClientConfig } from "./client.js";
+import { TransactionNotSuccessfulError } from "./errors.js";
 
 /** Cryptographic proof of a payment. */
 export interface PaymentProof {
@@ -55,7 +56,7 @@ export async function generatePaymentProof(
   }
 
   if (txResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-    throw new Error(`Transaction not successful: ${txResult.status}`);
+    throw new TransactionNotSuccessfulError(String(txResult.status));
   }
 
   const successResult = txResult as SorobanRpc.Api.GetSuccessfulTransactionResponse;

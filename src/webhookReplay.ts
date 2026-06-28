@@ -1,4 +1,5 @@
 import type { WebhookEvent } from "./webhook.js";
+import { StellarSplitError, isStellarSplitError } from "./errors.js";
 
 export interface WebhookRecord {
   eventId: string;
@@ -15,6 +16,18 @@ export interface WebhookReplayStore {
 }
 
 const DEFAULT_BUFFER_SIZE = 100;
+
+/** Thrown when a webhook event is not found in the replay store. */
+export class WebhookEventNotFoundError extends StellarSplitError {
+  readonly eventId: string;
+
+  constructor(eventId: string, raw?: string) {
+    super(`Webhook event not found: ${eventId}`, "WEBHOOK_EVENT_NOT_FOUND", { eventId }, raw);
+    this.name = "WebhookEventNotFoundError";
+    this.eventId = eventId;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
 
 export class RingBufferStore implements WebhookReplayStore {
   private readonly maxSize: number;
@@ -92,7 +105,7 @@ export function recordWebhookEvent(
 export async function replayWebhook(eventId: string): Promise<void> {
   const record = activeStore.get(eventId);
   if (!record) {
-    throw new Error(`Webhook event not found: ${eventId}`);
+    throw new WebhookEventNotFoundError(eventId);
   }
 
   await fetch(record.url, {

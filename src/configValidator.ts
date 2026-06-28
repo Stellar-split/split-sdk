@@ -1,6 +1,7 @@
 import type { StellarSplitClientConfig } from "./client.js";
 import { isValidAddress } from "./utils.js";
 import { StrKey } from "@stellar/stellar-sdk";
+import { StellarSplitError } from "./errors.js";
 
 export interface ConfigValidationErrorType {
   field: string;
@@ -258,11 +259,11 @@ export function validateOrThrow(config: StellarSplitClientConfig): void {
   }
 }
 
-export class ConfigValidationError extends Error {
+export class ConfigValidationError extends StellarSplitError {
   readonly validationErrors: ConfigValidationErrorType[];
 
   constructor(message: string, validationErrors: ConfigValidationErrorType[]) {
-    super(message);
+    super(message, "CONFIG_VALIDATION_ERROR", { fieldErrors: validationErrors.length }, message);
     this.name = "ConfigValidationError";
     this.validationErrors = validationErrors;
     Object.setPrototypeOf(this, new.target.prototype);

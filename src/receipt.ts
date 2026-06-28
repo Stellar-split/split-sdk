@@ -1,5 +1,6 @@
 import { createHash } from "crypto";
 import type { Invoice, Payment } from "./types.js";
+import { PayerAddressRequiredError } from "./errors.js";
 
 /** A verified payment receipt compiled from on-chain invoice data. */
 export interface PaymentReceipt {
@@ -108,7 +109,7 @@ export async function generatePaymentReceipt(
 ): Promise<PaymentReceipt> {
   if ("getInvoice" in source && typeof source.getInvoice === "function") {
     if (!payerAddress) {
-      throw new Error("payerAddress is required when generating receipt from a client");
+      throw new PayerAddressRequiredError();
     }
     const invoice = await source.getInvoice(invoiceIdOrPayer);
     return compilePaymentReceipt(invoice, payerAddress);

@@ -4,7 +4,7 @@
  * Normalises balance/transfer/approve/allowance calls across SEP-41-compliant
  * and legacy Soroban token contracts.  Methods that the underlying contract
  * does not implement are detected via simulation probing; callers receive
- * `null` and a console warning rather than an uncaught error.
+ * `null` and a warning rather than an uncaught error.
  */
 
 import {
@@ -17,6 +17,7 @@ import {
   scValToNative,
   xdr,
 } from "@stellar/stellar-sdk";
+import { Sep41AdapterError, NoReturnValueError } from "./errors.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -156,7 +157,7 @@ export class Sep41Adapter {
     const simResult = await this._server.simulateTransaction(tx);
 
     if (SorobanRpc.Api.isSimulationError(simResult)) {
-      throw new Error(
+      throw new Sep41AdapterError(
         typeof simResult.error === "string"
           ? simResult.error
           : JSON.stringify(simResult.error)
@@ -187,7 +188,7 @@ export class Sep41Adapter {
     if (typeof result === "number" || typeof result === "string") {
       return BigInt(result);
     }
-    throw new Error("[Sep41Adapter] Unexpected return type from 'balance'");
+    throw new Sep41AdapterError("Unexpected return type from 'balance'");
   }
 
   /**

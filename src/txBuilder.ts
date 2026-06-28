@@ -10,6 +10,7 @@ import {
 } from "@stellar/stellar-sdk";
 import type { StellarSplitClientConfig } from "./client.js";
 import { signTransaction } from "./wallet.js";
+import { SimulationFailedError, TransactionFailedError, TransactionNotConfirmedError } from "./errors.js";
 
 /** Builder for composing multi-operation StellarSplit transactions. */
 export class StellarSplitTxBuilder {
@@ -112,7 +113,7 @@ export class StellarSplitTxBuilder {
 
     const simResult = await this.server.simulateTransaction(tx);
     if (SorobanRpc.Api.isSimulationError(simResult)) {
-      throw new Error(`Simulation failed: ${simResult.error}`);
+      throw new SimulationFailedError(`Simulation failed: ${simResult.error}`, "submit", simResult.error);
     }
 
     const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
@@ -126,7 +127,9 @@ export class StellarSplitTxBuilder {
     );
 
     if (sendResult.status === "ERROR") {
-      throw new Error(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
+      throw new TransactionFailedError(
+        `Transaction failed: ${JSON.stringify(sendResult.errorResult)}`
+      );
     }
 
     const txHash = sendResult.hash;
@@ -142,7 +145,7 @@ export class StellarSplitTxBuilder {
     }
 
     if (getResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-      throw new Error(`Transaction not confirmed: ${getResult.status}`);
+      throw new TransactionNotConfirmedError(String(getResult.status));
     }
 
     return { txHash };

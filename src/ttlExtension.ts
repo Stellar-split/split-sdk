@@ -10,6 +10,7 @@ import {
   rpc as SorobanRpc,
 } from "@stellar/stellar-sdk";
 import type { StellarSplitClientConfig } from "./client.js";
+import { TtlExtensionFailedError } from "./errors.js";
 
 export interface TtlExtensionOptions {
   source: string;
@@ -96,10 +97,10 @@ export async function extendStorageTtl(
     .setTimeout(30)
     .build();
 
-  const simResult = await server.simulateTransaction(tx);
-  if (SorobanRpc.Api.isSimulationError(simResult)) {
-    throw new Error(`TTL extension simulation failed: ${simResult.error}`);
-  }
+const simResult = await server.simulateTransaction(tx);
+   if (SorobanRpc.Api.isSimulationError(simResult)) {
+     throw new TtlExtensionFailedError(`TTL extension simulation failed: ${simResult.error}`);
+   }
 
   const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
 
@@ -122,11 +123,11 @@ export async function extendStorageTtl(
     TransactionBuilder.fromXDR(signedXdr, config.networkPassphrase)
   );
 
-  if (sendResult.status === "ERROR") {
-    throw new Error(
-      `TTL extension transaction failed: ${JSON.stringify(sendResult.errorResult)}`
-    );
-  }
+if (sendResult.status === "ERROR") {
+     throw new TtlExtensionFailedError(
+       `TTL extension transaction failed: ${JSON.stringify(sendResult.errorResult)}`
+     );
+   }
 
   const txHash = sendResult.hash;
   let getResult = await server.getTransaction(txHash);
@@ -140,11 +141,11 @@ export async function extendStorageTtl(
     attempts++;
   }
 
-  if (getResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-    throw new Error(
-      `TTL extension transaction not confirmed: ${getResult.status}`
-    );
-  }
+if (getResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+     throw new TtlExtensionFailedError(
+       `TTL extension transaction not confirmed: ${getResult.status}`
+     );
+   }
 
   return { txHash, extendedKeys: options.ledgerKeys.length };
 }

@@ -5,6 +5,8 @@
  * or request transformation without forking the SDK.
  */
 
+import { PluginAlreadyRegisteredError } from "./errors.js";
+
 /** Method names that plugins can intercept. */
 export type SdkMethodName = "createInvoice" | "pay";
 
@@ -44,7 +46,7 @@ export class PluginRegistry {
 
   use(plugin: SdkPlugin): void {
     if (this._plugins.some((p) => p.name === plugin.name)) {
-      throw new Error(`Plugin "${plugin.name}" is already registered.`);
+      throw new PluginAlreadyRegisteredError(plugin.name);
     }
     this._plugins.push(plugin);
   }
@@ -85,7 +87,7 @@ export class PluginRegistry {
 export const LoggingPlugin: SdkPlugin = {
   name: "LoggingPlugin",
   beforeCall(method, args) {
-    (args as Record<string, unknown>).__logStart = Date.now();
+    (args as unknown as Record<string, unknown>).__logStart = Date.now();
     console.debug(`[StellarSplit] ${method} called`, args);
     return args;
   },

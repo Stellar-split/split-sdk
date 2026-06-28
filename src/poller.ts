@@ -10,6 +10,16 @@ import {
   nativeToScVal,
   scValToNative,
 } from "@stellar/stellar-sdk";
+import { StellarSplitError } from "./errors.js";
+
+/** Thrown when the poller is not initialized. */
+export class PollerNotInitializedError extends StellarSplitError {
+  constructor(action: string = "operation", raw?: string) {
+    super(`Poller not initialized. Call initPoller first for ${action}.`, "POLLER_NOT_INITIALIZED", { action }, raw);
+    this.name = "PollerNotInitializedError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
 
 /** Global RPC server instance for polling. */
 let pollerServer: SorobanRpc.Server | null = null;
@@ -38,7 +48,7 @@ export function pollUSDCBalance(
   intervalMs: number = 10000
 ): () => void {
   if (!pollerServer) {
-    throw new Error("Poller not initialized. Call initPoller first.");
+    throw new PollerNotInitializedError("pollUSDCBalance");
   }
 
   let previousBalance: bigint | null = null;
@@ -79,7 +89,7 @@ export function pollUSDCBalance(
  */
 async function getUSDCBalance(address: string): Promise<bigint> {
   if (!pollerServer) {
-    throw new Error("Poller not initialized.");
+    throw new PollerNotInitializedError("getUSDCBalance");
   }
 
   // Placeholder implementation - would need actual token contract address

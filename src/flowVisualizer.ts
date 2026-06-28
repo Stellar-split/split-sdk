@@ -1,4 +1,5 @@
 import type { Invoice, Recipient } from "./types.js";
+import { InvoiceFlowFetcherNotRegisteredError } from "./errors.js";
 
 export type InvoiceFlowFetcher = (invoiceId: string) => Promise<Invoice>;
 
@@ -40,7 +41,7 @@ export async function generateFlowDiagram(
 ): Promise<string> {
   const fetcher = getInvoice ?? invoiceFlowFetcher;
   if (!fetcher) {
-    throw new Error("Invoice flow fetcher has not been registered.");
+    throw new InvoiceFlowFetcherNotRegisteredError();
   }
 
   const invoice = await fetcher(invoiceId);

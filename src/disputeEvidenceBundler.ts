@@ -9,6 +9,7 @@ import { createHash } from "crypto";
 import type { PaymentProof } from "./proof.js";
 import type { AuditEntry } from "./auditLogger.js";
 import type { ContractEvent } from "./events.js";
+import { DisputeEvidenceError } from "./errors.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -90,7 +91,7 @@ export async function bundleDisputeEvidence(
   payer?: string
 ): Promise<DisputeEvidenceBundle> {
   if (!_proofFetcher || !_auditLogFetcher || !_eventFetcher) {
-    throw new Error(
+    throw new DisputeEvidenceError(
       "All three fetchers must be registered before calling bundleDisputeEvidence. " +
         "Call registerProofFetcher, registerAuditLogFetcher, and registerEventFetcher first."
     );

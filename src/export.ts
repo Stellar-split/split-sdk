@@ -1,5 +1,6 @@
 import type { Invoice } from "./types.js";
 import { formatAmount, truncateAddress } from "./utils.js";
+import { UnknownExportFormatError } from "./errors.js";
 
 /** Export format for invoices. */
 export type ExportFormat = "json" | "csv" | "text";
@@ -20,7 +21,7 @@ export function exportInvoice(invoice: Invoice, format: ExportFormat): string {
     case "text":
       return exportAsText(invoice);
     default:
-      throw new Error(`Unknown export format: ${format}`);
+      throw new UnknownExportFormatError(format);
   }
 }
 

@@ -1,4 +1,5 @@
 import type { RPCNode } from "./types.js";
+import { DiscoveryFetchError } from "./errors.js";
 
 const DEFAULT_DISCOVERY_URL = "https://horizon.stellar.org/network_info";
 
@@ -19,7 +20,7 @@ export async function discoverRPCNodes(
 
 async function fetchNodeList(discoveryUrl: string): Promise<string[]> {
   const res = await fetch(discoveryUrl);
-  if (!res.ok) throw new Error(`Discovery fetch failed: ${res.status} ${res.statusText}`);
+  if (!res.ok) throw new DiscoveryFetchError(res.status, res.statusText);
   const data: unknown = await res.json();
   if (Array.isArray(data)) {
     return data.filter((u): u is string => typeof u === "string");

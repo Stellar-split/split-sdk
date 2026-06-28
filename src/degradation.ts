@@ -1,3 +1,5 @@
+import { RpcUnavailableError } from "./errors.js";
+
 export interface DegradedRead<T> {
   data: T;
   stale: boolean;
@@ -30,7 +32,7 @@ export class DegradationManager {
       if (cached !== undefined) {
         return { data: cached as T, stale: true };
       }
-      throw new Error(`RPC unavailable and no cached data for key "${key}"`);
+      throw new RpcUnavailableError(key);
     }
   }
 

@@ -107,6 +107,7 @@ import type {
 } from "./types.js";
 import type { DIContainer, IRPCClient, ICacheStore, IWalletAdapter } from "./container.js";
 import {
+  CircularForwardChainError,
   CoCreatorApprovalNotRequiredError,
   ForwardChainTooDeepError,
   InvoiceFrozenError,
@@ -115,6 +116,24 @@ import {
   NftGateRequiredError,
   UnauthorizedError,
   parseSorobanError,
+  PluginAlreadyRegisteredError,
+  InvalidBatchSizeError,
+  InvoiceNotReleasedError,
+  SimulationFailedError,
+  NoReturnValueError,
+  TransactionFailedError,
+  TransactionNotConfirmedError,
+  UnknownNetworkError,
+  InsufficientSignaturesError,
+  CloneChainTooDeepError,
+  NoPendingPayoutError,
+  InvalidAttestationError,
+  RpcUnavailableError,
+  UnknownEndpointError,
+  QueueFailedError,
+  SignerFailedError,
+  NoSignerProvidedError,
+   ValidationError,
 } from "./errors.js";
 import { replayEvents } from "./events.js";
 import { subscribeToInvoice as _subscribeToInvoice } from "./stream.js";
@@ -608,7 +627,7 @@ export class StellarSplitClient {
    */
   registerPlugin(plugin: StellarSplitPlugin): void {
     if (this._plugins.has(plugin.name)) {
-      throw new Error(`Plugin "${plugin.name}" is already registered.`);
+      throw new PluginAlreadyRegisteredError(plugin.name);
     }
     this._plugins.add(plugin.name);
     this._pluginInstances.push(plugin);
@@ -971,7 +990,7 @@ export class StellarSplitClient {
     params: CreateInvoiceParams[]
   ): Promise<{ invoiceIds: string[]; txHash: string }> {
     if (params.length === 0 || params.length > 5) {
-      throw new Error("Batch size must be between 1 and 5 items");
+      throw new InvalidBatchSizeError("1-5 items", params.length);
     }
 
     const invoiceParams = params.map((p) => {
@@ -1014,7 +1033,7 @@ export class StellarSplitClient {
     );
 
     const firstParam = params[0];
-    if (!firstParam) throw new Error("Batch params array is empty");
+    if (!firstParam) throw new InvalidBatchSizeError("non-empty array", 0);
     const result = await this._submitTx(firstParam.creator, operation);
     const invoiceIds = (scValToNative(result.returnValue) as (string | number)[]).map(
       (id) => id.toString()
@@ -1225,7 +1244,7 @@ export class StellarSplitClient {
     try {
       const invoice = await this.getInvoice(invoiceId);
       if (invoice.status !== "Released") {
-        throw new Error("Invoice must be Released to generate a receipt");
+        throw new InvoiceNotReleasedError(invoiceId, invoice.status);
       }
 
       const receiptId = await this._buildReceiptId(invoice);
@@ -1345,10 +1364,10 @@ export class StellarSplitClient {
 
     while (currentId) {
       if (depth >= 10) {
-        throw new ForwardChainTooDeepError(`Max chain depth of 10 exceeded starting from invoice ${invoiceId}`);
+        throw new ForwardChainTooDeepError(10, currentId);
       }
       if (visited.has(currentId)) {
-        throw new Error(`Circular forward chain detected at invoice ${currentId}`);
+        throw new CircularForwardChainError(currentId);
       }
       visited.add(currentId);
       depth++;
@@ -1691,11 +1710,11 @@ export class StellarSplitClient {
 
       const simResult = await this.server.simulateTransaction(tx);
       if (SorobanRpc.Api.isSimulationError(simResult)) {
-        throw new Error(`Simulation failed: ${simResult.error}`);
+        throw new SimulationFailedError(`Simulation failed: ${simResult.error}`, "getInvoicesByRecipient", simResult.error);
       }
 
       const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
-      if (!returnVal) throw new Error("No return value from get_invoices_by_recipient");
+      if (!returnVal) throw new NoReturnValueError("getInvoicesByRecipient");
 
       const raw = scValToNative(returnVal);
       const allIds: string[] = Array.isArray(raw) ? raw.map((id: unknown) => String(id)) : [];
@@ -1836,12 +1855,12 @@ export class StellarSplitClient {
    */
   async batchPay(payer: string, payments: BatchPayment[]): Promise<TxResult> {
     if (payments.length === 0) {
-      throw new Error("payments array must not be empty");
+      throw new ValidationError("payments array must not be empty");
     }
 
     for (const p of payments) {
       if (!p.invoiceId || isNaN(Number(p.invoiceId))) {
-        throw new Error(`Invalid invoiceId: ${p.invoiceId}`);
+        throw new ValidationError(`Invalid invoiceId: ${p.invoiceId}`);
       }
     }
 
@@ -1951,7 +1970,7 @@ export class StellarSplitClient {
       return BigInt((result as Record<string, unknown>).balance as string | number);
     }
 
-    throw new Error("Unable to determine USDC balance");
+    throw new NoReturnValueError("_getTokenBalance");
   }
 
   // ---------------------------------------------------------------------------
@@ -2002,7 +2021,7 @@ export class StellarSplitClient {
         (optionsOrInterval as Partial<SubscribeToInvoiceOptions> | undefined) ?? {};
       const baseUrl = options.baseUrl ?? this.config.horizonUrl;
       if (!baseUrl) {
-        throw new Error(
+        throw new ValidationError(
           "subscribeToInvoice (SSE) requires a base URL: set `horizonUrl` in the client config or pass `{ baseUrl }` in options.",
         );
       }
@@ -2050,7 +2069,7 @@ export class StellarSplitClient {
 
     const simResult = await this.server.simulateTransaction(tx);
     if (SorobanRpc.Api.isSimulationError(simResult)) {
-      throw new Error(`Simulation failed: ${simResult.error}`);
+      throw new SimulationFailedError(`Simulation failed: ${simResult.error}`, "buildTransaction", simResult.error);
     }
 
     const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
@@ -2068,7 +2087,7 @@ export class StellarSplitClient {
     const sendResult = await this.server.sendTransaction(tx);
 
     if (sendResult.status === "ERROR") {
-      throw new Error(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
+      throw new TransactionFailedError(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
     }
 
     const txHash = sendResult.hash;
@@ -2085,7 +2104,7 @@ export class StellarSplitClient {
     }
 
     if (getResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-      throw new Error(`Transaction not confirmed: ${getResult.status}`);
+      throw new TransactionNotConfirmedError(String(getResult.status));
     }
 
     return { txHash };
@@ -2137,12 +2156,12 @@ export class StellarSplitClient {
 
     const simResult = await this.server.simulateTransaction(tx);
     if (SorobanRpc.Api.isSimulationError(simResult)) {
-      throw new Error(`Simulation error: ${simResult.error}`);
+      throw new SimulationFailedError(`Simulation error: ${simResult.error}`, "simulateCreateInvoice", simResult.error);
     }
 
     const success = simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse;
     const returnVal = success.result?.retval;
-    if (!returnVal) throw new Error("No return value from simulate create_invoice");
+    if (!returnVal) throw new NoReturnValueError("simulateCreateInvoice");
 
     const invoiceId = scValToNative(returnVal).toString();
     const fee = success.minResourceFee ?? "0";
@@ -2181,7 +2200,7 @@ export class StellarSplitClient {
 
     const simResult = await this.server.simulateTransaction(tx);
     if (SorobanRpc.Api.isSimulationError(simResult)) {
-      throw new Error(`Simulation error: ${simResult.error}`);
+      throw new SimulationFailedError(`Simulation error: ${simResult.error}`, "simulatePay", simResult.error);
     }
 
     const success = simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse;
@@ -2202,7 +2221,7 @@ export class StellarSplitClient {
    */
   async estimateFee(operation: xdr.Operation): Promise<FeeEstimate> {
     const simResult = await this._simulateView(operation) as { minResourceFee?: string; error?: string };
-    if (simResult.error) throw new Error(`Fee estimation failed: ${simResult.error}`);
+    if (simResult.error) throw new SimulationFailedError(`Fee estimation failed: ${simResult.error}`, "estimateFee", simResult.error);
     const fee = BigInt(simResult.minResourceFee ?? "0");
     let congestion: FeeEstimate["congestion"] = "low";
     try {
@@ -2230,7 +2249,7 @@ export class StellarSplitClient {
    */
   async collectSignatures(xdrStr: string, signers: string[]): Promise<string> {
     if (signers.length === 0) {
-      throw new Error("signers array must not be empty");
+      throw new ValidationError("signers array must not be empty");
     }
 
     let current = xdrStr;
@@ -2240,7 +2259,7 @@ export class StellarSplitClient {
           ? this._adapter.signTransaction(current, this.config.networkPassphrase)
           : signTransaction(current, this.config.networkPassphrase));
       } catch (err) {
-        throw new Error(
+        throw new ValidationError(
           `Signer ${signer} failed to sign: ${err instanceof Error ? err.message : String(err)}`
         );
       }
@@ -2303,7 +2322,7 @@ export class StellarSplitClient {
     if (typeof network === "string") {
       const preset = NETWORKS[network];
       if (!preset) {
-        throw new Error(`Unknown network: ${network}`);
+        throw new UnknownNetworkError(network);
       }
       config = { ...preset, contractId: this.config.contractId };
     } else {
@@ -2371,7 +2390,7 @@ export class StellarSplitClient {
    * @returns Base64-encoded unsigned transaction XDR.
    */
   async collectCoSignatures(invoiceId: string, signers: string[]): Promise<string> {
-    if (signers.length === 0) throw new Error("At least one signer required");
+    if (signers.length === 0) throw new NoSignerProvidedError();
 
     const firstSigner = signers[0]!;
     const operation = this.contract.call(
@@ -2390,7 +2409,7 @@ export class StellarSplitClient {
 
     const simResult = await this.server.simulateTransaction(tx);
     if (SorobanRpc.Api.isSimulationError(simResult)) {
-      throw new Error(`Simulation failed: ${simResult.error}`);
+      throw new SimulationFailedError(`Simulation failed: ${simResult.error}`, "collectCoSignatures", simResult.error);
     }
 
     const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
@@ -2410,9 +2429,7 @@ export class StellarSplitClient {
     const requiredCount = invoice.recipients.length;
 
     if (signatures.length < requiredCount) {
-      throw new Error(
-        `Insufficient signatures: ${signatures.length} provided, ${requiredCount} required`
-      );
+      throw new InsufficientSignaturesError(signatures.length, requiredCount);
     }
 
     const firstSig = signatures[0]!;
@@ -2434,7 +2451,7 @@ export class StellarSplitClient {
 
     const sendResult = await this.server.sendTransaction(mergedTx);
     if (sendResult.status === "ERROR") {
-      throw new Error(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
+      throw new TransactionFailedError(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
     }
 
     const txHash = sendResult.hash;
@@ -2450,7 +2467,7 @@ export class StellarSplitClient {
     }
 
     if (getResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-      throw new Error(`Transaction not confirmed: ${getResult.status}`);
+      throw new TransactionNotConfirmedError(String(getResult.status));
     }
 
     return { txHash };
@@ -3141,11 +3158,11 @@ export class StellarSplitClient {
 
     const simResult = await this.server.simulateTransaction(tx);
     if (SorobanRpc.Api.isSimulationError(simResult)) {
-      throw new Error(`Simulation failed: ${simResult.error}`);
+      throw new SimulationFailedError(`Simulation failed: ${simResult.error}`, "_simulateView", simResult.error);
     }
 
     const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
-    if (!returnVal) throw new Error("No return value from simulation");
+    if (!returnVal) throw new NoReturnValueError("_simulateView");
 
     return scValToNative(returnVal);
   }
@@ -3228,7 +3245,7 @@ export class StellarSplitClient {
       );
 
       if (sendResult.status === "ERROR") {
-        throw new Error(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
+        throw new TransactionFailedError(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`, sendResult.hash, JSON.stringify(sendResult.errorResult));
       }
 
       const txHash = sendResult.hash;
@@ -3264,7 +3281,7 @@ export class StellarSplitClient {
           TransactionBuilder.fromXDR(signedBumpXdr, this.config.networkPassphrase)
         );
         if (bumpSendResult.status === "ERROR") {
-          throw new Error(`Fee-bump transaction failed: ${JSON.stringify(bumpSendResult.errorResult)}`);
+          throw new TransactionFailedError(`Fee-bump transaction failed: ${JSON.stringify(bumpSendResult.errorResult)}`, bumpSendResult.hash, JSON.stringify(bumpSendResult.errorResult));
         }
         const bumpHash = bumpSendResult.hash;
         let bumpResult = await this.server.getTransaction(bumpHash);
@@ -3278,7 +3295,7 @@ export class StellarSplitClient {
           bumpAttempts++;
         }
         if (bumpResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-          throw new Error(`Fee-bump transaction not confirmed: ${bumpResult.status}`);
+          throw new TransactionNotConfirmedError(String(bumpResult.status));
         }
         const bumpReturnValue =
           (bumpResult as SorobanRpc.Api.GetSuccessfulTransactionResponse).returnValue ??
@@ -3291,7 +3308,7 @@ export class StellarSplitClient {
       }
 
       if (getResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-        throw new Error(`Transaction not confirmed: ${getResult.status}`);
+        throw new TransactionNotConfirmedError(String(getResult.status));
       }
 
       const returnValue =
@@ -3332,7 +3349,7 @@ export class StellarSplitClient {
     const recipients: Recipient[] = (raw.recipients as string[]).map(
       (addr: string, i: number) => {
         const amt = amounts[i];
-        if (amt === undefined) throw new Error(`Missing amount for recipient at index ${i}`);
+        if (amt === undefined) throw new NoReturnValueError(`_parseInvoice ${i}`);
         return {
           address: addr,
           amount: BigInt(amt as string | number),
@@ -3411,10 +3428,10 @@ export class StellarSplitClient {
 
     while (currentId) {
       if (seen.has(currentId)) {
-        throw new Error("clone chain cycle detected");
+        throw new CloneChainTooDeepError(currentId);
       }
       if (depth >= MAX_DEPTH) {
-        throw new Error("clone chain depth exceeded");
+        throw new CloneChainTooDeepError();
       }
 
       seen.add(currentId);
@@ -3480,7 +3497,7 @@ export class StellarSplitClient {
    */
   async getAccountBalances(address: string): Promise<NormalizedBalance[]> {
     if (!this._horizonReader) {
-      throw new Error(
+      throw new ValidationError(
         "getAccountBalances requires horizonUrl to be set in StellarSplitClientConfig"
       );
     }
@@ -3496,7 +3513,7 @@ export class StellarSplitClient {
 
     return chain.execute(async (provider) => {
       if (provider === "rpc") {
-        throw new Error(
+        throw new ValidationError(
           "Soroban RPC does not expose account balances; delegating to Horizon"
         );
       }
@@ -3628,10 +3645,10 @@ export class StellarSplitClient {
           .build();
         const simResult = await server.simulateTransaction(tx);
         if (SorobanRpc.Api.isSimulationError(simResult)) {
-          throw new Error(`Simulation failed on ${url}: ${simResult.error}`);
+          throw new SimulationFailedError(`Simulation failed on ${url}: ${simResult.error}`, "syncInvoice", simResult.error);
         }
         const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
-        if (!returnVal) throw new Error(`No return value from ${url}`);
+        if (!returnVal) throw new NoReturnValueError(`syncInvoice ${url}`);
         const raw = scValToNative(returnVal) as Record<string, unknown>;
         const invoice = this._parseInvoice(invoiceId, raw);
         const ledger = typeof raw.lastModifiedLedger === "number"
@@ -3646,7 +3663,7 @@ export class StellarSplitClient {
       .map((r) => r.value);
 
     if (successful.length === 0) {
-      throw new Error("All RPC endpoints failed to sync invoice");
+      throw new RpcUnavailableError("syncInvoice");
     }
 
     return successful.reduce((best, cur) => cur.ledger > best.ledger ? cur : best);
@@ -3688,7 +3705,7 @@ export class StellarSplitClient {
     try {
       const pending = await this.getPendingPayout(invoiceId, recipient);
       if (pending === 0n) {
-        throw new Error(`No pending payout for recipient ${recipient} on invoice ${invoiceId}`);
+        throw new NoPendingPayoutError(recipient, invoiceId);
       }
       const operation = this.contract.call(
         "claim_pending_payout",
@@ -3717,10 +3734,10 @@ export class StellarSplitClient {
     const startTime = Date.now();
     try {
       if (params.attestationHash.length !== 32) {
-        throw new Error(`attestationHash must be 32 bytes, got ${params.attestationHash.length}`);
+        throw new InvalidAttestationError(`attestationHash must be 32 bytes, got ${params.attestationHash.length}`);
       }
       if (params.signature.length !== 64) {
-        throw new Error(`signature must be 64 bytes, got ${params.signature.length}`);
+        throw new InvalidAttestationError(`signature must be 64 bytes, got ${params.signature.length}`);
       }
       const operation = this.contract.call(
         "pay_with_attestation",
@@ -3804,15 +3821,15 @@ export class StellarSplitClient {
     items: CreateInvoiceParams[]
   ): Promise<{ invoiceIds: string[]; txHash: string }> {
     if (items.length === 0 || items.length > 10) {
-      throw new Error("Batch size must be between 1 and 10 items");
+      throw new InvalidBatchSizeError("1-10 items", items.length);
     }
     for (let i = 0; i < items.length; i++) {
       const item = items[i]!;
-      if (!item.creator) throw new Error(`Item ${i}: creator is required`);
-      if (!item.token) throw new Error(`Item ${i}: token is required`);
-      if (!item.deadline || item.deadline <= 0) throw new Error(`Item ${i}: deadline must be a positive number`);
+      if (!item.creator) throw new ValidationError(`Item ${i}: creator is required`);
+      if (!item.token) throw new ValidationError(`Item ${i}: token is required`);
+      if (!item.deadline || item.deadline <= 0) throw new ValidationError(`Item ${i}: deadline must be a positive number`);
       if (!Array.isArray(item.recipients) || item.recipients.length === 0) {
-        throw new Error(`Item ${i}: recipients must be a non-empty array`);
+        throw new ValidationError(`Item ${i}: recipients must be a non-empty array`);
       }
       if (this.config.payloadGuard) {
         validateInvoicePayload(item, this.config.payloadGuard);
@@ -3863,7 +3880,7 @@ export class StellarSplitClient {
 
       const simResult = await this.server.simulateTransaction(tx);
       if (SorobanRpc.Api.isSimulationError(simResult)) {
-        throw new Error(`Simulation failed: ${simResult.error}`);
+        throw new SimulationFailedError(`Simulation failed: ${simResult.error}`, "createInvoiceBatch", simResult.error);
       }
 
       const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
@@ -3883,7 +3900,7 @@ export class StellarSplitClient {
         TransactionBuilder.fromXDR(signedXdr, this.config.networkPassphrase)
       );
       if (sendResult.status === "ERROR") {
-        throw new Error(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
+        throw new TransactionFailedError(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
       }
 
       const txHash = sendResult.hash;
@@ -3895,7 +3912,7 @@ export class StellarSplitClient {
         attempts++;
       }
       if (getResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-        throw new Error(`Transaction not confirmed: ${getResult.status}`);
+        throw new TransactionNotConfirmedError(String(getResult.status));
       }
 
       const returnVal =

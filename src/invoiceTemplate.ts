@@ -6,15 +6,7 @@
  */
 
 import type { CreateInvoiceParams, Recipient } from "./types.js";
-
-/** Thrown when deserialization encounters a malformed payload. */
-export class ValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ValidationError";
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
+import { ValidationError } from "./errors.js";
 
 interface SerializedRecipient {
   address: string;
@@ -68,7 +60,7 @@ export function deserializeInvoiceTemplate(json: string): CreateInvoiceParams {
     parsed === null ||
     (parsed as Record<string, unknown>).v !== 1
   ) {
-    throw new ValidationError("Missing or unsupported version field 'v'");
+    throw new ValidationError("Missing or unsupported version field 'v'", { field: "v", value: (parsed as Record<string, unknown>)?.v });
   }
 
   const { data } = parsed as SerializedTemplate;

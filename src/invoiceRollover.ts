@@ -11,6 +11,7 @@ import {
 import type { RolloverResult } from "./types.js";
 import type { StellarSplitClientConfig } from "./client.js";
 import { signTransaction } from "./wallet.js";
+import { SimulationFailedError, TransactionFailedError, TransactionNotConfirmedError, ValidationError } from "./errors.js";
 
 async function _submitTx(
   server: SorobanRpc.Server,
@@ -31,7 +32,7 @@ async function _submitTx(
 
   const simResult = await server.simulateTransaction(tx);
   if (SorobanRpc.Api.isSimulationError(simResult)) {
-    throw new Error(`Simulation failed: ${simResult.error}`);
+    throw new SimulationFailedError(`Simulation failed: ${simResult.error}`, "rolloverInvoice", simResult.error);
   }
 
   const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
@@ -44,7 +45,7 @@ async function _submitTx(
   );
 
   if (sendResult.status === "ERROR") {
-    throw new Error(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
+    throw new TransactionFailedError(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
   }
 
   const txHash = sendResult.hash;
@@ -60,7 +61,7 @@ async function _submitTx(
   }
 
   if (getResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-    throw new Error(`Transaction not confirmed: ${getResult.status}`);
+    throw new TransactionNotConfirmedError(String(getResult.status));
   }
 
   const returnValue =
@@ -93,7 +94,7 @@ export async function rolloverInvoice(
   adapter?: { signTransaction(xdr: string, network: string): Promise<string> } | null
 ): Promise<RolloverResult> {
   if (newDeadline <= Date.now() / 1000) {
-    throw new Error("newDeadline must be in the future");
+    throw new ValidationError("newDeadline must be in the future");
   }
 
   const contract = new Contract(config.contractId);

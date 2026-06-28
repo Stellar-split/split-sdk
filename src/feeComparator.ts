@@ -14,6 +14,7 @@ import {
   scValToNative,
 } from "@stellar/stellar-sdk";
 import type { Invoice } from "./types.js";
+import { SimulationFailedError, NoReturnValueError } from "./errors.js";
 
 export interface CostEstimate {
   resourceFee: bigint;
@@ -60,7 +61,7 @@ async function simulateResourceFee(
 
   const simResult = await server.simulateTransaction(tx);
   if (SorobanRpc.Api.isSimulationError(simResult)) {
-    throw new Error(`Simulation failed: ${simResult.error}`);
+    throw new SimulationFailedError(`Simulation failed: ${simResult.error}`, method, simResult.error);
   }
 
   const successResult = simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse;
@@ -100,11 +101,11 @@ async function getDexSwapQuote(
 
   const simResult = await server.simulateTransaction(tx);
   if (SorobanRpc.Api.isSimulationError(simResult)) {
-    throw new Error(`DEX quote simulation failed: ${simResult.error}`);
+    throw new SimulationFailedError(`DEX quote simulation failed: ${simResult.error}`, "quote", simResult.error);
   }
 
   const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
-  if (!returnVal) throw new Error("No return value from DEX quote");
+  if (!returnVal) throw new NoReturnValueError("DEX quote");
 
   const outputAmount = BigInt(scValToNative(returnVal));
   const slippage = amount > outputAmount ? amount - outputAmount : 0n;
