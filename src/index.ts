@@ -13,6 +13,15 @@ export type {
   TxResult,
   StellarSplitPlugin,
 } from "./client.js";
+
+export { PluginRegistry, LoggingPlugin } from "./plugin.js";
+export type { SdkPlugin, SdkMethodName, PluginArgs, PluginResult } from "./plugin.js";
+
+export {
+  serializeInvoiceTemplate,
+  deserializeInvoiceTemplate,
+  ValidationError,
+} from "./invoiceTemplate.js";
 export { getScheduledReleaseCountdown } from "./client.js";
 export { verifyCompletionProof } from "./client.js";
 export { MultiTenantClient } from "./multiTenant.js";
@@ -321,8 +330,8 @@ export type {
 } from "./connectionPool.js";
 
 // Request batcher functionality
-export { RequestBatcher } from "./requestBatcher.js";
-export type { BatcherConfig } from "./requestBatcher.js";
+export { RequestBatcher, BatchedRpcClient } from "./requestBatcher.js";
+export type { BatcherConfig, BatchFetchers, BatchCallType } from "./requestBatcher.js";
 
 export type { ComplianceReport } from "./compliance.js";
 

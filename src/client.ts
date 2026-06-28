@@ -28,6 +28,8 @@ import type { RetryConfig } from "./retryEngine.js";
 import { TelemetryCollector } from "./telemetryCollector.js";
 import { isFeatureEnabled } from "./flags.js";
 import type { FeatureFlags } from "./flags.js";
+import { PluginRegistry } from "./plugin.js";
+import type { SdkPlugin } from "./plugin.js";
 import { checkRPCHealth } from "./health.js";
 import { Deduplicator } from "./dedup.js";
 import { verifyBatchPayments } from "./batchVerifier.js";
@@ -154,6 +156,7 @@ import type {
 } from "./claimableBalanceFallback.js";
 import { Asset } from "@stellar/stellar-sdk";
 import { rolloverInvoice as _rolloverInvoice } from "./invoiceRollover.js";
+import { BatchedRpcClient } from "./requestBatcher.js";
 
 /** A plugin that extends StellarSplitClient with new methods and lifecycle hooks. */
 export interface StellarSplitPlugin {
@@ -359,6 +362,7 @@ export class StellarSplitClient {
   private config: StellarSplitClientConfig;
   private _plugins = new Set<string>();
   private _pluginInstances: StellarSplitPlugin[] = [];
+  private _pluginRegistry = new PluginRegistry();
   private _dedup = new Deduplicator<Invoice>();
   private _cache: SimpleCache<Invoice> | ICacheStore<Invoice> | null = null;
   private _auditLogger: AuditLogger | null = null;
@@ -378,6 +382,7 @@ export class StellarSplitClient {
    * `this.config.rpcPoolSize` after a switch would silently disable pooling.
    */
   private _effectiveRpcPoolSize = 0;
+  private _batcher: BatchedRpcClient | null = null;
 
   private get server(): SorobanRpc.Server {
     return (
@@ -538,6 +543,26 @@ export class StellarSplitClient {
     }
   }
 
+  /**
+   * Enable or disable request batching for read methods (getInvoice, getPaymentHistory, getInvoiceExt).
+   * Disabled by default — opt-in to batch concurrent RPC calls within a 10 ms window.
+   * @param enabled - Pass `true` to enable batching, `false` to disable.
+   */
+  setBatchingEnabled(enabled: boolean): void {
+    if (enabled) {
+      if (!this._batcher) {
+        this._batcher = new BatchedRpcClient({
+          fetchInvoice: (id) => this._fetchInvoice(id),
+          fetchPaymentHistory: (id) => this._fetchPaymentHistory(id),
+          fetchInvoiceExt: (id) => this._fetchInvoiceExt(id),
+        });
+      }
+    } else {
+      this._batcher?.clear();
+      this._batcher = null;
+    }
+  }
+
   private _logAudit(method: string, params: Record<string, unknown>, success: boolean, durationMs: number): void {
     if (!this._auditLogger) return;
     this._auditLogger.log({
@@ -564,6 +589,21 @@ export class StellarSplitClient {
     this._plugins.add(plugin.name);
     this._pluginInstances.push(plugin);
     plugin.install?.(this);
+  }
+
+  /** Register a middleware plugin (interceptor-style). */
+  use(plugin: SdkPlugin): void {
+    this._pluginRegistry.use(plugin);
+  }
+
+  /** Deregister a middleware plugin by name. */
+  removePlugin(name: string): void {
+    this._pluginRegistry.removePlugin(name);
+  }
+
+  /** Return the names of all active middleware plugins. */
+  getPlugins(): string[] {
+    return this._pluginRegistry.getPlugins();
   }
 
   // ---------------------------------------------------------------------------
@@ -704,6 +744,7 @@ export class StellarSplitClient {
     params: CreateInvoiceParams
   ): Promise<{ invoiceId: string; txHash: string }> {
     const startTime = Date.now();
+    params = this._pluginRegistry.runBeforeCall("createInvoice", params);
     try {
       if (this.config.payloadGuard) {
         validateInvoicePayload(params, this.config.payloadGuard);
@@ -735,11 +776,12 @@ export class StellarSplitClient {
       const durationMs = Date.now() - startTime;
       telemetry.recordMethod("createInvoice", true, durationMs);
       this._logAudit("createInvoice", { creator: params.creator, token: params.token, deadline: params.deadline }, true, durationMs);
-      return { invoiceId, txHash: result.txHash };
+      return this._pluginRegistry.runAfterCall("createInvoice", { invoiceId, txHash: result.txHash });
     } catch (error) {
       const durationMs = Date.now() - startTime;
       telemetry.recordMethod("createInvoice", false, durationMs);
       this._logAudit("createInvoice", { creator: params.creator, token: params.token, deadline: params.deadline }, false, durationMs);
+      this._pluginRegistry.runOnError("createInvoice", error);
       throw error;
     }
   }
@@ -869,6 +911,7 @@ export class StellarSplitClient {
    */
   async pay(params: PayParams): Promise<TxResult> {
     const startTime = Date.now();
+    params = this._pluginRegistry.runBeforeCall("pay", params);
     try {
       const operation = this.contract.call(
         "pay",
@@ -884,9 +927,10 @@ export class StellarSplitClient {
         : await withRetry(submitFn, this.config.maxRetries ?? 3, 1000);
       this._cache?.invalidate(params.invoiceId);
       telemetry.recordMethod("pay", true, Date.now() - startTime);
-      return { txHash: result.txHash };
+      return this._pluginRegistry.runAfterCall("pay", { txHash: result.txHash });
     } catch (error) {
       telemetry.recordMethod("pay", false, Date.now() - startTime);
+      this._pluginRegistry.runOnError("pay", error);
       throw error;
     }
   }
@@ -960,7 +1004,10 @@ export class StellarSplitClient {
       const cached = this._cache.get(invoiceId);
       if (cached) return cached;
     }
-    const invoice = await this._dedup.dedupe(invoiceId, () => this._fetchInvoice(invoiceId));
+    const fetcher = this._batcher
+      ? () => this._batcher!.getInvoice(invoiceId)
+      : () => this._fetchInvoice(invoiceId);
+    const invoice = await this._dedup.dedupe(invoiceId, fetcher);
     if (this._cache) {
       this._cache.set(invoiceId, invoice);
     }
@@ -2605,6 +2652,13 @@ export class StellarSplitClient {
    * @returns All payments merged and sorted by timestamp (ascending).
    */
   async getPaymentHistory(invoiceId: string): Promise<Payment[]> {
+    if (this._batcher) {
+      return this._batcher.getPaymentHistory(invoiceId);
+    }
+    return this._fetchPaymentHistory(invoiceId);
+  }
+
+  private async _fetchPaymentHistory(invoiceId: string): Promise<Payment[]> {
     const startTime = Date.now();
     try {
       const NUM_SHARDS = 8;
@@ -3279,6 +3333,11 @@ export class StellarSplitClient {
       parentInvoiceId: raw.parentInvoiceId ? String(raw.parentInvoiceId) : null,
       cloneDepth: Number(raw.cloneDepth ?? 0),
     };
+  }
+
+  /** Batcher-facing alias for _getInvoiceExt. */
+  private _fetchInvoiceExt(invoiceId: string): Promise<InvoiceExt> {
+    return this._getInvoiceExt(invoiceId);
   }
 
   /**
