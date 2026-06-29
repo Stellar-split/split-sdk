@@ -1174,23 +1174,32 @@ export class StellarSplitClient {
    */
   async getInvoice(
     invoiceId: string,
-    opts?: { retry?: PerMethodRetryOptions }
+    opts?: { retry?: PerMethodRetryOptions; dedupe?: boolean }
   ): Promise<Invoice> {
     return this._withCache("getInvoice", [invoiceId], async () => {
       const fetcher = this._batcher
         ? () => this._batcher!.getInvoice(invoiceId)
         : () => this._fetchInvoice(invoiceId);
 
+      const useDedupe = opts?.dedupe !== false;
       const effectiveRetry = opts?.retry ?? (this._retryOptions ? {} : undefined);
       if (this._retryOptions && effectiveRetry !== undefined) {
         return await executeWithRetry(
-          () => this._dedup.dedupe(invoiceId, fetcher),
+          () => useDedupe ? this._dedup.dedupe(invoiceId, fetcher) : fetcher(),
           this._retryOptions,
           opts?.retry
         );
       }
-      return await this._dedup.dedupe(invoiceId, fetcher);
+      return useDedupe ? this._dedup.dedupe(invoiceId, fetcher) : fetcher();
     });
+  }
+
+  /**
+   * Returns deduplication statistics for observability.
+   * @returns { deduped: number, total: number } — deduped is how many calls were short-circuited.
+   */
+  getDedupStats(): { deduped: number; total: number } {
+    return this._dedup.getDedupStats();
   }
 
   private async _fetchInvoice(invoiceId: string): Promise<Invoice> {
