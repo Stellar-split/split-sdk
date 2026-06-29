@@ -213,6 +213,7 @@ export type {
   InvoiceEventCallbacks,
   SimulateCreateInvoiceResult,
   SimulatePayResult,
+  PreviewTokenSwapResult,
   SDKHealth,
   FeeBreakdown,
   TokenInfo,
