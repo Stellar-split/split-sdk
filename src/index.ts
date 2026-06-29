@@ -14,6 +14,13 @@ export type {
   StellarSplitPlugin,
 } from "./client.js";
 
+export type {
+  TelemetryHooks,
+  TelemetryErrorContext,
+  TelemetryCallStartParams,
+  TelemetryCallEndParams,
+} from "./telemetryHooks.js";
+
 export { PluginRegistry, LoggingPlugin } from "./plugin.js";
 export type { SdkPlugin, SdkMethodName, PluginArgs, PluginResult } from "./plugin.js";
 

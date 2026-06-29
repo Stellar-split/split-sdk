@@ -19,6 +19,8 @@ import {
 import { signTransaction } from "./wallet.js";
 import { telemetry } from "./telemetry.js";
 import { exportInvoice } from "./export.js";
+import { TelemetryHookManager } from "./telemetryHooks.js";
+import type { TelemetryHooks } from "./telemetryHooks.js";
 import type { ExportFormat } from "./export.js";
 import { computePaymentValidation } from "./paymentValidator.js";
 import type { PaymentValidation } from "./paymentValidator.js";
@@ -133,7 +135,8 @@ import {
   QueueFailedError,
   SignerFailedError,
   NoSignerProvidedError,
-   ValidationError,
+  ValidationError,
+  StellarSplitError,
 } from "./errors.js";
 import { replayEvents } from "./events.js";
 import { subscribeToInvoice as _subscribeToInvoice } from "./stream.js";
@@ -403,6 +406,7 @@ export class StellarSplitClient {
    */
   private _effectiveRpcPoolSize = 0;
   private _batcher: BatchedRpcClient | null = null;
+  private _telemetryHookManager = new TelemetryHookManager();
 
   private get server(): SorobanRpc.Server {
     return (
@@ -618,6 +622,54 @@ export class StellarSplitClient {
     });
   }
 
+  /**
+   * Wraps an async operation with telemetry hooks (onCallStart, onCallEnd, onError).
+   * Fire-and-forget semantics: hook errors do not propagate to the caller.
+   */
+  private async _withTelemetry<T>(
+    method: string,
+    args: Record<string, unknown> | undefined,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const startTime = Date.now();
+    this._telemetryHookManager.fireOnCallStart({
+      method,
+      args,
+      timestamp: startTime,
+    });
+
+    try {
+      const result = await operation();
+      const durationMs = Date.now() - startTime;
+      this._telemetryHookManager.fireOnCallEnd({
+        method,
+        durationMs,
+        success: true,
+        timestamp: Date.now(),
+      });
+      return result;
+    } catch (error) {
+      const durationMs = Date.now() - startTime;
+      const stellarError = error as StellarSplitError;
+      
+      this._telemetryHookManager.fireOnError(stellarError, {
+        method,
+        args,
+        timestamp: Date.now(),
+      });
+      
+      this._telemetryHookManager.fireOnCallEnd({
+        method,
+        durationMs,
+        success: false,
+        error: stellarError,
+        timestamp: Date.now(),
+      });
+      
+      throw error;
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Plugin system
   // ---------------------------------------------------------------------------
@@ -648,6 +700,46 @@ export class StellarSplitClient {
   /** Return the names of all active middleware plugins. */
   getPlugins(): string[] {
     return this._pluginRegistry.getPlugins();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Telemetry hooks
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Register telemetry hooks for error and performance monitoring.
+   * 
+   * Allows application developers to integrate their own monitoring solutions
+   * (Sentry, Datadog, custom) without direct dependencies in the SDK.
+   * 
+   * All hooks are fire-and-forget — exceptions within hooks do not propagate to callers.
+   * 
+   * @param hooks - Object containing optional onError, onCallStart, and onCallEnd hooks.
+   * 
+   * @example
+   * ```typescript
+   * client.setTelemetryHooks({
+   *   onError: (error, context) => {
+   *     Sentry.captureException(error, { extra: context });
+   *   },
+   *   onCallStart: ({ method, timestamp }) => {
+   *     console.log(`Starting ${method} at ${timestamp}`);
+   *   },
+   *   onCallEnd: ({ method, durationMs, success }) => {
+   *     console.log(`${method} took ${durationMs}ms, success: ${success}`);
+   *   }
+   * });
+   * ```
+   */
+  setTelemetryHooks(hooks: TelemetryHooks): void {
+    this._telemetryHookManager.setHooks(hooks);
+  }
+
+  /**
+   * Remove all registered telemetry hooks.
+   */
+  clearTelemetryHooks(): void {
+    this._telemetryHookManager.clearHooks();
   }
 
   // ---------------------------------------------------------------------------
@@ -789,47 +881,49 @@ export class StellarSplitClient {
   async createInvoice(
     params: CreateInvoiceParams
   ): Promise<{ invoiceId: string; txHash: string }> {
-    const startTime = Date.now();
-    params = this._pluginRegistry.runBeforeCall("createInvoice", params);
-    try {
-      if (this.config.payloadGuard) {
-        validateInvoicePayload(params, this.config.payloadGuard);
+    return this._withTelemetry("createInvoice", { creator: params.creator, token: params.token, deadline: params.deadline }, async () => {
+      const startTime = Date.now();
+      params = this._pluginRegistry.runBeforeCall("createInvoice", params);
+      try {
+        if (this.config.payloadGuard) {
+          validateInvoicePayload(params, this.config.payloadGuard);
+        }
+
+        const gate = await this.checkNftGate(params.creator);
+        if (gate.gated && !gate.hasNft) {
+          throw new NftGateRequiredError(params.creator, gate.contractAddress);
+        }
+
+        const recipientAddresses = params.recipients.map((r) =>
+          nativeToScVal(r.address, { type: "address" })
+        );
+        const recipientAmounts = params.recipients.map((r) =>
+          nativeToScVal(r.amount, { type: "i128" })
+        );
+
+        const operation = this.contract.call(
+          "create_invoice",
+          nativeToScVal(params.creator, { type: "address" }),
+          xdr.ScVal.scvVec(recipientAddresses),
+          xdr.ScVal.scvVec(recipientAmounts),
+          nativeToScVal(params.token, { type: "address" }),
+          nativeToScVal(params.deadline, { type: "u64" })
+        );
+
+        const result = await this._submitTx(params.creator, operation);
+        const invoiceId = scValToNative(result.returnValue).toString();
+        const durationMs = Date.now() - startTime;
+        telemetry.recordMethod("createInvoice", true, durationMs);
+        this._logAudit("createInvoice", { creator: params.creator, token: params.token, deadline: params.deadline }, true, durationMs);
+        return this._pluginRegistry.runAfterCall("createInvoice", { invoiceId, txHash: result.txHash });
+      } catch (error) {
+        const durationMs = Date.now() - startTime;
+        telemetry.recordMethod("createInvoice", false, durationMs);
+        this._logAudit("createInvoice", { creator: params.creator, token: params.token, deadline: params.deadline }, false, durationMs);
+        this._pluginRegistry.runOnError("createInvoice", error);
+        throw error;
       }
-
-      const gate = await this.checkNftGate(params.creator);
-      if (gate.gated && !gate.hasNft) {
-        throw new NftGateRequiredError(params.creator, gate.contractAddress);
-      }
-
-      const recipientAddresses = params.recipients.map((r) =>
-        nativeToScVal(r.address, { type: "address" })
-      );
-      const recipientAmounts = params.recipients.map((r) =>
-        nativeToScVal(r.amount, { type: "i128" })
-      );
-
-      const operation = this.contract.call(
-        "create_invoice",
-        nativeToScVal(params.creator, { type: "address" }),
-        xdr.ScVal.scvVec(recipientAddresses),
-        xdr.ScVal.scvVec(recipientAmounts),
-        nativeToScVal(params.token, { type: "address" }),
-        nativeToScVal(params.deadline, { type: "u64" })
-      );
-
-      const result = await this._submitTx(params.creator, operation);
-      const invoiceId = scValToNative(result.returnValue).toString();
-      const durationMs = Date.now() - startTime;
-      telemetry.recordMethod("createInvoice", true, durationMs);
-      this._logAudit("createInvoice", { creator: params.creator, token: params.token, deadline: params.deadline }, true, durationMs);
-      return this._pluginRegistry.runAfterCall("createInvoice", { invoiceId, txHash: result.txHash });
-    } catch (error) {
-      const durationMs = Date.now() - startTime;
-      telemetry.recordMethod("createInvoice", false, durationMs);
-      this._logAudit("createInvoice", { creator: params.creator, token: params.token, deadline: params.deadline }, false, durationMs);
-      this._pluginRegistry.runOnError("createInvoice", error);
-      throw error;
-    }
+    });
   }
 
   /**

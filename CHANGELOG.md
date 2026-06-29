@@ -16,6 +16,18 @@ All notable changes to this project will be documented in this file.
   - Full TypeScript types exported: `InvoiceDiff`, `InvoiceDiffEntry`
   - Useful for cache invalidation, change tracking, and reconciliation
   - Complete documentation in `docs/INVOICE_DIFF.md`
+- **Add SDK telemetry hooks for error and performance monitoring (closes #362)**
+  - `client.setTelemetryHooks({ onError, onCallStart, onCallEnd })` accepts hook functions
+  - `onError(err: StellarSplitError, context)` called on every SDK error before it's thrown
+  - `onCallStart({ method, args, timestamp })` called before each RPC call
+  - `onCallEnd({ method, durationMs, success, error? })` called after each RPC call
+  - Hooks are fire-and-forget — hook exceptions do not propagate to SDK callers
+  - `client.clearTelemetryHooks()` removes all registered hooks
+  - TypeScript types for all hook signatures exported from the package root: `TelemetryHooks`, `TelemetryErrorContext`, `TelemetryCallStartParams`, `TelemetryCallEndParams`
+  - Enables integration with Sentry, Datadog, or custom monitoring solutions without SDK dependencies
+  - Zero performance overhead when hooks are not configured
+  - Full documentation in `docs/TELEMETRY_HOOKS.md`
+  - Example integrations in `examples/telemetry-hooks-example.ts`
 - Add SDK event subscription via polling with exponential backoff (closes #359)
   - `subscribeToInvoice(invoiceId, handler, intervalMs)` polls contract for events
   - Polls every 5 seconds initially; backs off to 30 seconds after 3 unchanged polls
