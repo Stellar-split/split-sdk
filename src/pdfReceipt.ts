@@ -24,7 +24,7 @@ interface ReceiptInput {
 export function generateReceiptPdf(
   invoice: Invoice,
   payment: Payment,
-  proofHash: string
+  proofHash: string,
 ): Uint8Array {
   const input: ReceiptInput = { invoice, payment, proofHash };
   const pdf = new PdfBuilder();
@@ -104,7 +104,9 @@ class PdfBuilder {
   }
 
   text(content: string, x: number, y: number): void {
-    this.textContent.push(`BT /${this.font} ${this.fontSize} Tf ${x} ${y} Td (${this._escapePdfString(content)}) Tj ET`);
+    this.textContent.push(
+      `BT /${this.font} ${this.fontSize} Tf ${x} ${y} Td (${this._escapePdfString(content)}) Tj ET`,
+    );
   }
 
   private _escapePdfString(str: string): string {
@@ -158,26 +160,32 @@ class PdfBuilder {
         objContent.copy(pdf, offset);
         offset += objContent.length;
       } else {
-        const objContent = Buffer.from(`<<${this._dictToString(objects[i] as any)}>>\nendobj\n`, "utf8");
+        objects[i] as Record<string, string>;
         objContent.copy(pdf, offset);
         offset += objContent.length;
       }
     }
 
     const xrefOffset = offset;
-    const xrefHeader = Buffer.from(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`, "utf8");
+    const xrefHeader = Buffer.from(
+      `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`,
+      "utf8",
+    );
     xrefHeader.copy(pdf, offset);
     offset += xrefHeader.length;
 
     for (const xrefPos of this.xRefOffsets) {
-      const xrefLine = Buffer.from(`${String(xrefPos).padStart(10, "0")} 00000 n \n`, "utf8");
+      const xrefLine = Buffer.from(
+        `${String(xrefPos).padStart(10, "0")} 00000 n \n`,
+        "utf8",
+      );
       xrefLine.copy(pdf, offset);
       offset += xrefLine.length;
     }
 
     const trailer = Buffer.from(
       `trailer\n<<\n/Size ${objects.length + 1}\n/Root 1 0 R\n>>\nstartxref\n${xrefOffset}\n%%EOF`,
-      "utf8"
+      "utf8",
     );
     trailer.copy(pdf, offset);
     offset += trailer.length;

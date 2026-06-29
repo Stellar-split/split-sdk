@@ -109,7 +109,12 @@ import type {
   ScheduledReleaseCountdown,
   CompletionProof,
 } from "./types.js";
-import type { DIContainer, IRPCClient, ICacheStore, IWalletAdapter } from "./container.js";
+import type {
+  DIContainer,
+  IRPCClient,
+  ICacheStore,
+  IWalletAdapter,
+} from "./container.js";
 import {
   CircularForwardChainError,
   CoCreatorApprovalNotRequiredError,
@@ -154,7 +159,10 @@ import type { InvoiceSnapshot } from "./snapshot.js";
 import { SimpleCache } from "./cache.js";
 import { validateOrThrow } from "./configValidator.js";
 import { extendStorageTtl, buildInvoiceDataLedgerKey } from "./ttlExtension.js";
-import type { TtlExtensionOptions, TtlExtensionResult } from "./ttlExtension.js";
+import type {
+  TtlExtensionOptions,
+  TtlExtensionResult,
+} from "./ttlExtension.js";
 import { RateLimiter } from "./rateLimiter.js";
 import { DegradationManager } from "./degradation.js";
 import { AuditLogger } from "./auditLogger.js";
@@ -168,7 +176,10 @@ import type { IdempotencyConfig } from "./idempotency.js";
 import { validateInvoicePayload } from "./payloadGuard.js";
 import type { PayloadGuardConfig } from "./payloadGuard.js";
 import { HorizonFallbackReader } from "./horizonFallback.js";
-import type { NormalizedAccount, NormalizedBalance } from "./horizonFallback.js";
+import type {
+  NormalizedAccount,
+  NormalizedBalance,
+} from "./horizonFallback.js";
 import { FallbackChain } from "./fallbackChain.js";
 import {
   createClaimableRefund,
@@ -354,7 +365,14 @@ function _computeCountdown(target: number): ScheduledReleaseCountdown {
   const now = Math.floor(Date.now() / 1000);
   const diff = target - now;
   if (diff <= 0) {
-    return { total_seconds: 0, days: 0, hours: 0, minutes: 0, seconds: 0, overdue: true };
+    return {
+      total_seconds: 0,
+      days: 0,
+      hours: 0,
+      minutes: 0,
+      seconds: 0,
+      overdue: true,
+    };
   }
   return {
     total_seconds: diff,
@@ -373,7 +391,9 @@ function _computeCountdown(target: number): ScheduledReleaseCountdown {
  * @param invoice - Invoice object from the contract.
  * @returns ScheduledReleaseCountdown or null.
  */
-export function getScheduledReleaseCountdown(invoice: Invoice): ScheduledReleaseCountdown | null {
+export function getScheduledReleaseCountdown(
+  invoice: Invoice,
+): ScheduledReleaseCountdown | null {
   const ts =
     (invoice as { scheduled_release_at?: number }).scheduled_release_at ??
     invoice.scheduledReleaseDate;
@@ -388,8 +408,16 @@ export function getScheduledReleaseCountdown(invoice: Invoice): ScheduledRelease
  * @param proof - CompletionProof from the contract's get_completion_proof call.
  * @returns { valid: boolean, reason?: string }
  */
-export function verifyCompletionProof(proof: CompletionProof): { valid: boolean; reason?: string } {
-  if (!proof.invoiceId || !proof.releasedBy || !proof.releasedAt || !proof.cert_hash) {
+export function verifyCompletionProof(proof: CompletionProof): {
+  valid: boolean;
+  reason?: string;
+} {
+  if (
+    !proof.invoiceId ||
+    !proof.releasedBy ||
+    !proof.releasedAt ||
+    !proof.cert_hash
+  ) {
     return { valid: false, reason: "Missing required proof fields" };
   }
   const data = `${proof.invoiceId}${proof.releasedBy}${proof.releasedAt}${proof.totalAmount.toString()}`;
@@ -397,7 +425,7 @@ export function verifyCompletionProof(proof: CompletionProof): { valid: boolean;
   const buffer = encoder.encode(data);
   let hash = 0;
   for (let i = 0; i < buffer.length; i++) {
-    hash = ((hash << 5) - hash) + (buffer[i] ?? 0);
+    hash = (hash << 5) - hash + (buffer[i] ?? 0);
     hash = hash & hash;
   }
   const computed = Math.abs(hash).toString(16).padStart(64, "0").slice(0, 64);
@@ -525,12 +553,15 @@ export class StellarSplitClient {
   constructor(config: StellarSplitClientConfig) {
     validateOrThrow(config);
     this.config = config;
-    const primaryUrl = Array.isArray(config.rpcUrl) ? config.rpcUrl[0]! : config.rpcUrl;
+    const primaryUrl = Array.isArray(config.rpcUrl)
+      ? config.rpcUrl[0]!
+      : config.rpcUrl;
 
     // Injectable RpcClient (Issue #3): config.rpcClient takes priority over DI container.
     this._injectedRpcClient = config.rpcClient ?? null;
     this._rpcClient = config.container?.getRPCClient() ?? null;
-    this._adapter = config.container?.getWalletAdapter() ?? config.adapter ?? null;
+    this._adapter =
+      config.container?.getWalletAdapter() ?? config.adapter ?? null;
 
     // Per-method timeout manager (Issue #1)
     if (config.timeout !== undefined) {
@@ -540,7 +571,11 @@ export class StellarSplitClient {
       allowHttp: primaryUrl.startsWith("http://"),
     });
 
-    if (!this._rpcClient && Array.isArray(config.rpcUrl) && config.rpcUrl.length > 1) {
+    if (
+      !this._rpcClient &&
+      Array.isArray(config.rpcUrl) &&
+      config.rpcUrl.length > 1
+    ) {
       this._standby = new WarmStandby(config.rpcUrl);
       this._standby.start();
     }
@@ -548,11 +583,12 @@ export class StellarSplitClient {
     // Connection pool (issue #360). Only enabled on single-endpoint configs
     // when an external RPC client hasn't been injected via the DI container.
     const wantsPool =
-      !this._rpcClient &&
-      !this._standby &&
-      (config.rpcPoolSize ?? 0) >= 2;
+      !this._rpcClient && !this._standby && (config.rpcPoolSize ?? 0) >= 2;
     if (wantsPool) {
-      this._effectiveRpcPoolSize = Math.min(Math.max(config.rpcPoolSize!, 1), 5);
+      this._effectiveRpcPoolSize = Math.min(
+        Math.max(config.rpcPoolSize!, 1),
+        5,
+      );
       this._pool = new ConnectionPool({
         rpcUrl: primaryUrl,
         poolSize: this._effectiveRpcPoolSize,
@@ -571,12 +607,18 @@ export class StellarSplitClient {
     }
 
     if (config.signingKeypair) {
-      addRequestInterceptor(createRequestSigningInterceptor(config.signingKeypair));
+      addRequestInterceptor(
+        createRequestSigningInterceptor(config.signingKeypair),
+      );
     }
 
     if (config.compression?.enabled) {
-      addRequestInterceptor(createCompressionRequestInterceptor(config.compression));
-      addResponseInterceptor(createCompressionResponseInterceptor(config.compression));
+      addRequestInterceptor(
+        createCompressionRequestInterceptor(config.compression),
+      );
+      addResponseInterceptor(
+        createCompressionResponseInterceptor(config.compression),
+      );
     }
 
     if (config.cache && !config.container?.getCacheStore()) {
@@ -622,9 +664,14 @@ export class StellarSplitClient {
         this._doHealthCheck(start),
         new Promise<never>((_, reject) =>
           setTimeout(
-            () => reject(new HealthCheckTimeoutError("Health check timed out after 5000ms")),
-            5000
-          )
+            () =>
+              reject(
+                new HealthCheckTimeoutError(
+                  "Health check timed out after 5000ms",
+                ),
+              ),
+            5000,
+          ),
         ),
       ]);
     } catch (e: any) {
@@ -702,7 +749,7 @@ export class StellarSplitClient {
    */
   public invalidateCache(method?: string, args?: any[]): void {
     if (this._cache) {
-      if (typeof (this._cache as any).invalidate === 'function') {
+      if (typeof (this._cache as any).invalidate === "function") {
         (this._cache as any).invalidate(method, args);
       }
     }
@@ -713,13 +760,18 @@ export class StellarSplitClient {
    * @returns Cache stats including hits, misses, size, and keys.
    */
   public getCacheStats(): import("./cache.js").CacheStats | null {
-    if (this._cache && typeof (this._cache as any).getStats === 'function') {
+    if (this._cache && typeof (this._cache as any).getStats === "function") {
       return (this._cache as any).getStats();
     }
     return null;
   }
 
-  private _logAudit(method: string, params: Record<string, unknown>, success: boolean, durationMs: number): void {
+  private _logAudit(
+    method: string,
+    params: Record<string, unknown>,
+    success: boolean,
+    durationMs: number,
+  ): void {
     if (!this._auditLogger) return;
     this._auditLogger.log({
       timestamp: Date.now(),
@@ -739,7 +791,7 @@ export class StellarSplitClient {
     method: string,
     args: Record<string, unknown> | undefined,
     operation: () => Promise<T>,
-    opts?: { traceId?: string; timeout?: number }
+    opts?: { traceId?: string; timeout?: number },
   ): Promise<T> {
     const traceId = opts?.traceId ?? this._traceIdManager.generate();
     const startTime = Date.now();
@@ -833,14 +885,14 @@ export class StellarSplitClient {
 
   /**
    * Register telemetry hooks for error and performance monitoring.
-   * 
+   *
    * Allows application developers to integrate their own monitoring solutions
    * (Sentry, Datadog, custom) without direct dependencies in the SDK.
-   * 
+   *
    * All hooks are fire-and-forget — exceptions within hooks do not propagate to callers.
-   * 
+   *
    * @param hooks - Object containing optional onError, onCallStart, and onCallEnd hooks.
-   * 
+   *
    * @example
    * ```typescript
    * client.setTelemetryHooks({
@@ -909,7 +961,7 @@ export class StellarSplitClient {
     try {
       const operation = this.contract.call(
         "dispute_invoice",
-        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
       );
       // Assuming the creator is the one calling dispute
       // You may want to pass the creator as a parameter if needed
@@ -935,14 +987,18 @@ export class StellarSplitClient {
         "submit_arbiter_vote",
         nativeToScVal(BigInt(vote.invoiceId), { type: "u64" }),
         nativeToScVal(vote.arbiter, { type: "address" }),
-        nativeToScVal(vote.approve, { type: "bool" })
+        nativeToScVal(vote.approve, { type: "bool" }),
       );
       const result = await this._submitTx(vote.arbiter, operation);
       const disputeId = scValToNative(result.returnValue).toString();
       telemetry.recordMethod("submitArbiterVote", true, Date.now() - startTime);
       return { disputeId, txHash: result.txHash };
     } catch (error) {
-      telemetry.recordMethod("submitArbiterVote", false, Date.now() - startTime);
+      telemetry.recordMethod(
+        "submitArbiterVote",
+        false,
+        Date.now() - startTime,
+      );
       throw error;
     }
   }
@@ -953,12 +1009,15 @@ export class StellarSplitClient {
    * @param arbiter - The Stellar address of the arbiter (must sign).
    * @returns The dispute ID and transaction hash.
    */
-  async resolveDispute(invoiceId: string, arbiter: string): Promise<DisputeResult> {
+  async resolveDispute(
+    invoiceId: string,
+    arbiter: string,
+  ): Promise<DisputeResult> {
     const startTime = Date.now();
     try {
       const operation = this.contract.call(
         "resolve_dispute",
-        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
       );
       const result = await this._submitTx(arbiter, operation);
       const disputeId = scValToNative(result.returnValue).toString();
@@ -980,7 +1039,7 @@ export class StellarSplitClient {
     try {
       const operation = this.contract.call(
         "dispute_invoice",
-        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
       );
       const result = await this._submitTx(this.config.contractId, operation);
       const disputeId = scValToNative(result.returnValue).toString();
@@ -1003,20 +1062,36 @@ export class StellarSplitClient {
       try {
         const operation = this.contract.call(
           "get_dispute_status",
-          nativeToScVal(BigInt(invoiceId), { type: "u64" })
+          nativeToScVal(BigInt(invoiceId), { type: "u64" }),
         );
-        const raw = await this._simulateView(operation) as Record<string, unknown>;
+        const raw = (await this._simulateView(operation)) as Record<
+          string,
+          unknown
+        >;
         const status: DisputeStatus = {
           invoiceId,
           disputed: Boolean(raw.disputed),
           arbiter: raw.arbiter as string,
           resolved: Boolean(raw.resolved),
-          resolution: raw.resolution === "approved" ? "approved" : raw.resolution === "rejected" ? "rejected" : null,
+          resolution:
+            raw.resolution === "approved"
+              ? "approved"
+              : raw.resolution === "rejected"
+                ? "rejected"
+                : null,
         };
-        telemetry.recordMethod("getDisputeStatus", true, Date.now() - startTime);
+        telemetry.recordMethod(
+          "getDisputeStatus",
+          true,
+          Date.now() - startTime,
+        );
         return status;
       } catch (error) {
-        telemetry.recordMethod("getDisputeStatus", false, Date.now() - startTime);
+        telemetry.recordMethod(
+          "getDisputeStatus",
+          false,
+          Date.now() - startTime,
+        );
         throw error;
       }
     });
@@ -1032,51 +1107,83 @@ export class StellarSplitClient {
    * @returns The new invoice ID and the transaction hash.
    */
   async createInvoice(
-    params: CreateInvoiceParams
+    params: CreateInvoiceParams,
   ): Promise<{ invoiceId: string; txHash: string }> {
-    return this._withTelemetry("createInvoice", { creator: params.creator, token: params.token, deadline: params.deadline }, async () => {
-      const startTime = Date.now();
-      params = this._pluginRegistry.runBeforeCall("createInvoice", params);
-      try {
-        if (this.config.payloadGuard) {
-          validateInvoicePayload(params, this.config.payloadGuard);
+    return this._withTelemetry(
+      "createInvoice",
+      {
+        creator: params.creator,
+        token: params.token,
+        deadline: params.deadline,
+      },
+      async () => {
+        const startTime = Date.now();
+        params = this._pluginRegistry.runBeforeCall("createInvoice", params);
+        try {
+          if (this.config.payloadGuard) {
+            validateInvoicePayload(params, this.config.payloadGuard);
+          }
+
+          const gate = await this.checkNftGate(params.creator);
+          if (gate.gated && !gate.hasNft) {
+            throw new NftGateRequiredError(
+              params.creator,
+              gate.contractAddress,
+            );
+          }
+
+          const recipientAddresses = params.recipients.map((r) =>
+            nativeToScVal(r.address, { type: "address" }),
+          );
+          const recipientAmounts = params.recipients.map((r) =>
+            nativeToScVal(r.amount, { type: "i128" }),
+          );
+
+          const operation = this.contract.call(
+            "create_invoice",
+            nativeToScVal(params.creator, { type: "address" }),
+            xdr.ScVal.scvVec(recipientAddresses),
+            xdr.ScVal.scvVec(recipientAmounts),
+            nativeToScVal(params.token, { type: "address" }),
+            nativeToScVal(params.deadline, { type: "u64" }),
+          );
+
+          const result = await this._submitTx(params.creator, operation);
+          const invoiceId = scValToNative(result.returnValue).toString();
+          const durationMs = Date.now() - startTime;
+          telemetry.recordMethod("createInvoice", true, durationMs);
+          this._logAudit(
+            "createInvoice",
+            {
+              creator: params.creator,
+              token: params.token,
+              deadline: params.deadline,
+            },
+            true,
+            durationMs,
+          );
+          return this._pluginRegistry.runAfterCall("createInvoice", {
+            invoiceId,
+            txHash: result.txHash,
+          });
+        } catch (error) {
+          const durationMs = Date.now() - startTime;
+          telemetry.recordMethod("createInvoice", false, durationMs);
+          this._logAudit(
+            "createInvoice",
+            {
+              creator: params.creator,
+              token: params.token,
+              deadline: params.deadline,
+            },
+            false,
+            durationMs,
+          );
+          this._pluginRegistry.runOnError("createInvoice", error);
+          throw error;
         }
-
-        const gate = await this.checkNftGate(params.creator);
-        if (gate.gated && !gate.hasNft) {
-          throw new NftGateRequiredError(params.creator, gate.contractAddress);
-        }
-
-        const recipientAddresses = params.recipients.map((r) =>
-          nativeToScVal(r.address, { type: "address" })
-        );
-        const recipientAmounts = params.recipients.map((r) =>
-          nativeToScVal(r.amount, { type: "i128" })
-        );
-
-        const operation = this.contract.call(
-          "create_invoice",
-          nativeToScVal(params.creator, { type: "address" }),
-          xdr.ScVal.scvVec(recipientAddresses),
-          xdr.ScVal.scvVec(recipientAmounts),
-          nativeToScVal(params.token, { type: "address" }),
-          nativeToScVal(params.deadline, { type: "u64" })
-        );
-
-        const result = await this._submitTx(params.creator, operation);
-        const invoiceId = scValToNative(result.returnValue).toString();
-        const durationMs = Date.now() - startTime;
-        telemetry.recordMethod("createInvoice", true, durationMs);
-        this._logAudit("createInvoice", { creator: params.creator, token: params.token, deadline: params.deadline }, true, durationMs);
-        return this._pluginRegistry.runAfterCall("createInvoice", { invoiceId, txHash: result.txHash });
-      } catch (error) {
-        const durationMs = Date.now() - startTime;
-        telemetry.recordMethod("createInvoice", false, durationMs);
-        this._logAudit("createInvoice", { creator: params.creator, token: params.token, deadline: params.deadline }, false, durationMs);
-        this._pluginRegistry.runOnError("createInvoice", error);
-        throw error;
-      }
-    });
+      },
+    );
   }
 
   /**
@@ -1093,7 +1200,7 @@ export class StellarSplitClient {
    */
   async cloneInvoice(
     sourceId: string,
-    overrides: CloneOverrides = {}
+    overrides: CloneOverrides = {},
   ): Promise<string> {
     const startTime = Date.now();
     const sourceInvoice = await this.getInvoice(sourceId);
@@ -1104,8 +1211,10 @@ export class StellarSplitClient {
       mapEntries.push(
         new xdr.ScMapEntry({
           key: nativeToScVal("new_deadline", { type: "symbol" }) as xdr.ScVal,
-          val: nativeToScVal(overrides.newDeadline, { type: "u64" }) as xdr.ScVal,
-        })
+          val: nativeToScVal(overrides.newDeadline, {
+            type: "u64",
+          }) as xdr.ScVal,
+        }),
       );
     }
     if (overrides.newAmounts !== undefined) {
@@ -1113,9 +1222,9 @@ export class StellarSplitClient {
         new xdr.ScMapEntry({
           key: nativeToScVal("new_amounts", { type: "symbol" }) as xdr.ScVal,
           val: xdr.ScVal.scvVec(
-            overrides.newAmounts.map((a) => nativeToScVal(a, { type: "i128" }))
+            overrides.newAmounts.map((a) => nativeToScVal(a, { type: "i128" })),
           ) as xdr.ScVal,
-        })
+        }),
       );
     }
     if (overrides.newRecipients !== undefined) {
@@ -1123,9 +1232,11 @@ export class StellarSplitClient {
         new xdr.ScMapEntry({
           key: nativeToScVal("new_recipients", { type: "symbol" }) as xdr.ScVal,
           val: xdr.ScVal.scvVec(
-            overrides.newRecipients.map((r) => nativeToScVal(r, { type: "address" }))
+            overrides.newRecipients.map((r) =>
+              nativeToScVal(r, { type: "address" }),
+            ),
           ) as xdr.ScVal,
-        })
+        }),
       );
     }
     // new_overflow_behavior is a Vec<OverflowBehavior> on the contract side (0 or 1
@@ -1133,13 +1244,19 @@ export class StellarSplitClient {
     // #[contracttype] struct, so the key is always sent.
     mapEntries.push(
       new xdr.ScMapEntry({
-        key: nativeToScVal("new_overflow_behavior", { type: "symbol" }) as xdr.ScVal,
+        key: nativeToScVal("new_overflow_behavior", {
+          type: "symbol",
+        }) as xdr.ScVal,
         val: xdr.ScVal.scvVec(
           overrides.newOverflowBehavior !== undefined
-            ? [nativeToScVal(overrides.newOverflowBehavior, { type: "symbol" }) as xdr.ScVal]
-            : []
+            ? [
+                nativeToScVal(overrides.newOverflowBehavior, {
+                  type: "symbol",
+                }) as xdr.ScVal,
+              ]
+            : [],
         ) as xdr.ScVal,
-      })
+      }),
     );
 
     const args: xdr.ScVal[] = [
@@ -1163,8 +1280,10 @@ export class StellarSplitClient {
 
       if (this._cache) {
         const cloneDepth =
-          typeof (sourceInvoice as unknown as Record<string, unknown>).cloneDepth === "number"
-            ? ((sourceInvoice as unknown as Record<string, unknown>).cloneDepth as number) + 1
+          typeof (sourceInvoice as unknown as Record<string, unknown>)
+            .cloneDepth === "number"
+            ? ((sourceInvoice as unknown as Record<string, unknown>)
+                .cloneDepth as number) + 1
             : 1;
 
         const optimisticInvoice: Invoice = {
@@ -1211,7 +1330,7 @@ export class StellarSplitClient {
         nativeToScVal(params.payer, { type: "address" }),
         nativeToScVal(BigInt(params.invoiceId), { type: "u64" }),
         nativeToScVal(params.amount, { type: "i128" }),
-        nativeToScVal(params.donateOnFailure ?? false, { type: "bool" })
+        nativeToScVal(params.donateOnFailure ?? false, { type: "bool" }),
       );
 
       const submitFn = () => this._submitTx(params.payer, operation);
@@ -1220,7 +1339,9 @@ export class StellarSplitClient {
         : await withRetry(submitFn, this.config.maxRetries ?? 3, 1000);
       this._cache?.invalidate(params.invoiceId);
       telemetry.recordMethod("pay", true, Date.now() - startTime);
-      return this._pluginRegistry.runAfterCall("pay", { txHash: result.txHash });
+      return this._pluginRegistry.runAfterCall("pay", {
+        txHash: result.txHash,
+      });
     } catch (error) {
       telemetry.recordMethod("pay", false, Date.now() - startTime);
       this._pluginRegistry.runOnError("pay", error);
@@ -1235,7 +1356,7 @@ export class StellarSplitClient {
    * @returns All created invoice IDs and the transaction hash
    */
   async batchCreateInvoices(
-    params: CreateInvoiceParams[]
+    params: CreateInvoiceParams[],
   ): Promise<{ invoiceIds: string[]; txHash: string }> {
     if (params.length === 0 || params.length > 5) {
       throw new InvalidBatchSizeError("1-5 items", params.length);
@@ -1243,10 +1364,10 @@ export class StellarSplitClient {
 
     const invoiceParams = params.map((p) => {
       const recipientAddresses = p.recipients.map((r) =>
-        nativeToScVal(r.address, { type: "address" })
+        nativeToScVal(r.address, { type: "address" }),
       );
       const recipientAmounts = p.recipients.map((r) =>
-        nativeToScVal(r.amount, { type: "i128" })
+        nativeToScVal(r.amount, { type: "i128" }),
       );
 
       const mapEntries: xdr.ScMapEntry[] = [
@@ -1277,23 +1398,28 @@ export class StellarSplitClient {
 
     const operation = this.contract.call(
       "create_batch",
-      xdr.ScVal.scvVec(invoiceParams)
+      xdr.ScVal.scvVec(invoiceParams),
     );
 
     const firstParam = params[0];
     if (!firstParam) throw new InvalidBatchSizeError("non-empty array", 0);
     const result = await this._submitTx(firstParam.creator, operation);
-    const invoiceIds = (scValToNative(result.returnValue) as (string | number)[]).map(
-      (id) => id.toString()
-    );
+    const invoiceIds = (
+      scValToNative(result.returnValue) as (string | number)[]
+    ).map((id) => id.toString());
     return { invoiceIds, txHash: result.txHash };
   }
 
   /**
    * Helper to execute a fetcher with cache support.
    */
-  private async _withCache<T>(methodName: string, args: any[], fetcher: () => Promise<T>): Promise<T> {
-    const isSimpleCache = this._cache && typeof (this._cache as any).getStats === 'function';
+  private async _withCache<T>(
+    methodName: string,
+    args: any[],
+    fetcher: () => Promise<T>,
+  ): Promise<T> {
+    const isSimpleCache =
+      this._cache && typeof (this._cache as any).getStats === "function";
 
     if (isSimpleCache) {
       const key = `${methodName}:${JSON.stringify(args)}`;
@@ -1321,8 +1447,12 @@ export class StellarSplitClient {
    */
   async getInvoice(
     invoiceId: string,
-    opts?: { retry?: PerMethodRetryOptions; dedupe?: boolean }
-    opts?: { retry?: PerMethodRetryOptions; traceId?: string; timeout?: number }
+    opts?: {
+      retry?: PerMethodRetryOptions;
+      dedupe?: boolean;
+      traceId?: string;
+      timeout?: number;
+    },
   ): Promise<Invoice> {
     return this._withCache("getInvoice", [invoiceId], async () => {
       const fetcher = this._batcher
@@ -1330,12 +1460,14 @@ export class StellarSplitClient {
         : () => this._fetchInvoice(invoiceId, opts?.traceId);
 
       const useDedupe = opts?.dedupe !== false;
-      const effectiveRetry = opts?.retry ?? (this._retryOptions ? {} : undefined);
+      const effectiveRetry =
+        opts?.retry ?? (this._retryOptions ? {} : undefined);
       if (this._retryOptions && effectiveRetry !== undefined) {
         return await executeWithRetry(
-          () => useDedupe ? this._dedup.dedupe(invoiceId, fetcher) : fetcher(),
+          () =>
+            useDedupe ? this._dedup.dedupe(invoiceId, fetcher) : fetcher(),
           this._retryOptions,
-          opts?.retry
+          opts?.retry,
         );
       }
       return useDedupe ? this._dedup.dedupe(invoiceId, fetcher) : fetcher();
@@ -1350,21 +1482,35 @@ export class StellarSplitClient {
     return this._dedup.getDedupStats();
   }
 
-  private async _fetchInvoice(invoiceId: string): Promise<Invoice> {
-  private async _fetchInvoice(invoiceId: string, traceId?: string): Promise<Invoice> {
+  private async _fetchInvoice(
+    invoiceId: string,
+    traceId?: string,
+  ): Promise<Invoice> {
     const startTime = Date.now();
-    const req = { method: "getInvoice", params: [invoiceId], headers: traceId ? { "X-Trace-Id": traceId } : undefined };
+    const req = {
+      method: "getInvoice",
+      params: [invoiceId],
+      headers: traceId ? { "X-Trace-Id": traceId } : undefined,
+    };
     await runRequestInterceptors(req);
 
     const fetchFn = async (): Promise<Invoice> => {
       const operation = this.contract.call(
         "get_invoice",
-        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
       );
 
-      const account = await this.server.getAccount(this.config.contractId).catch(() => null);
+      const account = await this.server
+        .getAccount(this.config.contractId)
+        .catch(() => null);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const sourceAccount = account ?? ({ accountId: () => this.config.contractId, sequenceNumber: () => "0", incrementSequenceNumber: () => { } } as any);
+      const sourceAccount =
+        account ??
+        ({
+          accountId: () => this.config.contractId,
+          sequenceNumber: () => "0",
+          incrementSequenceNumber: () => {},
+        } as any);
 
       const tx = new TransactionBuilder(sourceAccount, {
         fee: BASE_FEE,
@@ -1379,7 +1525,9 @@ export class StellarSplitClient {
         throw parseSorobanError(simResult.error, invoiceId);
       }
 
-      const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
+      const returnVal = (
+        simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse
+      ).result?.retval;
       if (!returnVal) throw new InvoiceNotFoundError(invoiceId);
 
       const invoice = this._parseInvoice(invoiceId, scValToNative(returnVal));
@@ -1397,13 +1545,21 @@ export class StellarSplitClient {
       }
       telemetry.recordMethod("getInvoice", true, Date.now() - startTime);
       const durationMs = Date.now() - startTime;
-      await runResponseInterceptors({ method: "getInvoice", result: invoice, durationMs });
+      await runResponseInterceptors({
+        method: "getInvoice",
+        result: invoice,
+        durationMs,
+      });
       recordCall(true);
       return invoice;
     } catch (error) {
       telemetry.recordMethod("getInvoice", false, Date.now() - startTime);
       const durationMs = Date.now() - startTime;
-      await runResponseInterceptors({ method: "getInvoice", result: undefined, durationMs });
+      await runResponseInterceptors({
+        method: "getInvoice",
+        result: undefined,
+        durationMs,
+      });
       recordCall(false);
       throw error;
     }
@@ -1413,7 +1569,9 @@ export class StellarSplitClient {
    * Check invoice compliance against built-in and configured rules.
    * @param invoiceId - Invoice ID to validate
    */
-  async checkCompliance(invoiceId: string): Promise<import("./compliance.js").ComplianceReport> {
+  async checkCompliance(
+    invoiceId: string,
+  ): Promise<import("./compliance.js").ComplianceReport> {
     const invoice = await this.getInvoice(invoiceId);
     const { evaluateInvoice, defaultRules } = await import("./compliance.js");
     const rules = this.config.complianceRules ?? defaultRules();
@@ -1443,20 +1601,32 @@ export class StellarSplitClient {
    * @param proof - CompletionProof object from the contract.
    * @returns { valid: boolean, reason?: string }
    */
-  verifyCompletionProof(proof: CompletionProof): { valid: boolean; reason?: string } {
+  verifyCompletionProof(proof: CompletionProof): {
+    valid: boolean;
+    reason?: string;
+  } {
     return verifyCompletionProof(proof);
   }
 
   /**
    * Reconcile an invoice's reported funded amount with its payment records and historical payment events.
    */
-  async reconcilePayments(invoiceId: string): Promise<PaymentReconciliationReport> {
+  async reconcilePayments(
+    invoiceId: string,
+  ): Promise<PaymentReconciliationReport> {
     const startTime = Date.now();
     try {
       const invoice = await this.getInvoice(invoiceId);
-      const events = await replayEvents(this.server, this.config.contractId, 0, Number.MAX_SAFE_INTEGER);
+      const events = await replayEvents(
+        this.server,
+        this.config.contractId,
+        0,
+        Number.MAX_SAFE_INTEGER,
+      );
       const paymentEvents = events
-        .filter((event) => event.invoiceId === invoiceId && event.type === "payment")
+        .filter(
+          (event) => event.invoiceId === invoiceId && event.type === "payment",
+        )
         .map((event) => {
           const raw = event.data as Record<string, unknown>;
           const rawAmount = raw.amount;
@@ -1481,11 +1651,18 @@ export class StellarSplitClient {
           } as PaymentEventRecord;
         });
 
-      const paymentRecordsTotal = invoice.payments.reduce((sum, payment) => sum + payment.amount, 0n);
-      const paymentEventsTotal = paymentEvents.reduce((sum, event) => sum + event.amount, 0n);
+      const paymentRecordsTotal = invoice.payments.reduce(
+        (sum, payment) => sum + payment.amount,
+        0n,
+      );
+      const paymentEventsTotal = paymentEvents.reduce(
+        (sum, event) => sum + event.amount,
+        0n,
+      );
       const fundedDiscrepancy = invoice.funded - paymentRecordsTotal;
       const recordsMatchEvents = paymentRecordsTotal === paymentEventsTotal;
-      const consistent = invoice.funded === paymentEventsTotal && recordsMatchEvents;
+      const consistent =
+        invoice.funded === paymentEventsTotal && recordsMatchEvents;
 
       const report: PaymentReconciliationReport = {
         invoiceId,
@@ -1502,7 +1679,11 @@ export class StellarSplitClient {
       telemetry.recordMethod("reconcilePayments", true, Date.now() - startTime);
       return report;
     } catch (error) {
-      telemetry.recordMethod("reconcilePayments", false, Date.now() - startTime);
+      telemetry.recordMethod(
+        "reconcilePayments",
+        false,
+        Date.now() - startTime,
+      );
       throw error;
     }
   }
@@ -1521,7 +1702,7 @@ export class StellarSplitClient {
       const receiptId = await this._buildReceiptId(invoice);
       const totalAmount = invoice.payments.reduce(
         (sum, payment) => sum + payment.amount,
-        0n
+        0n,
       );
       const receipt: InvoiceReceipt = {
         receiptId,
@@ -1559,7 +1740,9 @@ export class StellarSplitClient {
    * @returns Results in the same order as the input IDs.
    */
   async resolveBatch(ids: string[]): Promise<BatchResolveResult[]> {
-    const settled = await Promise.allSettled(ids.map((id) => this.getInvoice(id)));
+    const settled = await Promise.allSettled(
+      ids.map((id) => this.getInvoice(id)),
+    );
     return settled.map((result, i) => {
       const invoiceId = ids[i]!;
       if (result.status === "fulfilled") {
@@ -1568,12 +1751,18 @@ export class StellarSplitClient {
       return {
         invoiceId,
         success: false as const,
-        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        error:
+          result.reason instanceof Error
+            ? result.reason.message
+            : String(result.reason),
       };
     });
   }
 
-  private _nftGateCache = new Map<string, { timestamp: number; result: NftGateResult }>();
+  private _nftGateCache = new Map<
+    string,
+    { timestamp: number; result: NftGateResult }
+  >();
 
   /**
    * Checks whether a creator address satisfies the configured NFT gate.
@@ -1601,7 +1790,7 @@ export class StellarSplitClient {
       try {
         const operation = this.contract.call(
           "check_nft_gate",
-          nativeToScVal(creatorAddress, { type: "address" })
+          nativeToScVal(creatorAddress, { type: "address" }),
         );
 
         const raw = await this._simulateView(operation);
@@ -1611,7 +1800,11 @@ export class StellarSplitClient {
         telemetry.recordMethod("checkNftGate", true, Date.now() - startTime);
         return result;
       } catch {
-        const result: NftGateResult = { gated: false, hasNft: false, contractAddress: null };
+        const result: NftGateResult = {
+          gated: false,
+          hasNft: false,
+          contractAddress: null,
+        };
         this._nftGateCache.set(creatorAddress, { timestamp: now, result });
         telemetry.recordMethod("checkNftGate", true, Date.now() - startTime);
         return result;
@@ -1627,8 +1820,14 @@ export class StellarSplitClient {
   /**
    * Resolves the forward chain for an invoice.
    */
-  async getForwardChain(invoiceId: string): Promise<Array<{ id: string; status: InvoiceStatus; forwardTo?: string }>> {
-    const chain: Array<{ id: string; status: InvoiceStatus; forwardTo?: string }> = [];
+  async getForwardChain(
+    invoiceId: string,
+  ): Promise<Array<{ id: string; status: InvoiceStatus; forwardTo?: string }>> {
+    const chain: Array<{
+      id: string;
+      status: InvoiceStatus;
+      forwardTo?: string;
+    }> = [];
     const visited = new Set<string>();
     let currentId: string | undefined = invoiceId;
     let depth = 0;
@@ -1665,7 +1864,10 @@ export class StellarSplitClient {
       try {
         await p.onDestroy?.(this);
       } catch (error) {
-        console.error(`[StellarSplitClient] Plugin "${p.name}" onDestroy error:`, error);
+        console.error(
+          `[StellarSplitClient] Plugin "${p.name}" onDestroy error:`,
+          error,
+        );
       }
     }
     this._pluginInstances = [];
@@ -1685,7 +1887,10 @@ export class StellarSplitClient {
       if (this._cache && typeof (this._cache as any).close === "function") {
         await (this._cache as any).close();
       }
-      if (this._rpcClient && typeof (this._rpcClient as any).close === "function") {
+      if (
+        this._rpcClient &&
+        typeof (this._rpcClient as any).close === "function"
+      ) {
         await (this._rpcClient as any).close();
       }
 
@@ -1700,7 +1905,7 @@ export class StellarSplitClient {
     return this._executeBulkInvoiceAction(ids, (invoiceId) => {
       const operation = this.contract.call(
         "cancel_invoice",
-        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
       );
       return this._submitTx(this.config.contractId, operation);
     });
@@ -1713,7 +1918,7 @@ export class StellarSplitClient {
     return this._executeBulkInvoiceAction(ids, (invoiceId) => {
       const operation = this.contract.call(
         "archive_invoice",
-        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
       );
       return this._submitTx(this.config.contractId, operation);
     });
@@ -1722,12 +1927,15 @@ export class StellarSplitClient {
   /**
    * Export multiple invoices in parallel and return formatted results by invoice ID.
    */
-  async bulkExport(ids: string[], format: ExportFormat): Promise<Record<string, string>> {
+  async bulkExport(
+    ids: string[],
+    format: ExportFormat,
+  ): Promise<Record<string, string>> {
     const settled = await Promise.allSettled(
       ids.map(async (invoiceId) => {
         const invoice = await this.getInvoice(invoiceId);
         return { invoiceId, data: exportInvoice(invoice, format) };
-      })
+      }),
     );
 
     return settled.reduce<Record<string, string>>((acc, result, index) => {
@@ -1740,9 +1948,11 @@ export class StellarSplitClient {
 
   private async _executeBulkInvoiceAction(
     ids: string[],
-    execute: (invoiceId: string) => Promise<unknown>
+    execute: (invoiceId: string) => Promise<unknown>,
   ): Promise<BulkResult[]> {
-    const settled = await Promise.allSettled(ids.map((invoiceId) => execute(invoiceId)));
+    const settled = await Promise.allSettled(
+      ids.map((invoiceId) => execute(invoiceId)),
+    );
     return settled.map((result, index) => {
       const invoiceId = ids[index]!;
       if (result.status === "fulfilled") {
@@ -1751,7 +1961,10 @@ export class StellarSplitClient {
       return {
         invoiceId,
         success: false,
-        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+        error:
+          result.reason instanceof Error
+            ? result.reason.message
+            : String(result.reason),
       };
     });
   }
@@ -1763,15 +1976,15 @@ export class StellarSplitClient {
    */
   async saveTemplate(
     creator: string,
-    template: InvoiceTemplate
+    template: InvoiceTemplate,
   ): Promise<TxResult> {
     const startTime = Date.now();
     try {
       const recipientAddresses = template.recipients.map((r) =>
-        nativeToScVal(r.address, { type: "address" })
+        nativeToScVal(r.address, { type: "address" }),
       );
       const recipientAmounts = template.recipients.map((r) =>
-        nativeToScVal(r.amount, { type: "i128" })
+        nativeToScVal(r.amount, { type: "i128" }),
       );
 
       const operation = this.contract.call(
@@ -1780,7 +1993,7 @@ export class StellarSplitClient {
         nativeToScVal(template.name, { type: "string" }),
         xdr.ScVal.scvVec(recipientAddresses),
         xdr.ScVal.scvVec(recipientAmounts),
-        nativeToScVal(template.token, { type: "address" })
+        nativeToScVal(template.token, { type: "address" }),
       );
 
       const result = await this._submitTx(creator, operation);
@@ -1800,7 +2013,7 @@ export class StellarSplitClient {
   async createFromTemplate(
     creator: string,
     templateName: string,
-    deadline: number
+    deadline: number,
   ): Promise<{ invoiceId: string; txHash: string }> {
     const startTime = Date.now();
     try {
@@ -1808,15 +2021,23 @@ export class StellarSplitClient {
         "create_from_template",
         nativeToScVal(creator, { type: "address" }),
         nativeToScVal(templateName, { type: "string" }),
-        nativeToScVal(deadline, { type: "u64" })
+        nativeToScVal(deadline, { type: "u64" }),
       );
 
       const result = await this._submitTx(creator, operation);
       const invoiceId = scValToNative(result.returnValue).toString();
-      telemetry.recordMethod("createFromTemplate", true, Date.now() - startTime);
+      telemetry.recordMethod(
+        "createFromTemplate",
+        true,
+        Date.now() - startTime,
+      );
       return { invoiceId, txHash: result.txHash };
     } catch (error) {
-      telemetry.recordMethod("createFromTemplate", false, Date.now() - startTime);
+      telemetry.recordMethod(
+        "createFromTemplate",
+        false,
+        Date.now() - startTime,
+      );
       throw error;
     }
   }
@@ -1830,7 +2051,7 @@ export class StellarSplitClient {
       try {
         const operation = this.contract.call(
           "list_templates",
-          nativeToScVal(creator, { type: "address" })
+          nativeToScVal(creator, { type: "address" }),
         );
 
         const templates = await this._simulateView(operation);
@@ -1851,12 +2072,22 @@ export class StellarSplitClient {
     const startTime = Date.now();
     try {
       const page = await this.getInvoicesByCreator(creator);
-      const invoices = await Promise.all(page.items.map((id) => this.getInvoice(id)));
+      const invoices = await Promise.all(
+        page.items.map((id) => this.getInvoice(id)),
+      );
       const recurring = invoices.filter((inv) => inv.recurring === true);
-      telemetry.recordMethod("getRecurringInvoices", true, Date.now() - startTime);
+      telemetry.recordMethod(
+        "getRecurringInvoices",
+        true,
+        Date.now() - startTime,
+      );
       return recurring;
     } catch (error) {
-      telemetry.recordMethod("getRecurringInvoices", false, Date.now() - startTime);
+      telemetry.recordMethod(
+        "getRecurringInvoices",
+        false,
+        Date.now() - startTime,
+      );
       throw error;
     }
   }
@@ -1872,7 +2103,7 @@ export class StellarSplitClient {
       const operation = this.contract.call(
         "cancel_invoice",
         nativeToScVal(BigInt(invoiceId), { type: "u64" }),
-        nativeToScVal(creator, { type: "address" })
+        nativeToScVal(creator, { type: "address" }),
       );
 
       const result = await this._submitTx(creator, operation);
@@ -1892,7 +2123,7 @@ export class StellarSplitClient {
   async updateRecurringAmount(
     invoiceId: string,
     creator: string,
-    amounts: bigint[]
+    amounts: bigint[],
   ): Promise<TxResult> {
     const startTime = Date.now();
     try {
@@ -1902,14 +2133,22 @@ export class StellarSplitClient {
         "update_recurring_amount",
         nativeToScVal(BigInt(invoiceId), { type: "u64" }),
         nativeToScVal(creator, { type: "address" }),
-        xdr.ScVal.scvVec(amountVals)
+        xdr.ScVal.scvVec(amountVals),
       );
 
       const result = await this._submitTx(creator, operation);
-      telemetry.recordMethod("updateRecurringAmount", true, Date.now() - startTime);
+      telemetry.recordMethod(
+        "updateRecurringAmount",
+        true,
+        Date.now() - startTime,
+      );
       return { txHash: result.txHash };
     } catch (error) {
-      telemetry.recordMethod("updateRecurringAmount", false, Date.now() - startTime);
+      telemetry.recordMethod(
+        "updateRecurringAmount",
+        false,
+        Date.now() - startTime,
+      );
       throw error;
     }
   }
@@ -1923,30 +2162,35 @@ export class StellarSplitClient {
    */
   async getInvoicesByCreator(
     creator: string,
-    options: PaginationOptions = {}
+    options: PaginationOptions = {},
   ): Promise<PaginatedResult<string>> {
-    return this._withCache("getInvoicesByCreator", [creator, options], async () => {
-      const limit = options.limit ?? 20;
+    return this._withCache(
+      "getInvoicesByCreator",
+      [creator, options],
+      async () => {
+        const limit = options.limit ?? 20;
 
-      const operation = this.contract.call(
-        "get_invoices_by_creator",
-        nativeToScVal(creator, { type: "address" })
-      );
+        const operation = this.contract.call(
+          "get_invoices_by_creator",
+          nativeToScVal(creator, { type: "address" }),
+        );
 
-      const raw = await this._simulateView(operation);
-      const allIds: string[] = Array.isArray(raw)
-        ? raw.map((id: unknown) => String(id))
-        : [];
+        const raw = await this._simulateView(operation);
+        const allIds: string[] = Array.isArray(raw)
+          ? raw.map((id: unknown) => String(id))
+          : [];
 
-      const total = allIds.length;
-      const startIndex = options.cursor
-        ? allIds.indexOf(options.cursor) + 1
-        : 0;
-      const page = allIds.slice(startIndex, startIndex + limit);
-      const nextCursor = startIndex + limit < total ? (page[page.length - 1] ?? null) : null;
+        const total = allIds.length;
+        const startIndex = options.cursor
+          ? allIds.indexOf(options.cursor) + 1
+          : 0;
+        const page = allIds.slice(startIndex, startIndex + limit);
+        const nextCursor =
+          startIndex + limit < total ? (page[page.length - 1] ?? null) : null;
 
-      return { items: page, nextCursor, total };
-    });
+        return { items: page, nextCursor, total };
+      },
+    );
   }
 
   /**
@@ -1958,45 +2202,63 @@ export class StellarSplitClient {
    */
   async getInvoicesByRecipient(
     recipient: string,
-    options: PaginationOptions = {}
+    options: PaginationOptions = {},
   ): Promise<PaginatedResult<string>> {
-    return this._withCache("getInvoicesByRecipient", [recipient, options], async () => {
-      const limit = options.limit ?? 20;
+    return this._withCache(
+      "getInvoicesByRecipient",
+      [recipient, options],
+      async () => {
+        const limit = options.limit ?? 20;
 
-      const operation = this.contract.call(
-        "get_invoices_by_recipient",
-        nativeToScVal(recipient, { type: "address" })
-      );
+        const operation = this.contract.call(
+          "get_invoices_by_recipient",
+          nativeToScVal(recipient, { type: "address" }),
+        );
 
-      const account = await this.server.getAccount(this.config.contractId).catch(() => null);
-      const sourceAccount = account ?? new Account(this.config.contractId, "0");
+        const account = await this.server
+          .getAccount(this.config.contractId)
+          .catch(() => null);
+        const sourceAccount =
+          account ?? new Account(this.config.contractId, "0");
 
-      const tx = new TransactionBuilder(sourceAccount, {
-        fee: BASE_FEE,
-        networkPassphrase: this.config.networkPassphrase,
-      })
-        .addOperation(operation)
-        .setTimeout(30)
-        .build();
+        const tx = new TransactionBuilder(sourceAccount, {
+          fee: BASE_FEE,
+          networkPassphrase: this.config.networkPassphrase,
+        })
+          .addOperation(operation)
+          .setTimeout(30)
+          .build();
 
-      const simResult = await this.server.simulateTransaction(tx);
-      if (SorobanRpc.Api.isSimulationError(simResult)) {
-        throw new SimulationFailedError(`Simulation failed: ${simResult.error}`, "getInvoicesByRecipient", simResult.error);
-      }
+        const simResult = await this.server.simulateTransaction(tx);
+        if (SorobanRpc.Api.isSimulationError(simResult)) {
+          throw new SimulationFailedError(
+            `Simulation failed: ${simResult.error}`,
+            "getInvoicesByRecipient",
+            simResult.error,
+          );
+        }
 
-      const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
-      if (!returnVal) throw new NoReturnValueError("getInvoicesByRecipient");
+        const returnVal = (
+          simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse
+        ).result?.retval;
+        if (!returnVal) throw new NoReturnValueError("getInvoicesByRecipient");
 
-      const raw = scValToNative(returnVal);
-      const allIds: string[] = Array.isArray(raw) ? raw.map((id: unknown) => String(id)) : [];
+        const raw = scValToNative(returnVal);
+        const allIds: string[] = Array.isArray(raw)
+          ? raw.map((id: unknown) => String(id))
+          : [];
 
-      const total = allIds.length;
-      const startIndex = options.cursor ? allIds.indexOf(options.cursor) + 1 : 0;
-      const page = allIds.slice(startIndex, startIndex + limit);
-      const nextCursor = startIndex + limit < total ? (page[page.length - 1] ?? null) : null;
+        const total = allIds.length;
+        const startIndex = options.cursor
+          ? allIds.indexOf(options.cursor) + 1
+          : 0;
+        const page = allIds.slice(startIndex, startIndex + limit);
+        const nextCursor =
+          startIndex + limit < total ? (page[page.length - 1] ?? null) : null;
 
-      return { items: page, nextCursor, total };
-    });
+        return { items: page, nextCursor, total };
+      },
+    );
   }
 
   /**
@@ -2013,16 +2275,16 @@ export class StellarSplitClient {
    */
   async createGroup(
     creator: string,
-    invoiceIds: string[]
+    invoiceIds: string[],
   ): Promise<{ groupId: string; txHash: string }> {
     const invoiceIdsBigInt = invoiceIds.map((id) =>
-      nativeToScVal(BigInt(id), { type: "u64" })
+      nativeToScVal(BigInt(id), { type: "u64" }),
     );
 
     const operation = this.contract.call(
       "create_invoice_group",
       nativeToScVal(creator, { type: "address" }),
-      xdr.ScVal.scvVec(invoiceIdsBigInt)
+      xdr.ScVal.scvVec(invoiceIdsBigInt),
     );
 
     const result = await this._submitTx(creator, operation);
@@ -2036,13 +2298,18 @@ export class StellarSplitClient {
   async getGroupStatus(groupId: string): Promise<InvoiceGroup> {
     const operation = this.contract.call(
       "get_invoice_group",
-      nativeToScVal(BigInt(groupId), { type: "u64" })
+      nativeToScVal(BigInt(groupId), { type: "u64" }),
     );
 
-    const raw = await this._simulateView(operation) as Record<string, unknown>;
+    const raw = (await this._simulateView(operation)) as Record<
+      string,
+      unknown
+    >;
     return {
       groupId,
-      invoiceIds: (raw.invoiceIds as (string | number)[]).map((id) => String(id)),
+      invoiceIds: (raw.invoiceIds as (string | number)[]).map((id) =>
+        String(id),
+      ),
       allFunded: Boolean(raw.allFunded),
     };
   }
@@ -2056,7 +2323,7 @@ export class StellarSplitClient {
     const operation = this.contract.call(
       "release_invoice_group",
       nativeToScVal(creator, { type: "address" }),
-      nativeToScVal(BigInt(groupId), { type: "u64" })
+      nativeToScVal(BigInt(groupId), { type: "u64" }),
     );
 
     const result = await this._submitTx(creator, operation);
@@ -2102,7 +2369,10 @@ export class StellarSplitClient {
    * @param payerAddress - The Stellar address of the payer.
    * @returns Payment receipt with proofHash and optional JSON serialization.
    */
-  async generatePaymentReceipt(invoiceId: string, payerAddress: string): Promise<PaymentReceipt> {
+  async generatePaymentReceipt(
+    invoiceId: string,
+    payerAddress: string,
+  ): Promise<PaymentReceipt> {
     const invoice = await this.getInvoice(invoiceId);
     return compilePaymentReceipt(invoice, payerAddress);
   }
@@ -2152,7 +2422,7 @@ export class StellarSplitClient {
     const operation = this.contract.call(
       "batch_pay",
       nativeToScVal(payer, { type: "address" }),
-      xdr.ScVal.scvVec(paymentVals)
+      xdr.ScVal.scvVec(paymentVals),
     );
 
     const result = await this._submitTx(payer, operation);
@@ -2173,7 +2443,9 @@ export class StellarSplitClient {
    * @returns A `BatchVerificationResult` describing per-invoice validity,
    *          the common token (if uniform), and any aggregated errors.
    */
-  async verifyBatchPay(payments: BatchPayment[]): Promise<BatchVerificationResult> {
+  async verifyBatchPay(
+    payments: BatchPayment[],
+  ): Promise<BatchVerificationResult> {
     const invoiceIds = payments.map((p) => p.invoiceId);
     const results = await this.resolveBatch(invoiceIds);
 
@@ -2196,7 +2468,7 @@ export class StellarSplitClient {
    */
   async validatePayment(
     invoiceId: string,
-    amount: bigint
+    amount: bigint,
   ): Promise<PaymentValidation> {
     const invoice = await this.getInvoice(invoiceId);
     let balance: bigint | null = null;
@@ -2222,12 +2494,12 @@ export class StellarSplitClient {
 
   private async _getTokenBalance(
     address: string,
-    tokenAddress: string
+    tokenAddress: string,
   ): Promise<bigint> {
     const tokenContract = new Contract(tokenAddress);
     const operation = tokenContract.call(
       "balance",
-      nativeToScVal(address, { type: "address" })
+      nativeToScVal(address, { type: "address" }),
     );
 
     const result = await this._simulateView(operation);
@@ -2238,7 +2510,9 @@ export class StellarSplitClient {
       return BigInt(result);
     }
     if (typeof result === "object" && result !== null && "balance" in result) {
-      return BigInt((result as Record<string, unknown>).balance as string | number);
+      return BigInt(
+        (result as Record<string, unknown>).balance as string | number,
+      );
     }
 
     throw new NoReturnValueError("_getTokenBalance");
@@ -2249,23 +2523,23 @@ export class StellarSplitClient {
   // ---------------------------------------------------------------------------
 
   /**
-      * Subscribe to live invoice events via server-sent events (SSE).
-      *
-      * Pass a single handler function to receive typed `InvoiceEvent` objects
-      * (`payment_received`, `invoice_released`, `invoice_refunded`) without
-      * polling. The connection reconnects automatically with exponential backoff
-      * on drops. The SSE base URL defaults to the client's `horizonUrl` config and
-      * can be overridden via `options.baseUrl`.
-      *
-      * @param invoiceId - The invoice ID to watch.
-      * @param handler   - Called with each single typed `InvoiceEvent` (SSE mode).
-      * @param options   - Optional SSE options (base URL, backoff, EventSource factory).
-      * @returns Unsubscribe function that permanently stops the stream.
-      */
+   * Subscribe to live invoice events via server-sent events (SSE).
+   *
+   * Pass a single handler function to receive typed `InvoiceEvent` objects
+   * (`payment_received`, `invoice_released`, `invoice_refunded`) without
+   * polling. The connection reconnects automatically with exponential backoff
+   * on drops. The SSE base URL defaults to the client's `horizonUrl` config and
+   * can be overridden via `options.baseUrl`.
+   *
+   * @param invoiceId - The invoice ID to watch.
+   * @param handler   - Called with each single typed `InvoiceEvent` (SSE mode).
+   * @param options   - Optional SSE options (base URL, backoff, EventSource factory).
+   * @returns Unsubscribe function that permanently stops the stream.
+   */
   subscribeToInvoice(
     invoiceId: string,
     handler: InvoiceEventHandler,
-    options?: Partial<SubscribeToInvoiceOptions>
+    options?: Partial<SubscribeToInvoiceOptions>,
   ): () => void;
   /**
    * Subscribe to live invoice events via Soroban RPC polling.
@@ -2282,7 +2556,7 @@ export class StellarSplitClient {
   subscribeToInvoice(
     invoiceId: string,
     handler: (events: SSEInvoiceEvent[]) => void,
-    intervalMs?: number
+    intervalMs?: number,
   ): () => void;
   /**
    * Subscribe to live invoice events via Soroban RPC event polling.
@@ -2295,12 +2569,15 @@ export class StellarSplitClient {
   subscribeToInvoice(
     invoiceId: string,
     callbacks: InvoiceEventCallbacks,
-    intervalMs?: number
+    intervalMs?: number,
   ): () => void;
   subscribeToInvoice(
     invoiceId: string,
-    handlerOrCallbacks: InvoiceEventHandler | InvoiceEventCallbacks | ((events: SSEInvoiceEvent[]) => void),
-    optionsOrInterval?: Partial<SubscribeToInvoiceOptions> | number
+    handlerOrCallbacks:
+      | InvoiceEventHandler
+      | InvoiceEventCallbacks
+      | ((events: SSEInvoiceEvent[]) => void),
+    optionsOrInterval?: Partial<SubscribeToInvoiceOptions> | number,
   ): () => void {
     // A function handler with options object selects the SSE transport.
     // A function handler with number interval selects the RPC polling transport (new API).
@@ -2313,22 +2590,27 @@ export class StellarSplitClient {
           this.config.contractId,
           invoiceId,
           handlerOrCallbacks as (events: SSEInvoiceEvent[]) => void,
-          optionsOrInterval
+          optionsOrInterval,
         );
       }
       // Otherwise SSE mode
       const options =
-        (optionsOrInterval as Partial<SubscribeToInvoiceOptions> | undefined) ?? {};
+        (optionsOrInterval as Partial<SubscribeToInvoiceOptions> | undefined) ??
+        {};
       const baseUrl = options.baseUrl ?? this.config.horizonUrl;
       if (!baseUrl) {
         throw new ValidationError(
           "subscribeToInvoice (SSE) requires a base URL: set `horizonUrl` in the client config or pass `{ baseUrl }` in options.",
         );
       }
-      return _subscribeToInvoiceSSE(invoiceId, handlerOrCallbacks as InvoiceEventHandler, {
-        ...options,
-        baseUrl,
-      });
+      return _subscribeToInvoiceSSE(
+        invoiceId,
+        handlerOrCallbacks as InvoiceEventHandler,
+        {
+          ...options,
+          baseUrl,
+        },
+      );
     }
 
     return _subscribeToInvoice(
@@ -2336,7 +2618,7 @@ export class StellarSplitClient {
       this.config.contractId,
       invoiceId,
       handlerOrCallbacks,
-      undefined
+      undefined,
     );
   }
 
@@ -2355,7 +2637,7 @@ export class StellarSplitClient {
    */
   async buildTransaction(
     sourceAddress: string,
-    operation: xdr.Operation
+    operation: xdr.Operation,
   ): Promise<string> {
     const account = await this.server.getAccount(sourceAddress);
 
@@ -2369,7 +2651,11 @@ export class StellarSplitClient {
 
     const simResult = await this.server.simulateTransaction(tx);
     if (SorobanRpc.Api.isSimulationError(simResult)) {
-      throw new SimulationFailedError(`Simulation failed: ${simResult.error}`, "buildTransaction", simResult.error);
+      throw new SimulationFailedError(
+        `Simulation failed: ${simResult.error}`,
+        "buildTransaction",
+        simResult.error,
+      );
     }
 
     const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
@@ -2383,11 +2669,16 @@ export class StellarSplitClient {
    * @returns The transaction hash.
    */
   async submitTransaction(signedXdr: string): Promise<TxResult> {
-    const tx = TransactionBuilder.fromXDR(signedXdr, this.config.networkPassphrase);
+    const tx = TransactionBuilder.fromXDR(
+      signedXdr,
+      this.config.networkPassphrase,
+    );
     const sendResult = await this.server.sendTransaction(tx);
 
     if (sendResult.status === "ERROR") {
-      throw new TransactionFailedError(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
+      throw new TransactionFailedError(
+        `Transaction failed: ${JSON.stringify(sendResult.errorResult)}`,
+      );
     }
 
     const txHash = sendResult.hash;
@@ -2421,13 +2712,13 @@ export class StellarSplitClient {
    * @throws StellarSplitError with the simulation error message on failure.
    */
   async simulateCreateInvoice(
-    params: CreateInvoiceParams
+    params: CreateInvoiceParams,
   ): Promise<SimulateCreateInvoiceResult> {
     const recipientAddresses = params.recipients.map((r) =>
-      nativeToScVal(r.address, { type: "address" })
+      nativeToScVal(r.address, { type: "address" }),
     );
     const recipientAmounts = params.recipients.map((r) =>
-      nativeToScVal(r.amount, { type: "i128" })
+      nativeToScVal(r.amount, { type: "i128" }),
     );
 
     const operation = this.contract.call(
@@ -2436,15 +2727,19 @@ export class StellarSplitClient {
       xdr.ScVal.scvVec(recipientAddresses),
       xdr.ScVal.scvVec(recipientAmounts),
       nativeToScVal(params.token, { type: "address" }),
-      nativeToScVal(params.deadline, { type: "u64" })
+      nativeToScVal(params.deadline, { type: "u64" }),
     );
 
-    const account = await this.server.getAccount(params.creator).catch(() => null);
-    const sourceAccount = account ?? ({
-      accountId: () => params.creator,
-      sequenceNumber: () => "0",
-      incrementSequenceNumber: () => { },
-    } as unknown as Account);
+    const account = await this.server
+      .getAccount(params.creator)
+      .catch(() => null);
+    const sourceAccount =
+      account ??
+      ({
+        accountId: () => params.creator,
+        sequenceNumber: () => "0",
+        incrementSequenceNumber: () => {},
+      } as unknown as Account);
 
     const tx = new TransactionBuilder(sourceAccount, {
       fee: BASE_FEE,
@@ -2456,10 +2751,15 @@ export class StellarSplitClient {
 
     const simResult = await this.server.simulateTransaction(tx);
     if (SorobanRpc.Api.isSimulationError(simResult)) {
-      throw new SimulationFailedError(`Simulation error: ${simResult.error}`, "simulateCreateInvoice", simResult.error);
+      throw new SimulationFailedError(
+        `Simulation error: ${simResult.error}`,
+        "simulateCreateInvoice",
+        simResult.error,
+      );
     }
 
-    const success = simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+    const success =
+      simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse;
     const returnVal = success.result?.retval;
     if (!returnVal) throw new NoReturnValueError("simulateCreateInvoice");
 
@@ -2480,15 +2780,19 @@ export class StellarSplitClient {
       "pay",
       nativeToScVal(params.payer, { type: "address" }),
       nativeToScVal(BigInt(params.invoiceId), { type: "u64" }),
-      nativeToScVal(params.amount, { type: "i128" })
+      nativeToScVal(params.amount, { type: "i128" }),
     );
 
-    const account = await this.server.getAccount(params.payer).catch(() => null);
-    const sourceAccount = account ?? ({
-      accountId: () => params.payer,
-      sequenceNumber: () => "0",
-      incrementSequenceNumber: () => { },
-    } as unknown as Account);
+    const account = await this.server
+      .getAccount(params.payer)
+      .catch(() => null);
+    const sourceAccount =
+      account ??
+      ({
+        accountId: () => params.payer,
+        sequenceNumber: () => "0",
+        incrementSequenceNumber: () => {},
+      } as unknown as Account);
 
     const tx = new TransactionBuilder(sourceAccount, {
       fee: BASE_FEE,
@@ -2500,10 +2804,15 @@ export class StellarSplitClient {
 
     const simResult = await this.server.simulateTransaction(tx);
     if (SorobanRpc.Api.isSimulationError(simResult)) {
-      throw new SimulationFailedError(`Simulation error: ${simResult.error}`, "simulatePay", simResult.error);
+      throw new SimulationFailedError(
+        `Simulation error: ${simResult.error}`,
+        "simulatePay",
+        simResult.error,
+      );
     }
 
-    const success = simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+    const success =
+      simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse;
     const fee = success.minResourceFee ?? "0";
 
     return { fee: fee.toString() };
@@ -2523,11 +2832,13 @@ export class StellarSplitClient {
   async previewTokenSwap(
     invoiceId: string,
     sourceToken: string,
-    sourceAmount: bigint
+    sourceAmount: bigint,
   ): Promise<PreviewTokenSwapResult> {
     // Check if DEX is configured
     if (!this.config.dexContractId) {
-      throw new Error("DEX contract not configured on this client. Set dexContractId in StellarSplitClientConfig.");
+      throw new Error(
+        "DEX contract not configured on this client. Set dexContractId in StellarSplitClientConfig.",
+      );
     }
 
     // Get the invoice to determine the target token
@@ -2541,14 +2852,14 @@ export class StellarSplitClient {
       "quote",
       nativeToScVal(sourceToken, { type: "address" }),
       nativeToScVal(invoice.token, { type: "address" }),
-      nativeToScVal(sourceAmount, { type: "i128" })
+      nativeToScVal(sourceAmount, { type: "i128" }),
     );
 
     // Build a minimal transaction for simulation
     const sourceAccount = {
       accountId: () => this.config.dexContractId!,
       sequenceNumber: () => "0",
-      incrementSequenceNumber: () => { },
+      incrementSequenceNumber: () => {},
     } as unknown as Account;
 
     const tx = new TransactionBuilder(sourceAccount, {
@@ -2565,11 +2876,12 @@ export class StellarSplitClient {
       throw new SimulationFailedError(
         `DEX quote simulation failed: ${simResult.error}`,
         "previewTokenSwap",
-        simResult.error
+        simResult.error,
       );
     }
 
-    const success = simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+    const success =
+      simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse;
     const returnVal = success.result?.retval;
     if (!returnVal) {
       throw new NoReturnValueError("previewTokenSwap");
@@ -2580,9 +2892,12 @@ export class StellarSplitClient {
 
     // Calculate price impact in basis points
     // Price impact = (input - output) / input * 10000
-    const priceImpactBps = sourceAmount > 0n
-      ? Number((BigInt(10000) * (sourceAmount - estimatedOutput)) / sourceAmount)
-      : 0;
+    const priceImpactBps =
+      sourceAmount > 0n
+        ? Number(
+            (BigInt(10000) * (sourceAmount - estimatedOutput)) / sourceAmount,
+          )
+        : 0;
 
     // Return the preview result
     // Note: route is extracted from the quote response if available, or set to [sourceToken, invoice.token]
@@ -2604,17 +2919,29 @@ export class StellarSplitClient {
    * @returns FeeEstimate with fee in stroops and a congestion indicator.
    */
   async estimateFee(operation: xdr.Operation): Promise<FeeEstimate> {
-    const simResult = await this._simulateView(operation) as { minResourceFee?: string; error?: string };
-    if (simResult.error) throw new SimulationFailedError(`Fee estimation failed: ${simResult.error}`, "estimateFee", simResult.error);
+    const simResult = (await this._simulateView(operation)) as {
+      minResourceFee?: string;
+      error?: string;
+    };
+    if (simResult.error)
+      throw new SimulationFailedError(
+        `Fee estimation failed: ${simResult.error}`,
+        "estimateFee",
+        simResult.error,
+      );
     const fee = BigInt(simResult.minResourceFee ?? "0");
     let congestion: FeeEstimate["congestion"] = "low";
     try {
-      const stats = await this.server.getFeeStats() as { sorobanInclusionFee?: { p50?: string; p99?: string } };
+      const stats = (await this.server.getFeeStats()) as {
+        sorobanInclusionFee?: { p50?: string; p99?: string };
+      };
       const p50 = Number(stats.sorobanInclusionFee?.p50 ?? "1");
       const p99 = Number(stats.sorobanInclusionFee?.p99 ?? "1");
       const ratio = p99 > 0 ? p50 / p99 : 1;
       congestion = ratio >= 0.9 ? "low" : ratio >= 0.5 ? "medium" : "high";
-    } catch { /* use default */ }
+    } catch {
+      /* use default */
+    }
     return { fee, congestion };
   }
 
@@ -2640,11 +2967,14 @@ export class StellarSplitClient {
     for (const signer of signers) {
       try {
         current = await (this._adapter
-          ? this._adapter.signTransaction(current, this.config.networkPassphrase)
+          ? this._adapter.signTransaction(
+              current,
+              this.config.networkPassphrase,
+            )
           : signTransaction(current, this.config.networkPassphrase));
       } catch (err) {
         throw new ValidationError(
-          `Signer ${signer} failed to sign: ${err instanceof Error ? err.message : String(err)}`
+          `Signer ${signer} failed to sign: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
     }
@@ -2675,7 +3005,7 @@ export class StellarSplitClient {
   async bumpStorageTtl(
     invoiceId: string,
     extendTo: number,
-    source: string
+    source: string,
   ): Promise<TtlExtensionResult> {
     const ledgerKeys = [
       buildInvoiceDataLedgerKey(this.config.contractId, invoiceId),
@@ -2690,7 +3020,7 @@ export class StellarSplitClient {
    *                  and an array of ledger keys to extend.
    */
   async bumpStorageTtlBatch(
-    options: TtlExtensionOptions
+    options: TtlExtensionOptions,
   ): Promise<TtlExtensionResult> {
     return extendStorageTtl(this.config, options);
   }
@@ -2773,13 +3103,16 @@ export class StellarSplitClient {
    * @param signers   - Stellar addresses of all required co-signers.
    * @returns Base64-encoded unsigned transaction XDR.
    */
-  async collectCoSignatures(invoiceId: string, signers: string[]): Promise<string> {
+  async collectCoSignatures(
+    invoiceId: string,
+    signers: string[],
+  ): Promise<string> {
     if (signers.length === 0) throw new NoSignerProvidedError();
 
     const firstSigner = signers[0]!;
     const operation = this.contract.call(
       "release_invoice",
-      nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      nativeToScVal(BigInt(invoiceId), { type: "u64" }),
     );
 
     const account = await this.server.getAccount(firstSigner);
@@ -2793,7 +3126,11 @@ export class StellarSplitClient {
 
     const simResult = await this.server.simulateTransaction(tx);
     if (SorobanRpc.Api.isSimulationError(simResult)) {
-      throw new SimulationFailedError(`Simulation failed: ${simResult.error}`, "collectCoSignatures", simResult.error);
+      throw new SimulationFailedError(
+        `Simulation failed: ${simResult.error}`,
+        "collectCoSignatures",
+        simResult.error,
+      );
     }
 
     const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
@@ -2808,7 +3145,10 @@ export class StellarSplitClient {
    * @returns The transaction hash.
    * @throws If fewer signatures are provided than the invoice requires.
    */
-  async submitWithCoSignatures(invoiceId: string, signatures: CoSignature[]): Promise<TxResult> {
+  async submitWithCoSignatures(
+    invoiceId: string,
+    signatures: CoSignature[],
+  ): Promise<TxResult> {
     const invoice = await this.getInvoice(invoiceId);
     const requiredCount = invoice.recipients.length;
 
@@ -2819,14 +3159,14 @@ export class StellarSplitClient {
     const firstSig = signatures[0]!;
     const mergedTx = TransactionBuilder.fromXDR(
       firstSig.signedXdr,
-      this.config.networkPassphrase
+      this.config.networkPassphrase,
     ) as Transaction;
 
     for (let i = 1; i < signatures.length; i++) {
       const sig = signatures[i]!;
       const otherTx = TransactionBuilder.fromXDR(
         sig.signedXdr,
-        this.config.networkPassphrase
+        this.config.networkPassphrase,
       ) as Transaction;
       for (const decoratedSig of otherTx.signatures) {
         mergedTx.addDecoratedSignature(decoratedSig);
@@ -2835,7 +3175,9 @@ export class StellarSplitClient {
 
     const sendResult = await this.server.sendTransaction(mergedTx);
     if (sendResult.status === "ERROR") {
-      throw new TransactionFailedError(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
+      throw new TransactionFailedError(
+        `Transaction failed: ${JSON.stringify(sendResult.errorResult)}`,
+      );
     }
 
     const txHash = sendResult.hash;
@@ -2870,7 +3212,7 @@ export class StellarSplitClient {
   async rolloverInvoice(
     invoiceId: string,
     newDeadline: number,
-    caller: string
+    caller: string,
   ): Promise<RolloverResult> {
     const startTime = Date.now();
     try {
@@ -2880,7 +3222,7 @@ export class StellarSplitClient {
         caller,
         this.server,
         this.config,
-        this._adapter
+        this._adapter,
       );
       telemetry.recordMethod("rolloverInvoice", true, Date.now() - startTime);
       return result;
@@ -2903,7 +3245,7 @@ export class StellarSplitClient {
   private async _needsCoCreatorApproval(invoiceId: string): Promise<void> {
     const operation = this.contract.call(
       "needs_co_creator_approval",
-      nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      nativeToScVal(BigInt(invoiceId), { type: "u64" }),
     );
     const raw = await this._simulateView(operation);
     if (!raw) {
@@ -2923,7 +3265,10 @@ export class StellarSplitClient {
    * @returns The transaction hash.
    * @throws {CoCreatorApprovalNotRequiredError} If the invoice does not require co-creator sign-off.
    */
-  async submitCoCreatorApproval(invoiceId: string, signer: string): Promise<TxResult> {
+  async submitCoCreatorApproval(
+    invoiceId: string,
+    signer: string,
+  ): Promise<TxResult> {
     const startTime = Date.now();
     try {
       await this._needsCoCreatorApproval(invoiceId);
@@ -2931,13 +3276,21 @@ export class StellarSplitClient {
       const operation = this.contract.call(
         "submit_co_creator_approval",
         nativeToScVal(BigInt(invoiceId), { type: "u64" }),
-        nativeToScVal(signer, { type: "address" })
+        nativeToScVal(signer, { type: "address" }),
       );
       const result = await this._submitTx(signer, operation);
-      telemetry.recordMethod("submitCoCreatorApproval", true, Date.now() - startTime);
+      telemetry.recordMethod(
+        "submitCoCreatorApproval",
+        true,
+        Date.now() - startTime,
+      );
       return { txHash: result.txHash };
     } catch (error) {
-      telemetry.recordMethod("submitCoCreatorApproval", false, Date.now() - startTime);
+      telemetry.recordMethod(
+        "submitCoCreatorApproval",
+        false,
+        Date.now() - startTime,
+      );
       throw error;
     }
   }
@@ -2956,13 +3309,21 @@ export class StellarSplitClient {
 
       const operation = this.contract.call(
         "get_co_creator_approvals",
-        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
       );
-      const raw = await this._simulateView(operation) as string[];
-      telemetry.recordMethod("getCoCreatorApprovals", true, Date.now() - startTime);
+      const raw = (await this._simulateView(operation)) as string[];
+      telemetry.recordMethod(
+        "getCoCreatorApprovals",
+        true,
+        Date.now() - startTime,
+      );
       return raw;
     } catch (error) {
-      telemetry.recordMethod("getCoCreatorApprovals", false, Date.now() - startTime);
+      telemetry.recordMethod(
+        "getCoCreatorApprovals",
+        false,
+        Date.now() - startTime,
+      );
       throw error;
     }
   }
@@ -2978,7 +3339,10 @@ export class StellarSplitClient {
    * @returns The transaction hash.
    * @throws {CoCreatorApprovalNotRequiredError} If the invoice does not require co-creator sign-off.
    */
-  async revokeCoCreatorApproval(invoiceId: string, signer: string): Promise<TxResult> {
+  async revokeCoCreatorApproval(
+    invoiceId: string,
+    signer: string,
+  ): Promise<TxResult> {
     const startTime = Date.now();
     try {
       await this._needsCoCreatorApproval(invoiceId);
@@ -2986,17 +3350,24 @@ export class StellarSplitClient {
       const operation = this.contract.call(
         "revoke_co_creator_approval",
         nativeToScVal(BigInt(invoiceId), { type: "u64" }),
-        nativeToScVal(signer, { type: "address" })
+        nativeToScVal(signer, { type: "address" }),
       );
       const result = await this._submitTx(signer, operation);
-      telemetry.recordMethod("revokeCoCreatorApproval", true, Date.now() - startTime);
+      telemetry.recordMethod(
+        "revokeCoCreatorApproval",
+        true,
+        Date.now() - startTime,
+      );
       return { txHash: result.txHash };
     } catch (error) {
-      telemetry.recordMethod("revokeCoCreatorApproval", false, Date.now() - startTime);
+      telemetry.recordMethod(
+        "revokeCoCreatorApproval",
+        false,
+        Date.now() - startTime,
+      );
       throw error;
     }
   }
-
 
   // ---------------------------------------------------------------------------
   // Payment cooldown
@@ -3010,27 +3381,42 @@ export class StellarSplitClient {
    * @param payerAddress - Stellar address of the payer.
    * @returns Cooldown status with inCooldown flag and cooldownEndsAt timestamp.
    */
-  async getPaymentCooldown(invoiceId: string, payerAddress: string): Promise<PaymentCooldown> {
+  async getPaymentCooldown(
+    invoiceId: string,
+    payerAddress: string,
+  ): Promise<PaymentCooldown> {
     const startTime = Date.now();
     try {
       const operation = this.contract.call(
         "payment_cooldown",
         nativeToScVal(BigInt(invoiceId), { type: "u64" }),
-        nativeToScVal(payerAddress, { type: "address" })
+        nativeToScVal(payerAddress, { type: "address" }),
       );
-      const raw = await this._simulateView(operation) as Record<string, unknown>;
+      const raw = (await this._simulateView(operation)) as Record<
+        string,
+        unknown
+      >;
       const result: PaymentCooldown = {
         inCooldown: Boolean(raw.in_cooldown ?? raw.inCooldown ?? false),
-        cooldownEndsAt: raw.cooldown_ends_at != null
-          ? Number(raw.cooldown_ends_at)
-          : raw.cooldownEndsAt != null
-            ? Number(raw.cooldownEndsAt)
-            : null,
+        cooldownEndsAt:
+          raw.cooldown_ends_at != null
+            ? Number(raw.cooldown_ends_at)
+            : raw.cooldownEndsAt != null
+              ? Number(raw.cooldownEndsAt)
+              : null,
       };
-      telemetry.recordMethod("getPaymentCooldown", true, Date.now() - startTime);
+      telemetry.recordMethod(
+        "getPaymentCooldown",
+        true,
+        Date.now() - startTime,
+      );
       return result;
     } catch (error) {
-      telemetry.recordMethod("getPaymentCooldown", false, Date.now() - startTime);
+      telemetry.recordMethod(
+        "getPaymentCooldown",
+        false,
+        Date.now() - startTime,
+      );
       throw error;
     }
   }
@@ -3048,7 +3434,7 @@ export class StellarSplitClient {
    * @returns A structured countdown with total_seconds, days, hours, minutes, seconds, and whether overdue. Null when no scheduled release date.
    */
   getScheduledReleaseCountdown(
-    invoiceOrTimestamp: Invoice | number
+    invoiceOrTimestamp: Invoice | number,
   ): ScheduledReleaseCountdown | null {
     if (typeof invoiceOrTimestamp !== "number") {
       return getScheduledReleaseCountdown(invoiceOrTimestamp);
@@ -3070,7 +3456,7 @@ export class StellarSplitClient {
   async placeBid(
     bidder: string,
     invoiceId: string,
-    amount: bigint
+    amount: bigint,
   ): Promise<TxResult> {
     const startTime = Date.now();
     try {
@@ -3078,7 +3464,7 @@ export class StellarSplitClient {
         "place_bid",
         nativeToScVal(bidder, { type: "address" }),
         nativeToScVal(BigInt(invoiceId), { type: "u64" }),
-        nativeToScVal(amount, { type: "i128" })
+        nativeToScVal(amount, { type: "i128" }),
       );
       const result = await this._submitTx(bidder, operation);
       telemetry.recordMethod("placeBid", true, Date.now() - startTime);
@@ -3110,7 +3496,10 @@ export class StellarSplitClient {
     return this._fetchPaymentHistory(invoiceId);
   }
 
-  private async _fetchPaymentHistory(invoiceId: string, traceId?: string): Promise<Payment[]> {
+  private async _fetchPaymentHistory(
+    invoiceId: string,
+    traceId?: string,
+  ): Promise<Payment[]> {
     const startTime = Date.now();
     try {
       const NUM_SHARDS = 8;
@@ -3119,12 +3508,12 @@ export class StellarSplitClient {
         this.contract.call(
           "get_payment_shard",
           nativeToScVal(BigInt(invoiceId), { type: "u64" }),
-          nativeToScVal(i, { type: "u32" })
-        )
+          nativeToScVal(i, { type: "u32" }),
+        ),
       );
 
       const shardResults = await Promise.allSettled(
-        operations.map((op) => this._simulateView(op, traceId))
+        operations.map((op) => this._simulateView(op, traceId)),
       );
 
       const allPayments: Payment[] = [];
@@ -3137,7 +3526,9 @@ export class StellarSplitClient {
               amount: BigInt((p.amount ?? p.amount ?? 0) as string | number),
               ledger: p.ledger != null ? Number(p.ledger) : undefined,
               timestamp: p.timestamp != null ? Number(p.timestamp) : undefined,
-              donateOnFailure: Boolean(p.donateOnFailure ?? p.donate_on_failure ?? false),
+              donateOnFailure: Boolean(
+                p.donateOnFailure ?? p.donate_on_failure ?? false,
+              ),
             });
           }
         }
@@ -3152,7 +3543,11 @@ export class StellarSplitClient {
       telemetry.recordMethod("getPaymentHistory", true, Date.now() - startTime);
       return allPayments;
     } catch (error) {
-      telemetry.recordMethod("getPaymentHistory", false, Date.now() - startTime);
+      telemetry.recordMethod(
+        "getPaymentHistory",
+        false,
+        Date.now() - startTime,
+      );
       throw error;
     }
   }
@@ -3168,7 +3563,7 @@ export class StellarSplitClient {
       const operation = this.contract.call(
         "settle_auction",
         nativeToScVal(caller, { type: "address" }),
-        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
       );
       const result = await this._submitTx(caller, operation);
       telemetry.recordMethod("settleAuction", true, Date.now() - startTime);
@@ -3189,18 +3584,28 @@ export class StellarSplitClient {
     try {
       const operation = this.contract.call(
         "get_auction_info",
-        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
       );
-      const raw = await this._simulateView(operation) as Record<string, unknown>;
+      const raw = (await this._simulateView(operation)) as Record<
+        string,
+        unknown
+      >;
       const info: AuctionInfo = {
         invoiceId,
         active: Boolean(raw.active),
         highestBid: raw.highestBid
           ? {
-            bidder: (raw.highestBid as Record<string, unknown>).bidder as string,
-            amount: BigInt((raw.highestBid as Record<string, unknown>).amount as string | number),
-            timestamp: Number((raw.highestBid as Record<string, unknown>).timestamp),
-          }
+              bidder: (raw.highestBid as Record<string, unknown>)
+                .bidder as string,
+              amount: BigInt(
+                (raw.highestBid as Record<string, unknown>).amount as
+                  | string
+                  | number,
+              ),
+              timestamp: Number(
+                (raw.highestBid as Record<string, unknown>).timestamp,
+              ),
+            }
           : null,
         endTime: Number(raw.endTime ?? 0),
       };
@@ -3229,7 +3634,7 @@ export class StellarSplitClient {
     try {
       const operation = this.contract.call(
         "admin_freeze",
-        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
       );
       const result = await this._submitTx(admin, operation);
       telemetry.recordMethod("adminFreeze", true, Date.now() - startTime);
@@ -3249,7 +3654,7 @@ export class StellarSplitClient {
    * @returns The action ID and transaction hash.
    */
   async queueAction(
-    params: QueueActionParams
+    params: QueueActionParams,
   ): Promise<{ actionId: string; txHash: string }> {
     const startTime = Date.now();
     try {
@@ -3259,7 +3664,7 @@ export class StellarSplitClient {
         nativeToScVal(params.actionType, { type: "symbol" }),
         nativeToScVal(params.target, { type: "address" }),
         nativeToScVal(params.value, { type: "i128" }),
-        nativeToScVal(BigInt(params.eta), { type: "u64" })
+        nativeToScVal(BigInt(params.eta), { type: "u64" }),
       );
       const result = await this._submitTx(params.caller, operation);
       const actionId = scValToNative(result.returnValue).toString();
@@ -3284,7 +3689,7 @@ export class StellarSplitClient {
     try {
       const operation = this.contract.call(
         "admin_unfreeze",
-        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
       );
       const result = await this._submitTx(admin, operation);
       telemetry.recordMethod("adminUnfreeze", true, Date.now() - startTime);
@@ -3307,7 +3712,7 @@ export class StellarSplitClient {
       const operation = this.contract.call(
         "execute_action",
         nativeToScVal(caller, { type: "address" }),
-        nativeToScVal(BigInt(actionId), { type: "u64" })
+        nativeToScVal(BigInt(actionId), { type: "u64" }),
       );
       const result = await this._submitTx(caller, operation);
       telemetry.recordMethod("executeAction", true, Date.now() - startTime);
@@ -3334,17 +3739,29 @@ export class StellarSplitClient {
     try {
       const operation = this.contract.call(
         "get_cross_chain_ref",
-        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
       );
-      const raw = await this._simulateView(operation) as Record<string, unknown> | null;
+      const raw = (await this._simulateView(operation)) as Record<
+        string,
+        unknown
+      > | null;
       if (!raw) {
-        telemetry.recordMethod("getCrossChainRef", true, Date.now() - startTime);
+        telemetry.recordMethod(
+          "getCrossChainRef",
+          true,
+          Date.now() - startTime,
+        );
         return null;
       }
       const result: CrossChainRef = {
         chain: String(raw.chain ?? raw.chain ?? ""),
         transactionHash: String(raw.transactionHash ?? raw.tx_hash ?? ""),
-        blockNumber: raw.blockNumber != null ? String(raw.blockNumber) : raw.block_number != null ? String(raw.block_number) : undefined,
+        blockNumber:
+          raw.blockNumber != null
+            ? String(raw.blockNumber)
+            : raw.block_number != null
+              ? String(raw.block_number)
+              : undefined,
       };
       telemetry.recordMethod("getCrossChainRef", true, Date.now() - startTime);
       return result;
@@ -3366,7 +3783,7 @@ export class StellarSplitClient {
       const operation = this.contract.call(
         "cancel_action",
         nativeToScVal(caller, { type: "address" }),
-        nativeToScVal(BigInt(actionId), { type: "u64" })
+        nativeToScVal(BigInt(actionId), { type: "u64" }),
       );
       const result = await this._submitTx(caller, operation);
       telemetry.recordMethod("cancelAction", true, Date.now() - startTime);
@@ -3393,15 +3810,19 @@ export class StellarSplitClient {
         }),
         new xdr.ScMapEntry({
           key: nativeToScVal("tx_hash", { type: "symbol" }) as xdr.ScVal,
-          val: nativeToScVal(params.ref.transactionHash, { type: "string" }) as xdr.ScVal,
+          val: nativeToScVal(params.ref.transactionHash, {
+            type: "string",
+          }) as xdr.ScVal,
         }),
       ];
       if (params.ref.blockNumber !== undefined) {
         refMap.push(
           new xdr.ScMapEntry({
             key: nativeToScVal("block_number", { type: "symbol" }) as xdr.ScVal,
-            val: nativeToScVal(params.ref.blockNumber, { type: "string" }) as xdr.ScVal,
-          })
+            val: nativeToScVal(params.ref.blockNumber, {
+              type: "string",
+            }) as xdr.ScVal,
+          }),
         );
       }
 
@@ -3409,7 +3830,7 @@ export class StellarSplitClient {
         "set_cross_chain_ref",
         nativeToScVal(BigInt(params.invoiceId), { type: "u64" }),
         nativeToScVal(params.creator, { type: "address" }),
-        xdr.ScVal.scvMap(refMap)
+        xdr.ScVal.scvMap(refMap),
       );
       const result = await this._submitTx(params.creator, operation);
       telemetry.recordMethod("setCrossChainRef", true, Date.now() - startTime);
@@ -3430,9 +3851,12 @@ export class StellarSplitClient {
     try {
       const operation = this.contract.call(
         "get_action_status",
-        nativeToScVal(BigInt(actionId), { type: "u64" })
+        nativeToScVal(BigInt(actionId), { type: "u64" }),
       );
-      const raw = await this._simulateView(operation) as Record<string, unknown>;
+      const raw = (await this._simulateView(operation)) as Record<
+        string,
+        unknown
+      >;
       const status: TimelockAction = {
         actionId,
         actionType: raw.actionType as string,
@@ -3502,7 +3926,11 @@ export class StellarSplitClient {
         amountRemaining: remaining > 0n ? remaining : 0n,
       };
     } catch (error) {
-      telemetry.recordMethod("getVelocityStatus", false, Date.now() - startTime);
+      telemetry.recordMethod(
+        "getVelocityStatus",
+        false,
+        Date.now() - startTime,
+      );
       throw error;
     }
   }
@@ -3523,13 +3951,19 @@ export class StellarSplitClient {
     return {
       gated: Boolean(obj.gated),
       hasNft: Boolean(obj.hasNft ?? obj.has_nft),
-      contractAddress: typeof contractAddress === "string" ? contractAddress : null,
+      contractAddress:
+        typeof contractAddress === "string" ? contractAddress : null,
     };
   }
 
   /** Simulate a read-only contract call and return the native-decoded result. */
-  private async _simulateView(operation: xdr.Operation, traceId?: string): Promise<unknown> {
-    const account = await this.server.getAccount(this.config.contractId).catch(() => null);
+  private async _simulateView(
+    operation: xdr.Operation,
+    traceId?: string,
+  ): Promise<unknown> {
+    const account = await this.server
+      .getAccount(this.config.contractId)
+      .catch(() => null);
     const sourceAccount = account ?? new Account(this.config.contractId, "0");
 
     const tx = new TransactionBuilder(sourceAccount, {
@@ -3541,15 +3975,25 @@ export class StellarSplitClient {
       .build();
 
     if (traceId) {
-      await runRequestInterceptors({ method: "_simulateView", params: [], headers: { "X-Trace-Id": traceId } });
+      await runRequestInterceptors({
+        method: "_simulateView",
+        params: [],
+        headers: { "X-Trace-Id": traceId },
+      });
     }
 
     const simResult = await this.server.simulateTransaction(tx);
     if (SorobanRpc.Api.isSimulationError(simResult)) {
-      throw new SimulationFailedError(`Simulation failed: ${simResult.error}`, "_simulateView", simResult.error);
+      throw new SimulationFailedError(
+        `Simulation failed: ${simResult.error}`,
+        "_simulateView",
+        simResult.error,
+      );
     }
 
-    const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
+    const returnVal = (
+      simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse
+    ).result?.retval;
     if (!returnVal) throw new NoReturnValueError("_simulateView");
 
     return scValToNative(returnVal);
@@ -3559,7 +4003,7 @@ export class StellarSplitClient {
   private _submitTx(
     sourceAddress: string,
     operation: xdr.Operation,
-    priority: RequestPriority = "normal"
+    priority: RequestPriority = "normal",
   ): Promise<{ txHash: string; returnValue: xdr.ScVal }> {
     return this._queue.enqueue(priority, async () => {
       if (this._idempotency) {
@@ -3600,7 +4044,7 @@ export class StellarSplitClient {
 
   private async _doSubmitTx(
     sourceAddress: string,
-    operation: xdr.Operation
+    operation: xdr.Operation,
   ): Promise<{ txHash: string; returnValue: xdr.ScVal }> {
     await this._rateLimiter?.acquire();
     const req = { method: "_submitTx", params: [sourceAddress] };
@@ -3625,15 +4069,22 @@ export class StellarSplitClient {
 
       const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
       const signedXdr = await (this._adapter
-        ? this._adapter.signTransaction(preparedTx.toXDR(), this.config.networkPassphrase)
+        ? this._adapter.signTransaction(
+            preparedTx.toXDR(),
+            this.config.networkPassphrase,
+          )
         : signTransaction(preparedTx.toXDR(), this.config.networkPassphrase));
 
       const sendResult = await this.server.sendTransaction(
-        TransactionBuilder.fromXDR(signedXdr, this.config.networkPassphrase)
+        TransactionBuilder.fromXDR(signedXdr, this.config.networkPassphrase),
       );
 
       if (sendResult.status === "ERROR") {
-        throw new TransactionFailedError(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`, sendResult.hash, JSON.stringify(sendResult.errorResult));
+        throw new TransactionFailedError(
+          `Transaction failed: ${JSON.stringify(sendResult.errorResult)}`,
+          sendResult.hash,
+          JSON.stringify(sendResult.errorResult),
+        );
       }
 
       const txHash = sendResult.hash;
@@ -3653,23 +4104,33 @@ export class StellarSplitClient {
         const multiplier = this.config.feeBumpMultiplier ?? 2;
         const innerTx = TransactionBuilder.fromXDR(
           signedXdr,
-          this.config.networkPassphrase
+          this.config.networkPassphrase,
         ) as Parameters<typeof TransactionBuilder.buildFeeBumpTransaction>[2];
         const bumpedFee = String(Math.ceil(Number(BASE_FEE) * multiplier));
         const feeBumpTx = TransactionBuilder.buildFeeBumpTransaction(
           sourceAddress,
           bumpedFee,
           innerTx,
-          this.config.networkPassphrase
+          this.config.networkPassphrase,
         );
         const signedBumpXdr = await (this._adapter
-          ? this._adapter.signTransaction(feeBumpTx.toXDR(), this.config.networkPassphrase)
+          ? this._adapter.signTransaction(
+              feeBumpTx.toXDR(),
+              this.config.networkPassphrase,
+            )
           : signTransaction(feeBumpTx.toXDR(), this.config.networkPassphrase));
         const bumpSendResult = await this.server.sendTransaction(
-          TransactionBuilder.fromXDR(signedBumpXdr, this.config.networkPassphrase)
+          TransactionBuilder.fromXDR(
+            signedBumpXdr,
+            this.config.networkPassphrase,
+          ),
         );
         if (bumpSendResult.status === "ERROR") {
-          throw new TransactionFailedError(`Fee-bump transaction failed: ${JSON.stringify(bumpSendResult.errorResult)}`, bumpSendResult.hash, JSON.stringify(bumpSendResult.errorResult));
+          throw new TransactionFailedError(
+            `Fee-bump transaction failed: ${JSON.stringify(bumpSendResult.errorResult)}`,
+            bumpSendResult.hash,
+            JSON.stringify(bumpSendResult.errorResult),
+          );
         }
         const bumpHash = bumpSendResult.hash;
         let bumpResult = await this.server.getTransaction(bumpHash);
@@ -3686,11 +4147,15 @@ export class StellarSplitClient {
           throw new TransactionNotConfirmedError(String(bumpResult.status));
         }
         const bumpReturnValue =
-          (bumpResult as SorobanRpc.Api.GetSuccessfulTransactionResponse).returnValue ??
-          xdr.ScVal.scvVoid();
+          (bumpResult as SorobanRpc.Api.GetSuccessfulTransactionResponse)
+            .returnValue ?? xdr.ScVal.scvVoid();
 
         const durationMs = Date.now() - startTime;
-        await runResponseInterceptors({ method: "_submitTx", result: { txHash: bumpHash, returnValue: bumpReturnValue }, durationMs });
+        await runResponseInterceptors({
+          method: "_submitTx",
+          result: { txHash: bumpHash, returnValue: bumpReturnValue },
+          durationMs,
+        });
         recordCall(true);
         return { txHash: bumpHash, returnValue: bumpReturnValue };
       }
@@ -3700,16 +4165,24 @@ export class StellarSplitClient {
       }
 
       const returnValue =
-        (getResult as SorobanRpc.Api.GetSuccessfulTransactionResponse).returnValue ??
-        xdr.ScVal.scvVoid();
+        (getResult as SorobanRpc.Api.GetSuccessfulTransactionResponse)
+          .returnValue ?? xdr.ScVal.scvVoid();
 
       const durationMs = Date.now() - startTime;
-      await runResponseInterceptors({ method: "_submitTx", result: { txHash, returnValue }, durationMs });
+      await runResponseInterceptors({
+        method: "_submitTx",
+        result: { txHash, returnValue },
+        durationMs,
+      });
       recordCall(true);
       return { txHash, returnValue };
     } catch (error) {
       const durationMs = Date.now() - startTime;
-      await runResponseInterceptors({ method: "_submitTx", result: undefined, durationMs });
+      await runResponseInterceptors({
+        method: "_submitTx",
+        result: undefined,
+        durationMs,
+      });
       recordCall(false);
       throw error;
     }
@@ -3737,12 +4210,13 @@ export class StellarSplitClient {
     const recipients: Recipient[] = (raw.recipients as string[]).map(
       (addr: string, i: number) => {
         const amt = amounts[i];
-        if (amt === undefined) throw new NoReturnValueError(`_parseInvoice ${i}`);
+        if (amt === undefined)
+          throw new NoReturnValueError(`_parseInvoice ${i}`);
         return {
           address: addr,
           amount: BigInt(amt as string | number),
         };
-      }
+      },
     );
 
     const payments: Payment[] = ((raw.payments as unknown[]) ?? []).map(
@@ -3753,7 +4227,7 @@ export class StellarSplitClient {
           amount: BigInt(pm.amount as string | number),
           donateOnFailure: pm.donateOnFailure === true,
         };
-      }
+      },
     );
 
     return {
@@ -3768,8 +4242,11 @@ export class StellarSplitClient {
       recurring: raw.recurring as boolean | undefined,
       memo: raw.memo as string | undefined,
       clonedFrom: raw.clonedFrom as string | undefined,
-      parentInvoiceId: raw.parentInvoiceId ? String(raw.parentInvoiceId) : undefined,
-      cloneDepth: typeof raw.cloneDepth === "number" ? raw.cloneDepth : undefined,
+      parentInvoiceId: raw.parentInvoiceId
+        ? String(raw.parentInvoiceId)
+        : undefined,
+      cloneDepth:
+        typeof raw.cloneDepth === "number" ? raw.cloneDepth : undefined,
       groupId: raw.groupId as string | undefined,
     };
   }
@@ -3780,10 +4257,13 @@ export class StellarSplitClient {
   private async _getInvoiceExt(invoiceId: string): Promise<InvoiceExt> {
     const operation = this.contract.call(
       "get_invoice_ext",
-      nativeToScVal(BigInt(invoiceId), { type: "u64" })
+      nativeToScVal(BigInt(invoiceId), { type: "u64" }),
     );
 
-    const raw = await this._simulateView(operation) as Record<string, unknown>;
+    const raw = (await this._simulateView(operation)) as Record<
+      string,
+      unknown
+    >;
 
     return {
       parentInvoiceId: raw.parentInvoiceId ? String(raw.parentInvoiceId) : null,
@@ -3861,7 +4341,7 @@ export class StellarSplitClient {
     const chain = new FallbackChain(["rpc", "horizon"], {
       logger: (attempt) =>
         console.warn(
-          `[StellarSplitClient] getAccount fallback (${attempt.url}): ${attempt.error}`
+          `[StellarSplitClient] getAccount fallback (${attempt.url}): ${attempt.error}`,
         ),
     });
 
@@ -3886,7 +4366,7 @@ export class StellarSplitClient {
   async getAccountBalances(address: string): Promise<NormalizedBalance[]> {
     if (!this._horizonReader) {
       throw new ValidationError(
-        "getAccountBalances requires horizonUrl to be set in StellarSplitClientConfig"
+        "getAccountBalances requires horizonUrl to be set in StellarSplitClientConfig",
       );
     }
 
@@ -3895,14 +4375,14 @@ export class StellarSplitClient {
     const chain = new FallbackChain(["rpc", "horizon"], {
       logger: (attempt) =>
         console.warn(
-          `[StellarSplitClient] getAccountBalances fallback (${attempt.url}): ${attempt.error}`
+          `[StellarSplitClient] getAccountBalances fallback (${attempt.url}): ${attempt.error}`,
         ),
     });
 
     return chain.execute(async (provider) => {
       if (provider === "rpc") {
         throw new ValidationError(
-          "Soroban RPC does not expose account balances; delegating to Horizon"
+          "Soroban RPC does not expose account balances; delegating to Horizon",
         );
       }
       return horizonReader.getAccountBalances(address);
@@ -3933,14 +4413,14 @@ export class StellarSplitClient {
   async refundInvoice(
     invoiceId: string,
     creator: string,
-    payerAddress?: string
+    payerAddress?: string,
   ): Promise<{ txHash: string; fallback: false } | ClaimableRefundResult> {
     const startTime = Date.now();
 
     try {
       const operation = this.contract.call(
         "refund_invoice",
-        nativeToScVal(BigInt(invoiceId), { type: "u64" })
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
       );
       const result = await this._submitTx(creator, operation);
 
@@ -3952,11 +4432,15 @@ export class StellarSplitClient {
     } catch (error) {
       // Fallback path: if transfer failed due to missing account/trustline and
       // Horizon is configured, create a claimable balance instead.
-      if (isRefundTransferError(error) && this.config.horizonUrl && payerAddress) {
+      if (
+        isRefundTransferError(error) &&
+        this.config.horizonUrl &&
+        payerAddress
+      ) {
         console.warn(
           `[StellarSplitClient] refundInvoice: transfer failed for invoice ${invoiceId} ` +
-          `(${error instanceof Error ? error.message : String(error)}); ` +
-          `creating claimable-balance fallback for payer ${payerAddress}`
+            `(${error instanceof Error ? error.message : String(error)}); ` +
+            `creating claimable-balance fallback for payer ${payerAddress}`,
         );
 
         try {
@@ -3968,13 +4452,17 @@ export class StellarSplitClient {
             amount,
             Asset.native(),
             creator,
-            this.config
+            this.config,
           );
 
           telemetry.recordMethod("refundInvoice", true, Date.now() - startTime);
           return claimableResult;
         } catch (fallbackError) {
-          telemetry.recordMethod("refundInvoice", false, Date.now() - startTime);
+          telemetry.recordMethod(
+            "refundInvoice",
+            false,
+            Date.now() - startTime,
+          );
           throw fallbackError;
         }
       }
@@ -4008,7 +4496,9 @@ export class StellarSplitClient {
    * @returns The invoice from the endpoint with the highest lastModifiedLedger.
    * @throws If all endpoints fail.
    */
-  async syncInvoice(invoiceId: string): Promise<{ invoice: Invoice; source: string; ledger: number }> {
+  async syncInvoice(
+    invoiceId: string,
+  ): Promise<{ invoice: Invoice; source: string; ledger: number }> {
     const urls = Array.isArray(this.config.rpcUrl)
       ? this.config.rpcUrl
       : [this.config.rpcUrl];
@@ -4020,10 +4510,13 @@ export class StellarSplitClient {
         });
         const operation = this.contract.call(
           "get_invoice",
-          nativeToScVal(BigInt(invoiceId), { type: "u64" })
+          nativeToScVal(BigInt(invoiceId), { type: "u64" }),
         );
-        const account = await server.getAccount(this.config.contractId).catch(() => null);
-        const sourceAccount = account ?? new Account(this.config.contractId, "0");
+        const account = await server
+          .getAccount(this.config.contractId)
+          .catch(() => null);
+        const sourceAccount =
+          account ?? new Account(this.config.contractId, "0");
         const tx = new TransactionBuilder(sourceAccount, {
           fee: BASE_FEE,
           networkPassphrase: this.config.networkPassphrase,
@@ -4033,28 +4526,45 @@ export class StellarSplitClient {
           .build();
         const simResult = await server.simulateTransaction(tx);
         if (SorobanRpc.Api.isSimulationError(simResult)) {
-          throw new SimulationFailedError(`Simulation failed on ${url}: ${simResult.error}`, "syncInvoice", simResult.error);
+          throw new SimulationFailedError(
+            `Simulation failed on ${url}: ${simResult.error}`,
+            "syncInvoice",
+            simResult.error,
+          );
         }
-        const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
+        const returnVal = (
+          simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse
+        ).result?.retval;
         if (!returnVal) throw new NoReturnValueError(`syncInvoice ${url}`);
         const raw = scValToNative(returnVal) as Record<string, unknown>;
         const invoice = this._parseInvoice(invoiceId, raw);
-        const ledger = typeof raw.lastModifiedLedger === "number"
-          ? raw.lastModifiedLedger
-          : 0;
+        const ledger =
+          typeof raw.lastModifiedLedger === "number"
+            ? raw.lastModifiedLedger
+            : 0;
         return { invoice, source: url, ledger };
-      })
+      }),
     );
 
     const successful = results
-      .filter((r): r is PromiseFulfilledResult<{ invoice: Invoice; source: string; ledger: number }> => r.status === "fulfilled")
+      .filter(
+        (
+          r,
+        ): r is PromiseFulfilledResult<{
+          invoice: Invoice;
+          source: string;
+          ledger: number;
+        }> => r.status === "fulfilled",
+      )
       .map((r) => r.value);
 
     if (successful.length === 0) {
       throw new RpcUnavailableError("syncInvoice");
     }
 
-    return successful.reduce((best, cur) => cur.ledger > best.ledger ? cur : best);
+    return successful.reduce((best, cur) =>
+      cur.ledger > best.ledger ? cur : best,
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -4065,13 +4575,16 @@ export class StellarSplitClient {
    * Get the claimable payout amount for a recipient on an invoice.
    * Returns 0n if no pending payout exists.
    */
-  async getPendingPayout(invoiceId: string, recipient: string): Promise<bigint> {
+  async getPendingPayout(
+    invoiceId: string,
+    recipient: string,
+  ): Promise<bigint> {
     const startTime = Date.now();
     try {
       const operation = this.contract.call(
         "get_pending_payout",
         nativeToScVal(BigInt(invoiceId), { type: "u64" }),
-        nativeToScVal(recipient, { type: "address" })
+        nativeToScVal(recipient, { type: "address" }),
       );
       const raw = await this._simulateView(operation);
       const amount = raw == null ? 0n : BigInt(raw as string | number | bigint);
@@ -4088,7 +4601,10 @@ export class StellarSplitClient {
    * Emits a `pending_payout_claimed` event on success.
    * @throws If no pending payout exists for the recipient.
    */
-  async claimPendingPayout(invoiceId: string, recipient: string): Promise<ClaimPayoutResult> {
+  async claimPendingPayout(
+    invoiceId: string,
+    recipient: string,
+  ): Promise<ClaimPayoutResult> {
     const startTime = Date.now();
     try {
       const pending = await this.getPendingPayout(invoiceId, recipient);
@@ -4098,13 +4614,21 @@ export class StellarSplitClient {
       const operation = this.contract.call(
         "claim_pending_payout",
         nativeToScVal(BigInt(invoiceId), { type: "u64" }),
-        nativeToScVal(recipient, { type: "address" })
+        nativeToScVal(recipient, { type: "address" }),
       );
       const result = await this._submitTx(recipient, operation);
-      telemetry.recordMethod("claimPendingPayout", true, Date.now() - startTime);
+      telemetry.recordMethod(
+        "claimPendingPayout",
+        true,
+        Date.now() - startTime,
+      );
       return { txHash: result.txHash, invoiceId, recipient };
     } catch (error) {
-      telemetry.recordMethod("claimPendingPayout", false, Date.now() - startTime);
+      telemetry.recordMethod(
+        "claimPendingPayout",
+        false,
+        Date.now() - startTime,
+      );
       throw error;
     }
   }
@@ -4118,14 +4642,20 @@ export class StellarSplitClient {
    * Validates attestationHash (32 bytes) and signature (64 bytes) before submission.
    * Returns a payment receipt with the attestation hash included.
    */
-  async payWithAttestation(params: PayWithAttestationParams): Promise<AttestationPaymentReceipt> {
+  async payWithAttestation(
+    params: PayWithAttestationParams,
+  ): Promise<AttestationPaymentReceipt> {
     const startTime = Date.now();
     try {
       if (params.attestationHash.length !== 32) {
-        throw new InvalidAttestationError(`attestationHash must be 32 bytes, got ${params.attestationHash.length}`);
+        throw new InvalidAttestationError(
+          `attestationHash must be 32 bytes, got ${params.attestationHash.length}`,
+        );
       }
       if (params.signature.length !== 64) {
-        throw new InvalidAttestationError(`signature must be 64 bytes, got ${params.signature.length}`);
+        throw new InvalidAttestationError(
+          `signature must be 64 bytes, got ${params.signature.length}`,
+        );
       }
       const operation = this.contract.call(
         "pay_with_attestation",
@@ -4134,14 +4664,29 @@ export class StellarSplitClient {
         nativeToScVal(params.amount, { type: "i128" }),
         xdr.ScVal.scvBytes(Buffer.from(params.attestationHash)),
         xdr.ScVal.scvBytes(Buffer.from(params.signature)),
-        nativeToScVal(params.signerPubkey, { type: "address" })
+        nativeToScVal(params.signerPubkey, { type: "address" }),
       );
       const result = await this._submitTx(params.payer, operation);
-      const attestationHash = Buffer.from(params.attestationHash).toString("hex");
-      telemetry.recordMethod("payWithAttestation", true, Date.now() - startTime);
-      return { txHash: result.txHash, invoiceId: params.invoiceId, amount: params.amount, attestationHash };
+      const attestationHash = Buffer.from(params.attestationHash).toString(
+        "hex",
+      );
+      telemetry.recordMethod(
+        "payWithAttestation",
+        true,
+        Date.now() - startTime,
+      );
+      return {
+        txHash: result.txHash,
+        invoiceId: params.invoiceId,
+        amount: params.amount,
+        attestationHash,
+      };
     } catch (error) {
-      telemetry.recordMethod("payWithAttestation", false, Date.now() - startTime);
+      telemetry.recordMethod(
+        "payWithAttestation",
+        false,
+        Date.now() - startTime,
+      );
       throw error;
     }
   }
@@ -4156,14 +4701,22 @@ export class StellarSplitClient {
     try {
       const operation = this.contract.call(
         "get_creator_volume_cap",
-        nativeToScVal(address, { type: "address" })
+        nativeToScVal(address, { type: "address" }),
       );
       const raw = await this._simulateView(operation);
       const cap = raw == null ? null : BigInt(raw as string | number | bigint);
-      telemetry.recordMethod("getCreatorVolumeCap", true, Date.now() - startTime);
+      telemetry.recordMethod(
+        "getCreatorVolumeCap",
+        true,
+        Date.now() - startTime,
+      );
       return cap;
     } catch {
-      telemetry.recordMethod("getCreatorVolumeCap", false, Date.now() - startTime);
+      telemetry.recordMethod(
+        "getCreatorVolumeCap",
+        false,
+        Date.now() - startTime,
+      );
       return null;
     }
   }
@@ -4174,20 +4727,30 @@ export class StellarSplitClient {
     try {
       const operation = this.contract.call(
         "get_creator_volume_used",
-        nativeToScVal(address, { type: "address" })
+        nativeToScVal(address, { type: "address" }),
       );
       const raw = await this._simulateView(operation);
       const used = raw == null ? 0n : BigInt(raw as string | number | bigint);
-      telemetry.recordMethod("getCreatorVolumeUsed", true, Date.now() - startTime);
+      telemetry.recordMethod(
+        "getCreatorVolumeUsed",
+        true,
+        Date.now() - startTime,
+      );
       return used;
     } catch {
-      telemetry.recordMethod("getCreatorVolumeUsed", false, Date.now() - startTime);
+      telemetry.recordMethod(
+        "getCreatorVolumeUsed",
+        false,
+        Date.now() - startTime,
+      );
       return 0n;
     }
   }
 
   /** Returns remaining volume (cap - used) or Infinity if the creator is uncapped. */
-  async getRemainingCreatorVolume(address: string): Promise<bigint | typeof Infinity> {
+  async getRemainingCreatorVolume(
+    address: string,
+  ): Promise<bigint | typeof Infinity> {
     const [cap, used] = await Promise.all([
       this.getCreatorVolumeCap(address),
       this.getCreatorVolumeUsed(address),
@@ -4206,18 +4769,25 @@ export class StellarSplitClient {
    * Returns invoice IDs in the same order as the input array.
    */
   async createInvoiceBatch(
-    items: CreateInvoiceParams[]
+    items: CreateInvoiceParams[],
   ): Promise<{ invoiceIds: string[]; txHash: string }> {
     if (items.length === 0 || items.length > 10) {
       throw new InvalidBatchSizeError("1-10 items", items.length);
     }
     for (let i = 0; i < items.length; i++) {
       const item = items[i]!;
-      if (!item.creator) throw new ValidationError(`Item ${i}: creator is required`);
-      if (!item.token) throw new ValidationError(`Item ${i}: token is required`);
-      if (!item.deadline || item.deadline <= 0) throw new ValidationError(`Item ${i}: deadline must be a positive number`);
+      if (!item.creator)
+        throw new ValidationError(`Item ${i}: creator is required`);
+      if (!item.token)
+        throw new ValidationError(`Item ${i}: token is required`);
+      if (!item.deadline || item.deadline <= 0)
+        throw new ValidationError(
+          `Item ${i}: deadline must be a positive number`,
+        );
       if (!Array.isArray(item.recipients) || item.recipients.length === 0) {
-        throw new ValidationError(`Item ${i}: recipients must be a non-empty array`);
+        throw new ValidationError(
+          `Item ${i}: recipients must be a non-empty array`,
+        );
       }
       if (this.config.payloadGuard) {
         validateInvoicePayload(item, this.config.payloadGuard);
@@ -4233,11 +4803,17 @@ export class StellarSplitClient {
         }),
         new xdr.ScMapEntry({
           key: nativeToScVal("recipients", { type: "symbol" }) as xdr.ScVal,
-          val: xdr.ScVal.scvVec(p.recipients.map((r) => nativeToScVal(r.address, { type: "address" }))),
+          val: xdr.ScVal.scvVec(
+            p.recipients.map((r) =>
+              nativeToScVal(r.address, { type: "address" }),
+            ),
+          ),
         }),
         new xdr.ScMapEntry({
           key: nativeToScVal("amounts", { type: "symbol" }) as xdr.ScVal,
-          val: xdr.ScVal.scvVec(p.recipients.map((r) => nativeToScVal(r.amount, { type: "i128" }))),
+          val: xdr.ScVal.scvVec(
+            p.recipients.map((r) => nativeToScVal(r.amount, { type: "i128" })),
+          ),
         }),
         new xdr.ScMapEntry({
           key: nativeToScVal("token", { type: "symbol" }) as xdr.ScVal,
@@ -4247,12 +4823,12 @@ export class StellarSplitClient {
           key: nativeToScVal("deadline", { type: "symbol" }) as xdr.ScVal,
           val: nativeToScVal(p.deadline, { type: "u64" }) as xdr.ScVal,
         }),
-      ])
+      ]),
     );
 
     const operation = this.contract.call(
       "create_invoice_batch",
-      xdr.ScVal.scvVec(invoiceParamVals)
+      xdr.ScVal.scvVec(invoiceParamVals),
     );
 
     const startTime = Date.now();
@@ -4268,33 +4844,53 @@ export class StellarSplitClient {
 
       const simResult = await this.server.simulateTransaction(tx);
       if (SorobanRpc.Api.isSimulationError(simResult)) {
-        throw new SimulationFailedError(`Simulation failed: ${simResult.error}`, "createInvoiceBatch", simResult.error);
+        throw new SimulationFailedError(
+          `Simulation failed: ${simResult.error}`,
+          "createInvoiceBatch",
+          simResult.error,
+        );
       }
 
       const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
-      const bumpedFee = String(Math.ceil(Number(BASE_FEE) * (this.config.feeBumpMultiplier ?? 2) * items.length));
+      const bumpedFee = String(
+        Math.ceil(
+          Number(BASE_FEE) *
+            (this.config.feeBumpMultiplier ?? 2) *
+            items.length,
+        ),
+      );
       const feeBumpTx = TransactionBuilder.buildFeeBumpTransaction(
         creator,
         bumpedFee,
-        preparedTx as Parameters<typeof TransactionBuilder.buildFeeBumpTransaction>[2],
-        this.config.networkPassphrase
+        preparedTx as Parameters<
+          typeof TransactionBuilder.buildFeeBumpTransaction
+        >[2],
+        this.config.networkPassphrase,
       );
 
       const signedXdr = await (this._adapter
-        ? this._adapter.signTransaction(feeBumpTx.toXDR(), this.config.networkPassphrase)
+        ? this._adapter.signTransaction(
+            feeBumpTx.toXDR(),
+            this.config.networkPassphrase,
+          )
         : signTransaction(feeBumpTx.toXDR(), this.config.networkPassphrase));
 
       const sendResult = await this.server.sendTransaction(
-        TransactionBuilder.fromXDR(signedXdr, this.config.networkPassphrase)
+        TransactionBuilder.fromXDR(signedXdr, this.config.networkPassphrase),
       );
       if (sendResult.status === "ERROR") {
-        throw new TransactionFailedError(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
+        throw new TransactionFailedError(
+          `Transaction failed: ${JSON.stringify(sendResult.errorResult)}`,
+        );
       }
 
       const txHash = sendResult.hash;
       let getResult = await this.server.getTransaction(txHash);
       let attempts = 0;
-      while (getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND && attempts < 20) {
+      while (
+        getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND &&
+        attempts < 20
+      ) {
         await new Promise((r) => setTimeout(r, 1500));
         getResult = await this.server.getTransaction(txHash);
         attempts++;
@@ -4304,14 +4900,24 @@ export class StellarSplitClient {
       }
 
       const returnVal =
-        (getResult as SorobanRpc.Api.GetSuccessfulTransactionResponse).returnValue ??
-        xdr.ScVal.scvVoid();
-      const invoiceIds = (scValToNative(returnVal) as (string | number | bigint)[]).map((id) => id.toString());
+        (getResult as SorobanRpc.Api.GetSuccessfulTransactionResponse)
+          .returnValue ?? xdr.ScVal.scvVoid();
+      const invoiceIds = (
+        scValToNative(returnVal) as (string | number | bigint)[]
+      ).map((id) => id.toString());
 
-      telemetry.recordMethod("createInvoiceBatch", true, Date.now() - startTime);
+      telemetry.recordMethod(
+        "createInvoiceBatch",
+        true,
+        Date.now() - startTime,
+      );
       return { invoiceIds, txHash };
     } catch (error) {
-      telemetry.recordMethod("createInvoiceBatch", false, Date.now() - startTime);
+      telemetry.recordMethod(
+        "createInvoiceBatch",
+        false,
+        Date.now() - startTime,
+      );
       throw error;
     }
   }
@@ -4326,9 +4932,12 @@ export class StellarSplitClient {
    * @param opts - Optional per-call timeout and trace ID overrides.
    * @returns Array of creator addresses sorted by invoice volume descending.
    */
-  async getLeaderboard(
-    opts?: { timeout?: number; traceId?: string }
-  ): Promise<Array<{ creator: string; invoiceCount: number; totalVolume: bigint }>> {
+  async getLeaderboard(opts?: {
+    timeout?: number;
+    traceId?: string;
+  }): Promise<
+    Array<{ creator: string; invoiceCount: number; totalVolume: bigint }>
+  > {
     return this._withTelemetry(
       "getLeaderboard",
       undefined,
@@ -4339,10 +4948,12 @@ export class StellarSplitClient {
         return (raw as Array<Record<string, unknown>>).map((entry) => ({
           creator: String(entry.creator ?? ""),
           invoiceCount: Number(entry.invoice_count ?? 0),
-          totalVolume: BigInt((entry.total_volume as string | number | bigint) ?? 0),
+          totalVolume: BigInt(
+            (entry.total_volume as string | number | bigint) ?? 0,
+          ),
         }));
       },
-      opts
+      opts,
     );
   }
 
@@ -4354,16 +4965,15 @@ export class StellarSplitClient {
    */
   async getInvoiceHistory(
     invoiceId: string,
-    opts?: { timeout?: number; traceId?: string }
+    opts?: { timeout?: number; traceId?: string },
   ): Promise<Payment[]> {
     return this._withTelemetry(
       "getInvoiceHistory",
       { invoiceId },
       () => this._fetchPaymentHistory(invoiceId, opts?.traceId),
-      opts
+      opts,
     );
   }
-
 }
 
 /** Coerce a native-decoded scalar (bigint | number | string) into a bigint, defaulting to 0n. */
