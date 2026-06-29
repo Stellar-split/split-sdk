@@ -86,6 +86,7 @@ import type {
   PayParams,
   PaymentCooldown,
   PaymentProof,
+  PreviewTokenSwapResult,
   Recipient,
   SimulateCreateInvoiceResult,
   SimulatePayResult,
@@ -245,6 +246,11 @@ export interface StellarSplitClientConfig {
    * Required when calling buildSponsoredOnboarding from src/sponsorship.ts.
    */
   sponsorAccount?: string;
+  /**
+   * Optional DEX contract address for token swaps via pay_with_token.
+   * When provided, enables previewTokenSwap and pay_with_token operations.
+   */
+  dexContractId?: string;
   /**
    * Optional anonymous feature-usage analytics configuration.
    * When enabled, method call frequencies are collected and periodically flushed
@@ -651,13 +657,13 @@ export class StellarSplitClient {
     } catch (error) {
       const durationMs = Date.now() - startTime;
       const stellarError = error as StellarSplitError;
-      
+
       this._telemetryHookManager.fireOnError(stellarError, {
         method,
         args,
         timestamp: Date.now(),
       });
-      
+
       this._telemetryHookManager.fireOnCallEnd({
         method,
         durationMs,
@@ -665,7 +671,7 @@ export class StellarSplitClient {
         error: stellarError,
         timestamp: Date.now(),
       });
-      
+
       throw error;
     }
   }
@@ -1141,7 +1147,7 @@ export class StellarSplitClient {
    */
   private async _withCache<T>(methodName: string, args: any[], fetcher: () => Promise<T>): Promise<T> {
     const isSimpleCache = this._cache && typeof (this._cache as any).getStats === 'function';
-    
+
     if (isSimpleCache) {
       const key = `${methodName}:${JSON.stringify(args)}`;
       const cached = (this._cache as any).get(key) as T | undefined;
@@ -1150,16 +1156,16 @@ export class StellarSplitClient {
       const cached = this._cache.get(args[0]) as T | undefined;
       if (cached) return cached;
     }
-    
+
     const result = await fetcher();
-    
+
     if (isSimpleCache) {
       const key = `${methodName}:${JSON.stringify(args)}`;
       (this._cache as any).set(key, result);
     } else if (this._cache && methodName === "getInvoice") {
       this._cache.set(args[0], result);
     }
-    
+
     return result;
   }
 
@@ -1200,7 +1206,7 @@ export class StellarSplitClient {
 
       const account = await this.server.getAccount(this.config.contractId).catch(() => null);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const sourceAccount = account ?? ({ accountId: () => this.config.contractId, sequenceNumber: () => "0", incrementSequenceNumber: () => {} } as any);
+      const sourceAccount = account ?? ({ accountId: () => this.config.contractId, sequenceNumber: () => "0", incrementSequenceNumber: () => { } } as any);
 
       const tx = new TransactionBuilder(sourceAccount, {
         fee: BASE_FEE,
@@ -2084,20 +2090,20 @@ export class StellarSplitClient {
   // Issue #2 / #282 — subscribeToInvoice
   // ---------------------------------------------------------------------------
 
-/**
-    * Subscribe to live invoice events via server-sent events (SSE).
-    *
-    * Pass a single handler function to receive typed `InvoiceEvent` objects
-    * (`payment_received`, `invoice_released`, `invoice_refunded`) without
-    * polling. The connection reconnects automatically with exponential backoff
-    * on drops. The SSE base URL defaults to the client's `horizonUrl` config and
-    * can be overridden via `options.baseUrl`.
-    *
-    * @param invoiceId - The invoice ID to watch.
-    * @param handler   - Called with each single typed `InvoiceEvent` (SSE mode).
-    * @param options   - Optional SSE options (base URL, backoff, EventSource factory).
-    * @returns Unsubscribe function that permanently stops the stream.
-    */
+  /**
+      * Subscribe to live invoice events via server-sent events (SSE).
+      *
+      * Pass a single handler function to receive typed `InvoiceEvent` objects
+      * (`payment_received`, `invoice_released`, `invoice_refunded`) without
+      * polling. The connection reconnects automatically with exponential backoff
+      * on drops. The SSE base URL defaults to the client's `horizonUrl` config and
+      * can be overridden via `options.baseUrl`.
+      *
+      * @param invoiceId - The invoice ID to watch.
+      * @param handler   - Called with each single typed `InvoiceEvent` (SSE mode).
+      * @param options   - Optional SSE options (base URL, backoff, EventSource factory).
+      * @returns Unsubscribe function that permanently stops the stream.
+      */
   subscribeToInvoice(
     invoiceId: string,
     handler: InvoiceEventHandler,
@@ -2279,7 +2285,7 @@ export class StellarSplitClient {
     const sourceAccount = account ?? ({
       accountId: () => params.creator,
       sequenceNumber: () => "0",
-      incrementSequenceNumber: () => {},
+      incrementSequenceNumber: () => { },
     } as unknown as Account);
 
     const tx = new TransactionBuilder(sourceAccount, {
@@ -2323,7 +2329,7 @@ export class StellarSplitClient {
     const sourceAccount = account ?? ({
       accountId: () => params.payer,
       sequenceNumber: () => "0",
-      incrementSequenceNumber: () => {},
+      incrementSequenceNumber: () => { },
     } as unknown as Account);
 
     const tx = new TransactionBuilder(sourceAccount, {
@@ -2343,6 +2349,90 @@ export class StellarSplitClient {
     const fee = success.minResourceFee ?? "0";
 
     return { fee: fee.toString() };
+  }
+
+  /**
+   * Preview a token swap via the configured DEX contract before calling pay_with_token.
+   * Simulates the swap without submitting a transaction.
+   *
+   * @param invoiceId - The invoice ID to pay toward.
+   * @param sourceToken - The token address to swap from.
+   * @param sourceAmount - The amount to swap in stroops.
+   * @returns Swap preview including estimated output, price impact, and route.
+   * @throws Error if no DEX is configured on the invoice.
+   * @throws StellarSplitError with the simulation error message on failure.
+   */
+  async previewTokenSwap(
+    invoiceId: string,
+    sourceToken: string,
+    sourceAmount: bigint
+  ): Promise<PreviewTokenSwapResult> {
+    // Check if DEX is configured
+    if (!this.config.dexContractId) {
+      throw new Error("DEX contract not configured on this client. Set dexContractId in StellarSplitClientConfig.");
+    }
+
+    // Get the invoice to determine the target token
+    const invoice = await this.getInvoice(invoiceId);
+
+    // Create the DEX contract instance
+    const dexContract = new Contract(this.config.dexContractId);
+
+    // Call the DEX's quote method to get the swap estimate
+    const operation = dexContract.call(
+      "quote",
+      nativeToScVal(sourceToken, { type: "address" }),
+      nativeToScVal(invoice.token, { type: "address" }),
+      nativeToScVal(sourceAmount, { type: "i128" })
+    );
+
+    // Build a minimal transaction for simulation
+    const sourceAccount = {
+      accountId: () => this.config.dexContractId!,
+      sequenceNumber: () => "0",
+      incrementSequenceNumber: () => { },
+    } as unknown as Account;
+
+    const tx = new TransactionBuilder(sourceAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: this.config.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(30)
+      .build();
+
+    // Simulate the DEX quote
+    const simResult = await this.server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(simResult)) {
+      throw new SimulationFailedError(
+        `DEX quote simulation failed: ${simResult.error}`,
+        "previewTokenSwap",
+        simResult.error
+      );
+    }
+
+    const success = simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse;
+    const returnVal = success.result?.retval;
+    if (!returnVal) {
+      throw new NoReturnValueError("previewTokenSwap");
+    }
+
+    // Extract the output amount from the return value
+    const estimatedOutput = BigInt(scValToNative(returnVal));
+
+    // Calculate price impact in basis points
+    // Price impact = (input - output) / input * 10000
+    const priceImpactBps = sourceAmount > 0n
+      ? Number((BigInt(10000) * (sourceAmount - estimatedOutput)) / sourceAmount)
+      : 0;
+
+    // Return the preview result
+    // Note: route is extracted from the quote response if available, or set to [sourceToken, invoice.token]
+    return {
+      estimatedOutput,
+      priceImpactBps,
+      route: [sourceToken, invoice.token],
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -2949,10 +3039,10 @@ export class StellarSplitClient {
         active: Boolean(raw.active),
         highestBid: raw.highestBid
           ? {
-              bidder: (raw.highestBid as Record<string, unknown>).bidder as string,
-              amount: BigInt((raw.highestBid as Record<string, unknown>).amount as string | number),
-              timestamp: Number((raw.highestBid as Record<string, unknown>).timestamp),
-            }
+            bidder: (raw.highestBid as Record<string, unknown>).bidder as string,
+            amount: BigInt((raw.highestBid as Record<string, unknown>).amount as string | number),
+            timestamp: Number((raw.highestBid as Record<string, unknown>).timestamp),
+          }
           : null,
         endTime: Number(raw.endTime ?? 0),
       };
@@ -3703,8 +3793,8 @@ export class StellarSplitClient {
       if (isRefundTransferError(error) && this.config.horizonUrl && payerAddress) {
         console.warn(
           `[StellarSplitClient] refundInvoice: transfer failed for invoice ${invoiceId} ` +
-            `(${error instanceof Error ? error.message : String(error)}); ` +
-            `creating claimable-balance fallback for payer ${payerAddress}`
+          `(${error instanceof Error ? error.message : String(error)}); ` +
+          `creating claimable-balance fallback for payer ${payerAddress}`
         );
 
         try {

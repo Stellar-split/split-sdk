@@ -162,27 +162,27 @@ export interface Invoice {
  */
 export type SplitRule =
   | {
-      /** Recipient receives a fixed amount in stroops (capped at remaining funds). */
-      kind: "Fixed";
-      recipient: string;
-      amount: bigint;
-    }
+    /** Recipient receives a fixed amount in stroops (capped at remaining funds). */
+    kind: "Fixed";
+    recipient: string;
+    amount: bigint;
+  }
   | {
-      /** Recipient receives `bps` basis points of the funded amount. */
-      kind: "Percentage";
-      recipient: string;
-      bps: number;
-    }
+    /** Recipient receives `bps` basis points of the funded amount. */
+    kind: "Percentage";
+    recipient: string;
+    bps: number;
+  }
   | {
-      /**
-       * Recipient receives a marginal-band share: for each tier, `bps` is
-       * applied to the portion of funds falling between the previous tier's
-       * `upTo` and this tier's `upTo`.
-       */
-      kind: "Tiered";
-      recipient: string;
-      tiers: { upTo: bigint; bps: number }[];
-    };
+    /**
+     * Recipient receives a marginal-band share: for each tier, `bps` is
+     * applied to the portion of funds falling between the previous tier's
+     * `upTo` and this tier's `upTo`.
+     */
+    kind: "Tiered";
+    recipient: string;
+    tiers: { upTo: bigint; bps: number }[];
+  };
 
 /** A single recipient's previewed payout under the configured split rules. */
 export interface SplitPreviewEntry {
@@ -391,6 +391,16 @@ export interface SimulateCreateInvoiceResult {
 export interface SimulatePayResult {
   /** Estimated fee in stroops. */
   fee: string;
+}
+
+/** Result of previewing a token swap via DEX contract. */
+export interface PreviewTokenSwapResult {
+  /** Estimated output amount from the swap in stroops. */
+  estimatedOutput: bigint;
+  /** Price impact in basis points (1 bps = 0.01%). */
+  priceImpactBps: number;
+  /** Route taken through the DEX (list of token addresses). */
+  route: string[];
 }
 
 /** Result of SDK/contract version negotiation. */
