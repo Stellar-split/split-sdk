@@ -146,6 +146,8 @@ export {
   isChannelReconciliationError,
   TooManySubscriptionsError,
   isTooManySubscriptionsError,
+  RequestTimeoutError,
+  isRequestTimeoutError,
 } from "./errors.js";
 export { getScheduledReleaseCountdown } from "./client.js";
 export { verifyCompletionProof } from "./client.js";
@@ -245,6 +247,18 @@ export type {
   CompletionProof,
 } from "./types.js";
 export { InvalidTransitionError } from "./types.js";
+
+// Per-method timeout (Issue #1)
+export { TimeoutManager, withTimeout, RequestTimeoutError as TimeoutError } from "./timeout.js";
+export type { TimeoutConfig } from "./timeout.js";
+
+// Trace IDs (Issue #2)
+export { TraceIdManager, globalTraceIdManager } from "./traceId.js";
+export type { TraceIdGenerator } from "./traceId.js";
+
+// Injectable RpcClient (Issue #3)
+export { SorobanRpcAdapter } from "./rpcClient.js";
+export type { RpcClient } from "./rpcClient.js";
 
 export { negotiateVersion, SDK_CONTRACT_VERSION } from "./version.js";
 export type { VersionInfo } from "./types.js";

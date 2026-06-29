@@ -1031,6 +1031,28 @@ export function isChannelReconciliationError(err: unknown): err is ChannelReconc
   return err instanceof ChannelReconciliationError;
 }
 
+/** Thrown when a request exceeds its configured timeout. */
+export class RequestTimeoutError extends StellarSplitError {
+  readonly method: string;
+  readonly timeoutMs: number;
+
+  constructor(method: string, timeoutMs: number) {
+    super(
+      `Request timed out after ${timeoutMs}ms (method: ${method})`,
+      "REQUEST_TIMEOUT",
+      { method, timeoutMs }
+    );
+    this.name = "RequestTimeoutError";
+    this.method = method;
+    this.timeoutMs = timeoutMs;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isRequestTimeoutError(err: unknown): err is RequestTimeoutError {
+  return err instanceof RequestTimeoutError;
+}
+
 /** Thrown when too many concurrent invoice subscriptions are created. */
 export class TooManySubscriptionsError extends StellarSplitError {
   constructor(maxSubscriptions: number = 10) {
