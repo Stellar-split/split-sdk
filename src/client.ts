@@ -35,6 +35,7 @@ import type { SdkPlugin } from "./plugin.js";
 import { checkRPCHealth } from "./health.js";
 import { Deduplicator } from "./dedup.js";
 import { verifyBatchPayments } from "./batchVerifier.js";
+import { type HealthCheckResult, HealthCheckTimeoutError } from "./types.js";
 import type {
   BatchVerificationResult,
   BatchInvoiceValidation,
@@ -574,6 +575,70 @@ export class StellarSplitClient {
   }
 
   /**
+   * Performs a health check of the client's RPC connection and contract.
+   * Resolves with status information or throws HealthCheckTimeoutError if taking > 5000ms.
+   */
+  async healthCheck(): Promise<HealthCheckResult> {
+    const start = Date.now();
+    try {
+      return await Promise.race([
+        this._doHealthCheck(start),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new HealthCheckTimeoutError("Health check timed out after 5000ms")),
+            5000
+          )
+        ),
+      ]);
+    } catch (e: any) {
+      if (e instanceof HealthCheckTimeoutError) {
+        throw e;
+      }
+      return {
+        rpcReachable: false,
+        latencyMs: Date.now() - start,
+        network: "unknown",
+        contractDeployed: false,
+        error: e.message || String(e),
+      };
+    }
+  }
+
+  private async _doHealthCheck(start: number): Promise<HealthCheckResult> {
+    try {
+      const ledger = await this.server.getLatestLedger();
+      const networkRes = await this.server.getNetwork();
+      const latencyMs = Date.now() - start;
+      const network = networkRes.passphrase;
+
+      let contractDeployed = false;
+      let errorMsg: string | undefined;
+
+      try {
+        await this.server.getContractWasmByContractId(this.config.contractId);
+        contractDeployed = true;
+      } catch (err: any) {
+        if (!err.message?.includes("Could not obtain contract hash")) {
+          // If we get here, it might be deployed but we couldn't fetch the wasm,
+          // or it threw some other error. We'll conservatively say true if it's
+          // an unrelated error, or just false. Let's say false and log error.
+          errorMsg = err.message || String(err);
+        }
+      }
+
+      return {
+        rpcReachable: true,
+        latencyMs,
+        network,
+        contractDeployed,
+        error: errorMsg,
+      };
+    } catch (err: any) {
+      throw err; // caught by outer catch
+    }
+  }
+
+  /**
    * Enable or disable request batching for read methods (getInvoice, getPaymentHistory, getInvoiceExt).
    * Disabled by default — opt-in to batch concurrent RPC calls within a 10 ms window.
    * @param enabled - Pass `true` to enable batching, `false` to disable.
@@ -582,9 +647,9 @@ export class StellarSplitClient {
     if (enabled) {
       if (!this._batcher) {
         this._batcher = new BatchedRpcClient({
-          fetchInvoice: (id) => this._fetchInvoice(id),
-          fetchPaymentHistory: (id) => this._fetchPaymentHistory(id),
-          fetchInvoiceExt: (id) => this._fetchInvoiceExt(id),
+          fetchInvoice: (id: string) => this._fetchInvoice(id),
+          fetchPaymentHistory: (id: string) => this._fetchPaymentHistory(id),
+          fetchInvoiceExt: (id: string) => this._fetchInvoiceExt(id),
         });
       }
     } else {
@@ -1163,7 +1228,7 @@ export class StellarSplitClient {
       const key = `${methodName}:${JSON.stringify(args)}`;
       (this._cache as any).set(key, result);
     } else if (this._cache && methodName === "getInvoice") {
-      this._cache.set(args[0], result);
+      this._cache.set(args[0], result as any);
     }
 
     return result;

@@ -10,6 +10,7 @@ export interface CacheStats {
   misses: number;
   size: number;
   keys: string[];
+  evictions: number;
 }
 
 export interface MethodCacheEntry {
@@ -23,9 +24,12 @@ export class SimpleCache<T> {
   private enabled: boolean;
   private hits = 0;
   private misses = 0;
+  private evictions = 0;
+  private maxEntries: number;
 
-  constructor(config?: { enabled?: boolean; ttl?: Record<string, number>; ttlMs?: number }) {
-    this.enabled = config?.enabled ?? (config?.ttl ? true : false) ?? (config?.ttlMs !== undefined ? true : false);
+  constructor(config?: { enabled?: boolean; ttl?: Record<string, number>; ttlMs?: number; maxEntries?: number }) {
+    this.enabled = config?.enabled ?? (config?.ttl !== undefined || config?.ttlMs !== undefined);
+    this.maxEntries = config?.maxEntries ?? (this.enabled ? 1000 : 0);
     this.ttlConfig = config?.ttl ?? {};
     if (config?.ttlMs !== undefined) {
       this.ttlConfig["default"] = config.ttlMs;
@@ -44,6 +48,11 @@ export class SimpleCache<T> {
       this.misses++;
       return undefined;
     }
+    
+    // Update LRU order
+    this.store.delete(key);
+    this.store.set(key, entry);
+
     this.hits++;
     return entry.value;
   }
@@ -53,6 +62,15 @@ export class SimpleCache<T> {
     const method = key.split(":")[0] || key;
     const ttl = this.ttlConfig[method] ?? this.ttlConfig["default"] ?? 0;
     if (ttl <= 0) return;
+
+    if (this.maxEntries > 0 && this.store.size >= this.maxEntries && !this.store.has(key)) {
+      const oldestKey = this.store.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.store.delete(oldestKey);
+        this.evictions++;
+      }
+    }
+
     this.store.set(key, { value, expiresAt: Date.now() + ttl });
   }
 
@@ -97,6 +115,7 @@ export class SimpleCache<T> {
       misses: this.misses,
       size: this.store.size,
       keys: Array.from(this.store.keys()),
+      evictions: this.evictions,
     };
   }
 

@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { Keypair, StrKey } from "@stellar/stellar-sdk";
+import { Keypair, StrKey, Contract, xdr, TransactionBuilder } from "@stellar/stellar-sdk";
 import {
   formatAmount,
   parseAmount,
-  isValidAddress,
+  isValidStellarAddress,
   deadlineFromDays,
   isExpired,
   truncateAddress,
@@ -61,17 +61,17 @@ describe("parseAmount", () => {
 describe("isValidAddress", () => {
   it("accepts valid G address", () => {
     expect(
-      isValidAddress("GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN")
+      isValidStellarAddress(Keypair.random().publicKey())
     ).toBe(true);
   });
 
   it("rejects short address", () => {
-    expect(isValidAddress("GABC")).toBe(false);
+    expect(isValidStellarAddress("GABC")).toBe(false);
   });
 
   it("rejects non-G prefix", () => {
     expect(
-      isValidAddress("SAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN")
+      isValidStellarAddress("SAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN")
     ).toBe(false);
   });
 });

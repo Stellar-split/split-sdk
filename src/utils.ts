@@ -2,6 +2,7 @@
  * Utility helpers for StellarSplit SDK.
  */
 import { Invoice } from "./types";
+import { Account, MuxedAccount, StrKey } from "@stellar/stellar-sdk";
 
 /** Number of decimal places used by Stellar token amounts (stroops). */
 const STROOPS_PER_UNIT = 10_000_000n;
@@ -31,10 +32,37 @@ export function parseAmount(value: string): bigint {
 /**
  * Validate a Stellar public key (G... address).
  *
- * Uses a simple regex; for full validation use stellar-sdk StrKey.
+ * Uses stellar-sdk StrKey.
  */
-export function isValidAddress(address: string): boolean {
-  return /^G[A-Z2-7]{54,55}$/.test(address);
+export function isValidStellarAddress(address: string): boolean {
+  return StrKey.isValidEd25519PublicKey(address);
+}
+
+/**
+ * Case-insensitive comparison of two addresses.
+ */
+export function addressesEqual(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+/**
+ * Convert a base G address and an ID into a muxed M address.
+ */
+export function toMuxedAddress(address: string, id: bigint): string {
+  const account = new Account(address, "0");
+  const muxed = new MuxedAccount(account, id.toString());
+  return muxed.accountId();
+}
+
+/**
+ * Parse an M address back to its base G address and ID.
+ */
+export function fromMuxedAddress(muxed: string): { address: string; id: bigint } {
+  const parsed = MuxedAccount.fromAddress(muxed, "0");
+  return {
+    address: parsed.baseAccount().accountId(),
+    id: BigInt(parsed.id()),
+  };
 }
 
 /**

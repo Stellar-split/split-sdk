@@ -412,7 +412,7 @@ export type {
 export {
   validateClientConfig,
   validateOrThrow,
-  ConfigValidationError,
+  InvalidConfigError,
 } from "./configValidator.js";
 export type {
   ConfigValidation,

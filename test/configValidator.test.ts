@@ -3,9 +3,10 @@ import { Keypair, StrKey } from "@stellar/stellar-sdk";
 import {
   validateClientConfig,
   validateOrThrow,
-  ConfigValidationError,
+  InvalidConfigError,
 } from "../src/configValidator.js";
 import type { StellarSplitClientConfig } from "../src/client.js";
+import { Keypair } from "@stellar/stellar-sdk";
 
 function validConfig(): StellarSplitClientConfig {
   return {
@@ -107,8 +108,7 @@ describe("validateClientConfig", () => {
 
   it("accepts valid sponsorAccount", () => {
     const config = validConfig();
-    config.sponsorAccount =
-      "GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN";
+    config.sponsorAccount = Keypair.random().publicKey();
     const result = validateClientConfig(config);
     expect(result.valid).toBe(true);
   });
@@ -167,10 +167,11 @@ describe("validateOrThrow", () => {
     expect(() => validateOrThrow(validConfig())).not.toThrow();
   });
 
-  it("throws ConfigValidationError for invalid config", () => {
+  it("throws InvalidConfigError for invalid config", () => {
     const config = validConfig();
-    delete (config as { contractId?: unknown }).contractId;
-    expect(() => validateOrThrow(config)).toThrow(ConfigValidationError);
+    config.rpcUrl = "invalid-url";
+
+    expect(() => validateOrThrow(config)).toThrow(InvalidConfigError);
   });
 
   it("includes actionable messages in the error", () => {

@@ -102,6 +102,27 @@ export interface Recipient {
   amount: bigint;
 }
 
+import { StellarSplitError } from "./errors.js";
+
+export interface HealthCheckResult {
+  rpcReachable: boolean;
+  latencyMs: number;
+  network: string;
+  contractDeployed: boolean;
+  error?: string;
+}
+
+export class HealthCheckTimeoutError extends StellarSplitError {
+  constructor(message: string) {
+    super(message, "HEALTH_CHECK_TIMEOUT", {}, message);
+    this.name = "HealthCheckTimeoutError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * Basic invoice data structure mirroring the Soroban contract.
+ */
 /** An on-chain StellarSplit invoice. */
 export interface Invoice {
   /** Invoice ID (u64 from the contract). */

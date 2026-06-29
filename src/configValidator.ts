@@ -1,5 +1,5 @@
 import type { StellarSplitClientConfig } from "./client.js";
-import { isValidAddress } from "./utils.js";
+import { isValidStellarAddress } from "./utils.js";
 import { StrKey } from "@stellar/stellar-sdk";
 import { StellarSplitError } from "./errors.js";
 
@@ -199,7 +199,7 @@ export function validateClientConfig(
     }
   }
 
-  if (config.sponsorAccount && !isValidAddress(config.sponsorAccount)) {
+  if (config.sponsorAccount && !isValidStellarAddress(config.sponsorAccount)) {
     errors.push({
       field: "sponsorAccount",
       message: `sponsorAccount "${config.sponsorAccount}" is not a valid Stellar G... address`,
@@ -257,16 +257,16 @@ export function validateOrThrow(config: StellarSplitClientConfig): void {
       );
     }
 
-    throw new ConfigValidationError(parts.join("\n"), validation.errors);
+    throw new InvalidConfigError(parts.join("\n"), validation.errors);
   }
 }
 
-export class ConfigValidationError extends StellarSplitError {
+export class InvalidConfigError extends StellarSplitError {
   readonly validationErrors: ConfigValidationErrorType[];
 
   constructor(message: string, validationErrors: ConfigValidationErrorType[]) {
     super(message, "CONFIG_VALIDATION_ERROR", { fieldErrors: validationErrors.length }, message);
-    this.name = "ConfigValidationError";
+    this.name = "InvalidConfigError";
     this.validationErrors = validationErrors;
     Object.setPrototypeOf(this, new.target.prototype);
   }

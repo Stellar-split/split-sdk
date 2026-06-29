@@ -18,6 +18,11 @@
       "types": "./dist/testing/index.d.ts",
       "import": "./dist/testing/index.js",
       "require": "./dist/testing/index.cjs"
+    },
+    "./utils": {
+      "types": "./dist/utils.d.ts",
+      "import": "./dist/utils.js",
+      "require": "./dist/utils.cjs"
     }
   },
   "files": [
