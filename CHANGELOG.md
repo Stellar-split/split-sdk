@@ -4,7 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+### Chores
+
+- Upgrade SDK to TypeScript strict mode (`strict`, `noImplicitAny`, `strictNullChecks`, `strictFunctionTypes`) and enable `noUncheckedIndexedAccess` for safer type-checking for SDK consumers.
+
 ### Features
+
 
 - **Build invoice diff utility — compare two invoice states (closes #363)**
   - `diffInvoices(a: Invoice, b: Invoice)` returns structured diff of two invoice objects
