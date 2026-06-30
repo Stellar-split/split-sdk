@@ -4,3 +4,4 @@ export { IntegrationTestHarness, integrationTestHarness } from "./harness.js";
 export { MockRpcClient } from "./mockRpcClient.js";
 export type { MockRpcClientOptions } from "./mockRpcClient.js";
 export type { Invoice, Payment, Recipient } from "../types.js";
+export * from "./mockFactory.js";
