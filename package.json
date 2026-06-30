@@ -28,6 +28,7 @@
   "files": [
     "dist"
   ],
+  "sideEffects": false,
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
@@ -46,9 +47,11 @@
     "@walletconnect/sign-client": "^2.23.9"
   },
   "devDependencies": {
+    "@size-limit/preset-small-lib": "^12.1.0",
     "@types/node": "^25.9.1",
     "fake-indexeddb": "^6.2.5",
     "graphql": "^16.14.0",
+    "size-limit": "^12.1.0",
     "ts-node": "^10.9.2",
     "tsup": "^8.5.1",
     "typescript": "^5.9.3",

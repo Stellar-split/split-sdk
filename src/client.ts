@@ -18,7 +18,6 @@ import {
 } from "@stellar/stellar-sdk";
 import { signTransaction } from "./wallet.js";
 import { telemetry } from "./telemetry.js";
-import { exportInvoice } from "./export.js";
 import { TelemetryHookManager } from "./telemetryHooks.js";
 import type { TelemetryHooks } from "./telemetryHooks.js";
 import type { ExportFormat } from "./export.js";
@@ -55,8 +54,6 @@ import {
 import type { CompressionConfig } from "./compression.js";
 import { calculateFee } from "./fee.js";
 import { resolveToken } from "./token.js";
-import { generatePaymentProof } from "./proof.js";
-import { compilePaymentReceipt } from "./receipt.js";
 import type { PaymentReceipt } from "./receipt.js";
 import type {
   ArchivedInvoice,
@@ -1963,10 +1960,11 @@ export class StellarSplitClient {
     ids: string[],
     format: ExportFormat,
   ): Promise<Record<string, string>> {
+    const m = await import("./export.js");
     const settled = await Promise.allSettled(
       ids.map(async (invoiceId) => {
         const invoice = await this.getInvoice(invoiceId);
-        return { invoiceId, data: exportInvoice(invoice, format) };
+        return { invoiceId, data: m.exportInvoice(invoice, format) };
       }),
     );
 
@@ -2389,7 +2387,8 @@ export class StellarSplitClient {
    * @returns Payment proof with deterministic SHA-256 hash
    */
   async generatePaymentProof(txHash: string): Promise<PaymentProof> {
-    return generatePaymentProof(txHash, this.config);
+    const m = await import("./proof.js");
+    return m.generatePaymentProof(txHash, this.config);
   }
 
   /**
@@ -2406,7 +2405,8 @@ export class StellarSplitClient {
     payerAddress: string,
   ): Promise<PaymentReceipt> {
     const invoice = await this.getInvoice(invoiceId);
-    return compilePaymentReceipt(invoice, payerAddress);
+    const m = await import("./receipt.js");
+    return m.compilePaymentReceipt(invoice, payerAddress);
   }
 
   // ---------------------------------------------------------------------------

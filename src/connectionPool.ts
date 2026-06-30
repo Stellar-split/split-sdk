@@ -145,7 +145,6 @@ export class ConnectionPool {
     };
 
     this.slots = [];
-    if (!supportedProtocol) return;
 
     const t0 = this.opts.now();
     for (let i = 0; i < this.opts.poolSize; i++) {
@@ -178,6 +177,14 @@ export class ConnectionPool {
    */
   select(): SorobanRpc.Server {
     this._assertAlive();
+
+    const supportedProtocol = /^https?:\/\//i.test(this.opts.rpcUrl);
+    if (!supportedProtocol) {
+      throw new ConnectionPoolConfigError(
+        `unsupported protocol in RPC URL: "${this.opts.rpcUrl}"`,
+      );
+    }
+
     const now = this.opts.now();
 
     let bestIdx = 0;
@@ -286,10 +293,17 @@ export class ConnectionPool {
   }
 
   private _createSlot(recycledCount: number, createdAt: number): PoolSlot {
-    return {
-      server: new SorobanRpc.Server(this.opts.rpcUrl, {
+    const supportedProtocol = /^https?:\/\//i.test(this.opts.rpcUrl);
+    let server: any;
+    if (supportedProtocol) {
+      server = new SorobanRpc.Server(this.opts.rpcUrl, {
         allowHttp: this.opts.allowHttp,
-      }),
+      });
+    } else {
+      server = {};
+    }
+    return {
+      server: server as SorobanRpc.Server,
       inFlight: 0,
       totalRequests: 0,
       totalErrors: 0,

@@ -74,8 +74,8 @@ let mockSimulateFn = vi.fn();
 const TEST_CONFIG = {
    rpcUrl: "https://soroban-testnet.stellar.org",
    networkPassphrase: "Test SDF Network ; September 2015",
-   contractId: "CA6ZKFQZ7LKP7K2WBNBSQJ2OLIYBCWQ3A2YNQZ2CRSZ2W2RGSIZRJVJ",
-   dexContractId: "CDEBPEQH5V7K5JQI43C7YBLVYB2LMHF6XFMMHDZ2ZMPTWVDHXVX3L7P7",
+   contractId: "CCMQJRFJJS3E6UP6HOGWJKEDFLS2ESLOAXTYEJUO22O2CAW2L4MGXFVR",
+   dexContractId: "CDMGCI5BGPNMSQILUZLN75YMAAQ6DTUT2CKDIY3WHC4NWXJJBXPG7WY2",
 };
 
 const mockInvoice: Invoice = {
@@ -124,7 +124,7 @@ describe("previewTokenSwap", () => {
       const result = await client.previewTokenSwap("123", "CXLM", 1000n);
 
       expect(result.estimatedOutput).toBe(950n);
-      expect(result.priceImpactBps).toBe(5); // (1000 - 950) / 1000 * 10000 = 500 bps = 5.00%
+      expect(result.priceImpactBps).toBe(500); // (1000 - 950) / 1000 * 10000 = 500 bps = 5.00%
       expect(result.route).toEqual(["CXLM", "CUSDC"]);
    });
 

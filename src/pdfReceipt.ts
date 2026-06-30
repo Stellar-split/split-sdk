@@ -160,7 +160,10 @@ class PdfBuilder {
         objContent.copy(pdf, offset);
         offset += objContent.length;
       } else {
-        objects[i] as Record<string, string>;
+        const dict = (objects[i] && typeof objects[i] === "object" && !Buffer.isBuffer(objects[i]))
+          ? (objects[i] as Record<string, string>)
+          : {};
+        const objContent = Buffer.from(`<<${this._dictToString(dict)}>>\nendobj\n`, "utf8");
         objContent.copy(pdf, offset);
         offset += objContent.length;
       }
