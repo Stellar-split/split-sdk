@@ -459,6 +459,10 @@ export type {
   EventSourceLike,
 } from "./sse.js";
 export type { PollingInvoiceEventHandler } from "./stream.js";
+
+// WebSocket transport (Issue #377)
+export { WebSocketTransport } from "./websocket.js";
+export type { TransportType, TransportStatus, TransportEventMap } from "./websocket.js";
 export {
   bundleDisputeEvidence,
   computeBundleChecksum,

@@ -149,6 +149,8 @@ import type {
   SSEInvoiceEvent,
 } from "./sse.js";
 import { ConnectionPool } from "./connectionPool.js";
+import { WebSocketTransport } from "./websocket.js";
+import type { TransportType, TransportStatus } from "./websocket.js";
 import { snapshotInvoice as _snapshotInvoice } from "./snapshot.js";
 import type { InvoiceSnapshot } from "./snapshot.js";
 import { SimpleCache } from "./cache.js";
@@ -316,6 +318,21 @@ export interface StellarSplitClientConfig {
    * a MockRpcClient) or alternative transport environments.
    */
   rpcClient?: RpcClient;
+  /**
+   * Transport selection for real-time invoice event streaming.
+   * - `'http'` (default): Use polling-based RPC event fetching.
+   * - `'websocket'`: Use WebSocket connection to the RPC's event-streaming
+   *   endpoint for pushed events. Falls back to HTTP polling if the WebSocket
+   *   connection fails after 3 reconnect attempts.
+   */
+  transport?: TransportType;
+  /**
+   * Optional WebSocket URL override. When not provided, the WebSocket URL is
+   * derived from the RPC URL by replacing `https://` with `wss://` (or
+   * `http://` with `ws://`).
+   * Only used when `transport: 'websocket'`.
+   */
+  wsUrl?: string;
 }
 
 /** Network configuration. */
@@ -440,6 +457,10 @@ export class StellarSplitClient {
   private _timeoutManager: TimeoutManager | null = null;
   private _traceIdManager = new TraceIdManager();
   private _injectedRpcClient: RpcClient | null = null;
+  private _wsTransport: WebSocketTransport | null = null;
+  private _transportType: TransportType = 'http';
+  private _activeTransportType: TransportType = 'http';
+  private _fallbackListeners: Array<(event: { from: 'websocket'; to: 'http' }) => void> = [];
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private get server(): any {
@@ -596,6 +617,19 @@ export class StellarSplitClient {
 
     if (config.idempotency) {
       this._idempotency = new IdempotencyManager(config.idempotency);
+    }
+
+    // WebSocket transport (Issue #377)
+    if (config.transport === 'websocket') {
+      this._transportType = 'websocket';
+      this._activeTransportType = 'websocket';
+      this._wsTransport = new WebSocketTransport(primaryUrl, config.wsUrl);
+      this._wsTransport.onFallback((event: { from: 'websocket'; to: 'http' }) => {
+        this._activeTransportType = 'http';
+        for (const cb of this._fallbackListeners) {
+          try { cb(event); } catch { }
+        }
+      });
     }
 
     initHealthDashboard(this.server, this._dedup);
@@ -1321,8 +1355,7 @@ export class StellarSplitClient {
    */
   async getInvoice(
     invoiceId: string,
-    opts?: { retry?: PerMethodRetryOptions; dedupe?: boolean }
-    opts?: { retry?: PerMethodRetryOptions; traceId?: string; timeout?: number }
+    opts?: { retry?: PerMethodRetryOptions; dedupe?: boolean; traceId?: string; timeout?: number }
   ): Promise<Invoice> {
     return this._withCache("getInvoice", [invoiceId], async () => {
       const fetcher = this._batcher
@@ -1350,7 +1383,6 @@ export class StellarSplitClient {
     return this._dedup.getDedupStats();
   }
 
-  private async _fetchInvoice(invoiceId: string): Promise<Invoice> {
   private async _fetchInvoice(invoiceId: string, traceId?: string): Promise<Invoice> {
     const startTime = Date.now();
     const req = { method: "getInvoice", params: [invoiceId], headers: traceId ? { "X-Trace-Id": traceId } : undefined };
@@ -1675,6 +1707,9 @@ export class StellarSplitClient {
       await this._queue.shutdown();
     } finally {
       this._standby?.stop();
+
+      this._wsTransport?.disconnect();
+      this._wsTransport = null;
 
       this._pool?.dispose();
       this._pool = null;
@@ -2302,6 +2337,26 @@ export class StellarSplitClient {
     handlerOrCallbacks: InvoiceEventHandler | InvoiceEventCallbacks | ((events: SSEInvoiceEvent[]) => void),
     optionsOrInterval?: Partial<SubscribeToInvoiceOptions> | number
   ): () => void {
+    // WebSocket transport: use the active WebSocket connection when configured
+    if (this._wsTransport && this._transportType === 'websocket') {
+      if (typeof handlerOrCallbacks !== "function") {
+        throw new ValidationError(
+          "WebSocket transport requires a function handler. Callbacks object is not supported."
+        );
+      }
+
+      const handler = handlerOrCallbacks as InvoiceEventHandler;
+      const wrappedHandler = (event: unknown) => {
+        handler(event as SSEInvoiceEvent);
+      };
+
+      this._wsTransport.subscribe(invoiceId, wrappedHandler);
+
+      return () => {
+        this._wsTransport?.unsubscribe(invoiceId, wrappedHandler);
+      };
+    }
+
     // A function handler with options object selects the SSE transport.
     // A function handler with number interval selects the RPC polling transport (new API).
     // A callbacks object selects the legacy RPC-polling transport.
@@ -2338,6 +2393,28 @@ export class StellarSplitClient {
       handlerOrCallbacks,
       undefined
     );
+  }
+
+  /**
+   * Returns the current status of the active transport.
+   *
+   * When `transport: 'websocket'` was configured, returns `{ type: 'websocket', connected, reconnectAttempts }`.
+   * Otherwise returns `{ type: 'http', connected: true, reconnectAttempts: 0 }`.
+   */
+  getTransportStatus(): TransportStatus {
+    if (this._wsTransport) {
+      return this._wsTransport.getStatus();
+    }
+    return { type: 'http', connected: true, reconnectAttempts: 0 };
+  }
+
+  /**
+   * Register a callback for the `transport:fallback` event.
+   * Fired when the WebSocket transport fails to connect after 3 attempts
+   * and the client falls back to HTTP polling.
+   */
+  onTransportFallback(cb: (event: { from: 'websocket'; to: 'http' }) => void): void {
+    this._fallbackListeners.push(cb);
   }
 
   // ---------------------------------------------------------------------------
