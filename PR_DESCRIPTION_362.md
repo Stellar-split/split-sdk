@@ -6,8 +6,6 @@ Closes #362
 
 Implements an opt-in telemetry hook system that allows application developers to integrate their own monitoring solutions (Sentry, Datadog, custom telemetry) without the SDK having any direct dependencies on monitoring libraries.
 
-## Changes
-
 ### Core Implementation
 
 - **New file**: `src/telemetryHooks.ts` - Telemetry hook manager and TypeScript types
