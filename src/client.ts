@@ -60,6 +60,7 @@ import { compilePaymentReceipt } from "./receipt.js";
 import type { PaymentReceipt } from "./receipt.js";
 import type {
   ArchivedInvoice,
+
   ArbiterVote,
   AuctionInfo,
   DisputeStatus,
@@ -1483,7 +1484,9 @@ export class StellarSplitClient {
     invoiceId: string,
     opts?: { retry?: PerMethodRetryOptions; dedupe?: boolean; traceId?: string; timeout?: number }
   ): Promise<Invoice> {
+
     return this._withCache("getInvoice", [invoiceId], async () => {
+
       const fetcher = this._batcher
         ? () => this._batcher!.getInvoice(invoiceId)
         : () => this._fetchInvoice(invoiceId, opts?.traceId);

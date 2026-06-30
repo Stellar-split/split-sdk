@@ -183,27 +183,27 @@ export interface Invoice {
  */
 export type SplitRule =
   | {
-    /** Recipient receives a fixed amount in stroops (capped at remaining funds). */
-    kind: "Fixed";
-    recipient: string;
-    amount: bigint;
-  }
+      /** Recipient receives a fixed amount in stroops (capped at remaining funds). */
+      kind: "Fixed";
+      recipient: string;
+      amount: bigint;
+    }
   | {
-    /** Recipient receives `bps` basis points of the funded amount. */
-    kind: "Percentage";
-    recipient: string;
-    bps: number;
-  }
+      /** Recipient receives `bps` basis points of the funded amount. */
+      kind: "Percentage";
+      recipient: string;
+      bps: number;
+    }
   | {
-    /**
-     * Recipient receives a marginal-band share: for each tier, `bps` is
-     * applied to the portion of funds falling between the previous tier's
-     * `upTo` and this tier's `upTo`.
-     */
-    kind: "Tiered";
-    recipient: string;
-    tiers: { upTo: bigint; bps: number }[];
-  };
+      /**
+       * Recipient receives a marginal-band share: for each tier, `bps` is
+       * applied to the portion of funds falling between the previous tier's
+       * `upTo` and this tier's `upTo`.
+       */
+      kind: "Tiered";
+      recipient: string;
+      tiers: { upTo: bigint; bps: number }[];
+    };
 
 /** A single recipient's previewed payout under the configured split rules. */
 export interface SplitPreviewEntry {
@@ -533,6 +533,9 @@ export interface CloneOverrides {
   newOverflowBehavior?: OverflowBehavior;
 }
 
+/** Field names supported by read methods that can return partial objects. */
+export type InvoiceField = keyof Invoice;
+
 /** Extended invoice data from get_invoice_ext. */
 export interface InvoiceExt {
   parentInvoiceId: string | null;
@@ -790,4 +793,3 @@ export interface SetCrossChainRefParams {
   /** Cross-chain reference data. */
   ref: CrossChainRef;
 }
-
