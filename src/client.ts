@@ -463,7 +463,7 @@ export class StellarSplitClient {
   private _pluginInstances: StellarSplitPlugin[] = [];
   private _pluginRegistry = new PluginRegistry();
   private _dedup = new Deduplicator<Invoice>();
-  private _cache: SimpleCache<Invoice> | ICacheStore<Invoice> | null = null;
+  private _cache: SimpleCache<any> | ICacheStore<any> | null = null;
   private _auditLogger: AuditLogger | null = null;
   private _degradation: DegradationManager | null = null;
   private _rateLimiter: RateLimiter | null = null;
@@ -620,9 +620,8 @@ export class StellarSplitClient {
 
     this.contract = new Contract(config.contractId);
 
-    this._cache =
-      config.container?.getCacheStore() ??
-      (config.cache ? new SimpleCache<Invoice>(config.cache) : null);
+    this._cache = config.container?.getCacheStore() ??
+      (config.cache?.enabled ? new SimpleCache<any>(config.cache) : null);
 
     if (config.telemetry) {
       telemetry.init(config.telemetry);
@@ -641,10 +640,6 @@ export class StellarSplitClient {
       addResponseInterceptor(
         createCompressionResponseInterceptor(config.compression),
       );
-    }
-
-    if (config.cache && !config.container?.getCacheStore()) {
-      this._cache = new SimpleCache<Invoice>(config.cache);
     }
 
     // Initialize hooks
@@ -1453,27 +1448,18 @@ export class StellarSplitClient {
     args: any[],
     fetcher: () => Promise<T>,
   ): Promise<T> {
-    const isSimpleCache =
-      this._cache && typeof (this._cache as any).getStats === "function";
+    if (!this._cache) {
+      return fetcher();
+    }
 
-    if (isSimpleCache) {
-      const key = `${methodName}:${JSON.stringify(args)}`;
-      const cached = (this._cache as any).get(key) as T | undefined;
-      if (cached) return cached;
-    } else if (this._cache && methodName === "getInvoice") {
-      const cached = this._cache.get(args[0]) as T | undefined;
-      if (cached) return cached;
+    const key = `${methodName}:${JSON.stringify(args)}`;
+    const cached = this._cache.get(key);
+    if (cached !== undefined) {
+      return cached as T;
     }
 
     const result = await fetcher();
-
-    if (isSimpleCache) {
-      const key = `${methodName}:${JSON.stringify(args)}`;
-      (this._cache as any).set(key, result);
-    } else if (this._cache && methodName === "getInvoice") {
-      this._cache.set(args[0], result as any);
-    }
-
+    this._cache.set(key, result);
     return result;
   }
 
@@ -5012,22 +4998,24 @@ export class StellarSplitClient {
   }): Promise<
     Array<{ creator: string; invoiceCount: number; totalVolume: bigint }>
   > {
-    return this._withTelemetry(
-      "getLeaderboard",
-      undefined,
-      async () => {
-        const operation = this.contract.call("get_leaderboard");
-        const raw = await this._simulateView(operation, opts?.traceId);
-        if (!Array.isArray(raw)) return [];
-        return (raw as Array<Record<string, unknown>>).map((entry) => ({
-          creator: String(entry.creator ?? ""),
-          invoiceCount: Number(entry.invoice_count ?? 0),
-          totalVolume: BigInt(
-            (entry.total_volume as string | number | bigint) ?? 0,
-          ),
-        }));
-      },
-      opts,
+    return this._withCache("getLeaderboard", [], () =>
+      this._withTelemetry(
+        "getLeaderboard",
+        undefined,
+        async () => {
+          const operation = this.contract.call("get_leaderboard");
+          const raw = await this._simulateView(operation, opts?.traceId);
+          if (!Array.isArray(raw)) return [];
+          return (raw as Array<Record<string, unknown>>).map((entry) => ({
+            creator: String(entry.creator ?? ""),
+            invoiceCount: Number(entry.invoice_count ?? 0),
+            totalVolume: BigInt(
+              (entry.total_volume as string | number | bigint) ?? 0,
+            ),
+          }));
+        },
+        opts,
+      ),
     );
   }
 

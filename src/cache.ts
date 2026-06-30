@@ -28,7 +28,7 @@ export class SimpleCache<T> {
   private maxEntries: number;
 
   constructor(config?: { enabled?: boolean; ttl?: Record<string, number>; ttlMs?: number; maxEntries?: number }) {
-    this.enabled = config?.enabled ?? (config?.ttl !== undefined || config?.ttlMs !== undefined);
+    this.enabled = config?.enabled ?? false;
     this.maxEntries = config?.maxEntries ?? (this.enabled ? 1000 : 0);
     this.ttlConfig = config?.ttl ?? {};
     if (config?.ttlMs !== undefined) {
