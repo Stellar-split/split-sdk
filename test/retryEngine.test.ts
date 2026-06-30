@@ -119,9 +119,9 @@ describe("RetryEngine", () => {
     await expect(engine.execute(fn, "m")).rejects.toThrow();
     await expect(engine.execute(fn, "m")).rejects.toThrow();
     // Third call triggers the circuit to open
-    await expect(engine.execute(fn, "m")).rejects.toThrow("circuit open");
+    await expect(engine.execute(fn, "m")).rejects.toThrow("Circuit breaker is open");
     // Subsequent call is blocked immediately
-    await expect(engine.execute(fn, "m")).rejects.toThrow("circuit open");
+    await expect(engine.execute(fn, "m")).rejects.toThrow("Circuit breaker is open");
     // fn was not called on the blocked call
     expect(fn).toHaveBeenCalledTimes(3);
   });
@@ -137,7 +137,7 @@ describe("RetryEngine", () => {
       .mockResolvedValue("recovered");
 
     // Open the circuit
-    await expect(engine.execute(fn, "m")).rejects.toThrow("circuit open");
+    await expect(engine.execute(fn, "m")).rejects.toThrow("Circuit breaker is open");
 
     // Advance past reset window
     vi.advanceTimersByTime(201);

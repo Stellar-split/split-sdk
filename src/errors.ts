@@ -82,24 +82,24 @@ export class InsufficientBalanceError extends StellarSplitError {
   readonly amount: bigint;
   readonly remaining: bigint;
 
-  constructor(invoiceId: string, amount: bigint, remaining: bigint, raw?: string) {
+  constructor(invoiceId: string, amount: bigint = 0n, remaining: bigint = 0n, raw?: string) {
     super(
       `Insufficient balance: ${amount} exceeds remaining ${remaining} for invoice ${invoiceId}`,
       "INSUFFICIENT_BALANCE",
-      { invoiceId, amount: amount.toString(), remaining: remaining.toString() },
+      { invoiceId, amount: (amount ?? 0n).toString(), remaining: (remaining ?? 0n).toString() },
       raw
     );
     this.name = "InsufficientBalanceError";
     this.invoiceId = invoiceId;
-    this.amount = amount;
-    this.remaining = remaining;
+    this.amount = amount ?? 0n;
+    this.remaining = remaining ?? 0n;
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
 /** Thrown when a payment amount exceeds the remaining unfunded balance (legacy alias). */
 export class PaymentExceedsRemainingError extends InsufficientBalanceError {
-  constructor(invoiceId: string, amount: bigint, remaining: bigint, raw?: string) {
+  constructor(invoiceId: string, amount: bigint = 0n, remaining: bigint = 0n, raw?: string) {
     super(invoiceId, amount, remaining, raw);
     this.name = "PaymentExceedsRemainingError";
     Object.setPrototypeOf(this, new.target.prototype);

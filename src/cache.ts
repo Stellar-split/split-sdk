@@ -27,6 +27,18 @@ export class SimpleCache<T> {
   private evictions = 0;
   private maxEntries: number;
 
+  constructor(config?: number | { enabled?: boolean; ttl?: Record<string, number>; ttlMs?: number; maxEntries?: number }) {
+    if (typeof config === "number") {
+      this.enabled = true;
+      this.maxEntries = 1000;
+      this.ttlConfig = { default: config };
+    } else {
+      this.enabled = config?.enabled ?? (config?.ttl !== undefined || config?.ttlMs !== undefined);
+      this.maxEntries = config?.maxEntries ?? (this.enabled ? 1000 : 0);
+      this.ttlConfig = config?.ttl ?? {};
+      if (config?.ttlMs !== undefined) {
+        this.ttlConfig["default"] = config.ttlMs;
+      }
   constructor(config?: { enabled?: boolean; ttl?: Record<string, number>; ttlMs?: number; maxEntries?: number }) {
     this.enabled = config?.enabled ?? false;
     this.maxEntries = config?.maxEntries ?? (this.enabled ? 1000 : 0);

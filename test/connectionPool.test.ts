@@ -55,9 +55,9 @@ describe("ConnectionPool (issue #360)", () => {
 
   it("rejects non-finite poolSize inputs", () => {
     expect(() => new ConnectionPool({ rpcUrl: "https://x.example", poolSize: NaN }))
-      .toThrow(/finite poolSize/);
+      .toThrow(/must be a finite number/);
     expect(() => new ConnectionPool({ rpcUrl: "https://x.example", poolSize: Infinity }))
-      .toThrow(/finite poolSize/);
+      .toThrow(/must be a finite number/);
   });
 
   it("rotates selections across slots and tracks per-slot request counts", () => {
