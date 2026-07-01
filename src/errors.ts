@@ -1069,3 +1069,24 @@ export class TooManySubscriptionsError extends StellarSplitError {
 export function isTooManySubscriptionsError(err: unknown): err is TooManySubscriptionsError {
   return err instanceof TooManySubscriptionsError;
 }
+
+/**
+ * Thrown when an admin operation is attempted without a valid authorized admin
+ * keypair, or when the supplied keypair's public key does not match the
+ * expected admin address.
+ */
+export class AdminOperationError extends StellarSplitError {
+  /** The admin address that was checked. */
+  readonly adminAddress: string;
+
+  constructor(message: string, adminAddress: string) {
+    super(message, "ADMIN_OPERATION_ERROR", { adminAddress }, message);
+    this.name = "AdminOperationError";
+    this.adminAddress = adminAddress;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isAdminOperationError(err: unknown): err is AdminOperationError {
+  return err instanceof AdminOperationError;
+}

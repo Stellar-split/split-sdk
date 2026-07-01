@@ -106,6 +106,8 @@ import type {
   SetCrossChainRefParams,
   ScheduledReleaseCountdown,
   CompletionProof,
+  AdminFreezeResult,
+  AdminUnfreezeResult,
 } from "./types.js";
 import type {
   DIContainer,
@@ -142,6 +144,7 @@ import {
   NoSignerProvidedError,
   ValidationError,
   StellarSplitError,
+  AdminOperationError,
 } from "./errors.js";
 import { replayEvents } from "./events.js";
 import { subscribeToInvoice as _subscribeToInvoice } from "./stream.js";
@@ -342,6 +345,15 @@ export interface StellarSplitClientConfig {
    * Only used when `transport: 'websocket'`.
    */
   wsUrl?: string;
+  /**
+   * Optional admin keypair for signing admin-only operations such as
+   * `adminFreezeInvoice` and `adminUnfreezeInvoice`. When provided at
+   * construction, all admin operations use this keypair automatically.
+   *
+   * The keypair's public key is verified against the `adminKeypair` argument
+   * passed to each admin method, so callers cannot forge an admin identity.
+   */
+  adminKeypair?: Keypair;
 }
 
 /** Network configuration. */
@@ -487,6 +499,8 @@ export class StellarSplitClient {
   private _transportType: TransportType = 'http';
   private _activeTransportType: TransportType = 'http';
   private _fallbackListeners: Array<(event: { from: 'websocket'; to: 'http' }) => void> = [];
+  /** Admin keypair used to sign admin-only operations (freeze/unfreeze). */
+  private _adminKeypair: Keypair | null = null;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private get server(): any {
@@ -665,6 +679,11 @@ export class StellarSplitClient {
           try { cb(event); } catch { }
         }
       });
+    }
+
+    // Admin keypair for admin-only operations
+    if (config.adminKeypair) {
+      this._adminKeypair = config.adminKeypair;
     }
 
     initHealthDashboard(this.server, this._dedup);
@@ -3682,6 +3701,104 @@ export class StellarSplitClient {
   // ---------------------------------------------------------------------------
 
   /**
+   * Verify an admin keypair against an expected admin address.
+   *
+   * The keypair's public key must equal `expectedAddress`. This ensures no
+   * caller can pass a foreign address and have the SDK sign on their behalf.
+   *
+   * @throws {AdminOperationError} When no admin keypair is configured or the
+   *   keypair's public key does not match `expectedAddress`.
+   */
+  private _verifyAdminKeypair(
+    adminKeypair: Keypair,
+    expectedAddress: string,
+  ): void {
+    const kpAddress = adminKeypair.publicKey();
+    if (kpAddress !== expectedAddress) {
+      throw new AdminOperationError(
+        `Admin keypair public key (${kpAddress}) does not match the provided admin address (${expectedAddress})`,
+        expectedAddress,
+      );
+    }
+  }
+
+  /**
+   * Like `_submitTx`, but signs the prepared transaction directly with the
+   * given `Keypair` instead of delegating to the wallet adapter or Freighter.
+   * Intended exclusively for admin operations that carry a dedicated keypair.
+   */
+  private _submitTxWithKeypair(
+    sourceAddress: string,
+    operation: xdr.Operation,
+    keypair: Keypair,
+  ): Promise<{ txHash: string; returnValue: xdr.ScVal }> {
+    return this._queue.enqueue("normal", async () => {
+      return this._doSubmitTxWithKeypair(sourceAddress, operation, keypair);
+    });
+  }
+
+  private async _doSubmitTxWithKeypair(
+    sourceAddress: string,
+    operation: xdr.Operation,
+    keypair: Keypair,
+  ): Promise<{ txHash: string; returnValue: xdr.ScVal }> {
+    await this._rateLimiter?.acquire();
+
+    const account = await this.server.getAccount(sourceAddress);
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.config.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(30)
+      .build();
+
+    const simResult = await this.server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(simResult)) {
+      throw parseSorobanError(simResult.error);
+    }
+
+    const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+    preparedTx.sign(keypair);
+    const signedXdr = preparedTx.toXDR();
+
+    const sendResult = await this.server.sendTransaction(
+      TransactionBuilder.fromXDR(signedXdr, this.config.networkPassphrase),
+    );
+
+    if (sendResult.status === "ERROR") {
+      throw new TransactionFailedError(
+        `Transaction failed: ${JSON.stringify(sendResult.errorResult)}`,
+        sendResult.hash,
+        JSON.stringify(sendResult.errorResult),
+      );
+    }
+
+    const txHash = sendResult.hash;
+    let getResult = await this.server.getTransaction(txHash);
+    let attempts = 0;
+    while (
+      getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND &&
+      attempts < 20
+    ) {
+      await new Promise((r) => setTimeout(r, 1500));
+      getResult = await this.server.getTransaction(txHash);
+      attempts++;
+    }
+
+    if (getResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+      throw new TransactionNotConfirmedError(String(getResult.status));
+    }
+
+    const returnValue =
+      (getResult as SorobanRpc.Api.GetSuccessfulTransactionResponse)
+        .returnValue ?? xdr.ScVal.scvVoid();
+
+    return { txHash, returnValue };
+  }
+
+  /**
    * Freeze an invoice. Only an authorized admin keypair can call this.
    * The `admin` address must sign the transaction.
    *
@@ -3704,6 +3821,146 @@ export class StellarSplitClient {
       throw error;
     }
   }
+
+  /**
+   * Freeze an invoice as an authorized admin.
+   *
+   * The SDK verifies that `adminKeypair.publicKey()` matches `adminKeypair`'s
+   * derived address before building the transaction. The keypair signs the
+   * Soroban transaction directly — no wallet adapter is involved.
+   *
+   * An audit event is emitted regardless of success or failure.
+   *
+   * @param invoiceId    - Invoice ID to freeze.
+   * @param reason       - Human-readable reason for the freeze (stored in the audit log).
+   * @param adminKeypair - Authorized admin keypair used to sign the transaction.
+   * @returns {@link AdminFreezeResult} with txHash, invoiceId, adminAddress, reason, and timestamp.
+   * @throws {AdminOperationError} When the keypair's public key is invalid.
+   */
+  async adminFreezeInvoice(
+    invoiceId: string,
+    reason: string,
+    adminKeypair: Keypair,
+  ): Promise<AdminFreezeResult> {
+    const adminAddress = adminKeypair.publicKey();
+    const startTime = Date.now();
+
+    // Verify the keypair is consistent with the effective admin configuration.
+    // When an adminKeypair is configured at construction time, the passed
+    // keypair must have the same public key.
+    if (this._adminKeypair && this._adminKeypair.publicKey() !== adminAddress) {
+      throw new AdminOperationError(
+        `Provided admin keypair (${adminAddress}) does not match the configured admin keypair (${this._adminKeypair.publicKey()})`,
+        adminAddress,
+      );
+    }
+
+    try {
+      const operation = this.contract.call(
+        "admin_freeze",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+        nativeToScVal(reason, { type: "string" }),
+      );
+      const result = await this._submitTxWithKeypair(
+        adminAddress,
+        operation,
+        adminKeypair,
+      );
+      const durationMs = Date.now() - startTime;
+      telemetry.recordMethod("adminFreezeInvoice", true, durationMs);
+      this._logAudit(
+        "adminFreezeInvoice",
+        { invoiceId, reason, adminAddress },
+        true,
+        durationMs,
+      );
+      return {
+        txHash: result.txHash,
+        invoiceId,
+        adminAddress,
+        reason,
+        timestamp: Date.now(),
+      };
+    } catch (error) {
+      const durationMs = Date.now() - startTime;
+      telemetry.recordMethod("adminFreezeInvoice", false, durationMs);
+      this._logAudit(
+        "adminFreezeInvoice",
+        { invoiceId, reason, adminAddress },
+        false,
+        durationMs,
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Unfreeze a previously frozen invoice as an authorized admin.
+   *
+   * The SDK verifies that `adminKeypair.publicKey()` matches the effective
+   * admin address before building the transaction. The keypair signs the
+   * Soroban transaction directly — no wallet adapter is involved.
+   *
+   * An audit event is emitted regardless of success or failure.
+   *
+   * @param invoiceId    - Invoice ID to unfreeze.
+   * @param adminKeypair - Authorized admin keypair used to sign the transaction.
+   * @returns {@link AdminUnfreezeResult} with txHash, invoiceId, adminAddress, and timestamp.
+   * @throws {AdminOperationError} When the keypair's public key is invalid.
+   */
+  async adminUnfreezeInvoice(
+    invoiceId: string,
+    adminKeypair: Keypair,
+  ): Promise<AdminUnfreezeResult> {
+    const adminAddress = adminKeypair.publicKey();
+    const startTime = Date.now();
+
+    // Verify the keypair is consistent with the effective admin configuration.
+    if (this._adminKeypair && this._adminKeypair.publicKey() !== adminAddress) {
+      throw new AdminOperationError(
+        `Provided admin keypair (${adminAddress}) does not match the configured admin keypair (${this._adminKeypair.publicKey()})`,
+        adminAddress,
+      );
+    }
+
+    try {
+      const operation = this.contract.call(
+        "admin_unfreeze",
+        nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+      );
+      const result = await this._submitTxWithKeypair(
+        adminAddress,
+        operation,
+        adminKeypair,
+      );
+      const durationMs = Date.now() - startTime;
+      telemetry.recordMethod("adminUnfreezeInvoice", true, durationMs);
+      this._logAudit(
+        "adminUnfreezeInvoice",
+        { invoiceId, adminAddress },
+        true,
+        durationMs,
+      );
+      return {
+        txHash: result.txHash,
+        invoiceId,
+        adminAddress,
+        timestamp: Date.now(),
+      };
+    } catch (error) {
+      const durationMs = Date.now() - startTime;
+      telemetry.recordMethod("adminUnfreezeInvoice", false, durationMs);
+      this._logAudit(
+        "adminUnfreezeInvoice",
+        { invoiceId, adminAddress },
+        false,
+        durationMs,
+      );
+      throw error;
+    }
+  }
+
+
 
   // Timelock action queue
   // ---------------------------------------------------------------------------
