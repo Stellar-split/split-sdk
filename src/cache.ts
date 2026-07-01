@@ -39,12 +39,6 @@ export class SimpleCache<T> {
       if (config?.ttlMs !== undefined) {
         this.ttlConfig["default"] = config.ttlMs;
       }
-  constructor(config?: { enabled?: boolean; ttl?: Record<string, number>; ttlMs?: number; maxEntries?: number }) {
-    this.enabled = config?.enabled ?? false;
-    this.maxEntries = config?.maxEntries ?? (this.enabled ? 1000 : 0);
-    this.ttlConfig = config?.ttl ?? {};
-    if (config?.ttlMs !== undefined) {
-      this.ttlConfig["default"] = config.ttlMs;
     }
   }
 

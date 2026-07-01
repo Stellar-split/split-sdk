@@ -148,6 +148,8 @@ export {
   isTooManySubscriptionsError,
   RequestTimeoutError,
   isRequestTimeoutError,
+  AdminOperationError,
+  isAdminOperationError,
 } from "./errors.js";
 export { getScheduledReleaseCountdown } from "./client.js";
 export { verifyCompletionProof } from "./client.js";
@@ -245,6 +247,8 @@ export type {
   TimelockAction,
   QueueActionParams,
   CompletionProof,
+  AdminFreezeResult,
+  AdminUnfreezeResult,
 } from "./types.js";
 export { InvalidTransitionError } from "./types.js";
 

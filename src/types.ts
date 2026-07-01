@@ -686,6 +686,32 @@ export interface TimelockAction {
   cancelled: boolean;
 }
 
+/** Result of an admin freeze operation. */
+export interface AdminFreezeResult {
+  /** Transaction hash of the freeze submission. */
+  txHash: string;
+  /** Invoice ID that was frozen. */
+  invoiceId: string;
+  /** Stellar address of the admin that performed the freeze. */
+  adminAddress: string;
+  /** Reason provided for the freeze. */
+  reason: string;
+  /** Unix timestamp (ms) when the freeze was submitted. */
+  timestamp: number;
+}
+
+/** Result of an admin unfreeze operation. */
+export interface AdminUnfreezeResult {
+  /** Transaction hash of the unfreeze submission. */
+  txHash: string;
+  /** Invoice ID that was unfrozen. */
+  invoiceId: string;
+  /** Stellar address of the admin that performed the unfreeze. */
+  adminAddress: string;
+  /** Unix timestamp (ms) when the unfreeze was submitted. */
+  timestamp: number;
+}
+
 /** Cryptographic completion proof returned by get_completion_proof. */
 export interface CompletionProof {
   /** Invoice ID. */
