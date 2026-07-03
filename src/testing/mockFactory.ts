@@ -1,5 +1,13 @@
-import type { Invoice, Payment, TxResult, CreateInvoiceParams, DisputeResult, HealthCheckResult, InvoiceReceipt, BatchResolveResult, NftGateResult, InvoiceStatus, PaymentReconciliationReport, InvoiceSnapshot, BulkResult, InvoiceTemplate, PaginatedResult, PaginationOptions, ScheduledReleaseCountdown, CompletionProof, ClaimPayoutResult, PayWithAttestationParams, AttestationPaymentReceipt, SetCrossChainRefParams, AuctionInfo, QueueActionParams, TimelockAction, CrossChainRef, VelocityStatus, FeeBreakdown, TokenInfo, PaymentProof, BatchPayment, PaymentValidation, SimulateCreateInvoiceResult, SimulatePayResult, FeeEstimate, TtlExtensionOptions, TtlExtensionResult, CoSignature, PaymentCooldown, NormalizedAccount, NormalizedBalance, ComplianceReport, ComplianceRule, TelemetryHooks, SdkPlugin, StellarSplitClientConfig } from "../types.js";
-import { SorobanRpc, Transaction, TransactionBuilder, BASE_FEE, nativeToScVal, scValToNative, xdr, Keypair } from "@stellar/stellar-sdk";
+import type { Invoice, Payment, CreateInvoiceParams, DisputeResult, HealthCheckResult, InvoiceReceipt, BatchResolveResult, NftGateResult, InvoiceStatus, PaymentReconciliationReport, BulkResult, InvoiceTemplate, PaginatedResult, PaginationOptions, ScheduledReleaseCountdown, CompletionProof, ClaimPayoutResult, PayWithAttestationParams, AttestationPaymentReceipt, SetCrossChainRefParams, AuctionInfo, QueueActionParams, TimelockAction, CrossChainRef, VelocityStatus, FeeBreakdown, TokenInfo, PaymentProof, BatchPayment, PaymentValidation, SimulateCreateInvoiceResult, SimulatePayResult, FeeEstimate, CoSignature, PaymentCooldown, ArbiterVote, PayParams, AdminFreezeResult, AdminUnfreezeResult } from "../types.js";
+import type { TxResult, StellarSplitClientConfig } from "../client.js";
+import type { InvoiceSnapshot } from "../snapshot.js";
+import type { TtlExtensionOptions, TtlExtensionResult } from "../ttlExtension.js";
+import type { NormalizedAccount, NormalizedBalance } from "../horizonFallback.js";
+import type { ComplianceReport, ComplianceRule } from "../compliance.js";
+import type { TelemetryHooks } from "../telemetryHooks.js";
+import type { SdkPlugin } from "../plugin.js";
+import type { ExportFormat } from "../export.js";
+import { Transaction, Keypair } from "@stellar/stellar-sdk";
 
 // Minimal mock for Contract to allow type checking without full implementation
 class MockContract {
@@ -15,10 +23,25 @@ class MockSorobanRpcServer {
   getAccount = jest.fn((_accountId: string) => Promise.resolve({ sequenceNumber: () => "123", incrementSequenceNumber: () => {} }));
 }
 
-// Utility type to mock all methods of a class/interface with JestMocks
+// Local mock function type compatible with both Jest and Vitest
+type MockFn<A extends any[], R> = ((...args: A) => R) & {
+  mock: {
+    calls: A[];
+    results: Array<{ type: "return"; value: Awaited<R> } | { type: "throw"; value: any }>;
+    mockResolvedValueOnce: (value: Awaited<R>) => any;
+    mockReturnValueOnce: (value: R) => any;
+    mockImplementation: (fn: (...args: A) => R) => any;
+    mockImplementationOnce: (fn: (...args: A) => R) => any;
+    mockClear: () => void;
+    mockReset: () => void;
+    mockRestore: () => void;
+  };
+};
+
+// Utility type to mock all methods of a class/interface
 type Mocked<T> = {
   [P in keyof T]: T[P] extends (...args: infer A) => infer R
-    ? ((...args: A) => Promise<Awaited<R>>) & jest.Mock<Awaited<R>, A>
+    ? MockFn<A, Promise<Awaited<R>>>
     : T[P];
 };
 
@@ -116,9 +139,6 @@ export function createMockSdk(overrides?: Partial<MockStellarSplitSDK>): MockSte
         funded: 0n,
         payments: [],
         status: "Pending",
-        hash: "mock-hash",
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
       };
       _state.invoices.set(newInvoice.id, newInvoice);
       return { invoiceId: newInvoice.id, txHash: "mock-tx-hash" };
@@ -156,9 +176,6 @@ export function createMockSdk(overrides?: Partial<MockStellarSplitSDK>): MockSte
           funded: 0n,
           payments: [],
           status: "Pending",
-          hash: "mock-hash",
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
         };
         _state.invoices.set(newInvoice.id, newInvoice);
         invoiceIds.push(newInvoice.id);
@@ -219,14 +236,14 @@ export function createMockSdk(overrides?: Partial<MockStellarSplitSDK>): MockSte
     getRecurringInvoices: jest.fn(async (creator: string) => ([])),
     cancelRecurring: jest.fn(async (invoiceId: string, creator: string) => ({ txHash: "mock-tx-hash" })),
     updateRecurringAmount: jest.fn(async (invoiceId: string, creator: string, amounts: bigint[]) => ({ txHash: "mock-tx-hash" })),
-    getInvoicesByCreator: jest.fn(async (creator: string, options: PaginationOptions = {}) => ({
+    getInvoicesByCreator: jest.fn(async (creator: string, _options: PaginationOptions = {}) => ({
       items: Array.from(_state.invoices.values()).filter(inv => inv.creator === creator).map(inv => inv.id),
-      nextCursor: null,
+      nextCursor: null as string | null,
       total: Array.from(_state.invoices.values()).filter(inv => inv.creator === creator).length,
     })),
-    getInvoicesByRecipient: jest.fn(async (recipient: string, options: PaginationOptions = {}) => ({
+    getInvoicesByRecipient: jest.fn(async (recipient: string, _options: PaginationOptions = {}) => ({
       items: Array.from(_state.invoices.values()).filter(inv => inv.recipients.some(r => r.address === recipient)).map(inv => inv.id),
-      nextCursor: null,
+      nextCursor: null as string | null,
       total: Array.from(_state.invoices.values()).filter(inv => inv.recipients.some(r => r.address === recipient)).length,
     })),
     checkRPCHealth: jest.fn(async () => ({ rpcReachable: true, latencyMs: 10, network: "testnet", contractDeployed: true, error: undefined })),
@@ -251,7 +268,7 @@ export function createMockSdk(overrides?: Partial<MockStellarSplitSDK>): MockSte
     bumpStorageTtlBatch: jest.fn(async (options: TtlExtensionOptions) => ([{ invoiceId: "mock-invoice-id", newTtl: Date.now() + 1000 }])),
     collectCoSignatures: jest.fn(async (invoiceId: string, signers: string[]) => "mock-co-signed-xdr"),
     submitWithCoSignatures: jest.fn(async (invoiceId: string, signatures: CoSignature[]) => ({ txHash: "mock-tx-hash" })),
-    rolloverInvoice: jest.fn(async (invoiceId: string, newDeadline: number) => ({ txHash: "mock-tx-hash", newInvoiceId: "mock-new-invoice-id" })),
+    rolloverInvoice: jest.fn(async (invoiceId: string, newDeadline: number, caller: string) => ({ txHash: "mock-tx-hash", newInvoiceId: "mock-new-invoice-id" })),
     submitCoCreatorApproval: jest.fn(async (invoiceId: string, signer: string) => ({ txHash: "mock-tx-hash" })),
     getCoCreatorApprovals: jest.fn(async (invoiceId: string) => (["mock-signer-address"])),
     revokeCoCreatorApproval: jest.fn(async (invoiceId: string, signer: string) => ({ txHash: "mock-tx-hash" })),
@@ -276,8 +293,8 @@ export function createMockSdk(overrides?: Partial<MockStellarSplitSDK>): MockSte
     getCreatorVolumeUsed: jest.fn(async (address: string) => 50000n),
     getRemainingCreatorVolume: jest.fn(async (address: string) => 950000n),
     createInvoiceBatch: jest.fn(async (items: CreateInvoiceParams[]) => ({ invoiceIds: items.map((_, i) => `mock-batch-invoice-${i}`), txHash: "mock-tx-hash" })),
-    getLeaderboard: jest.fn(async (opts?: { timeout?: number; traceId?: string }) => ([])), // Default to empty array
-    getInvoiceHistory: jest.fn(async (invoiceId: string, opts?: PaginationOptions) => ({ items: [], nextCursor: null, total: 0 })),
+    getLeaderboard: jest.fn(async (_opts?: { timeout?: number; traceId?: string }) => ([] as { creator: string; invoiceCount: number; totalVolume: bigint }[])),
+    getInvoiceHistory: jest.fn(async (invoiceId: string, _opts?: { timeout?: number; traceId?: string }) => ([] as Payment[])),
     refundInvoice: jest.fn(async (invoiceId: string, creator: string, recipient: string, amount: bigint) => ({ txHash: "mock-tx-hash" })),
     getClaimableRefunds: jest.fn(async (payer: string) => ([])),
     syncInvoice: jest.fn(async (invoiceId: string) => ({
@@ -287,12 +304,15 @@ export function createMockSdk(overrides?: Partial<MockStellarSplitSDK>): MockSte
     })),
     getPendingPayout: jest.fn(async (invoiceId: string, recipient: string) => 0n),
     claimPendingPayout: jest.fn(async (invoiceId: string, recipient: string) => ({ txHash: "mock-tx-hash", claimedAmount: 100n })),
-    payWithAttestation: jest.fn(async (params: PayWithAttestationParams) => ({ receiptId: "mock-attestation-receipt", invoiceId: params.invoiceId, creator: "mock-creator", recipients: [], payments: [], totalAmount: params.amount, releasedAt: Date.now(), attestation: params.attestation })),
+    payWithAttestation: jest.fn(async (params: PayWithAttestationParams) => ({ txHash: "mock-tx-hash", invoiceId: params.invoiceId, amount: params.amount, attestationHash: "mock-attestation-hash" })),
     getAccount: jest.fn(async (address: string) => ({ address, balance: 10000000000n, sequence: "123" })),
     getAccountBalances: jest.fn(async (address: string) => ([{ asset: "XLM", balance: 10000000000n, assetType: "native" }])),
+    adminFreezeInvoice: jest.fn(async (invoiceId: string, _reason: string, adminKeypair: Keypair) => ({ txHash: "mock-tx-hash", invoiceId, adminAddress: adminKeypair.publicKey(), reason: _reason, timestamp: Date.now() })),
+    adminUnfreezeInvoice: jest.fn(async (invoiceId: string, _reason: string, adminKeypair: Keypair) => ({ txHash: "mock-tx-hash", invoiceId, adminAddress: adminKeypair.publicKey(), timestamp: Date.now() })),
+    setBatchingEnabled: jest.fn((_enabled: boolean) => {}),
   };
 
-  return { ...mockSdk, ...overrides };
+  return { ...mockSdk, ...overrides } as unknown as MockStellarSplitSDK;
 }
 
 // We need a global Jest/Vitest mock function to ensure `jest.fn()` works.
