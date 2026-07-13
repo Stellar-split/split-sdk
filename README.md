@@ -1,4 +1,7 @@
-# @stellar-split/sdk
+<div align="center">
+  <img src="https://raw.githubusercontent.com/Stellar-split/.github/main/assets/stellarsplit-mark.svg" alt="StellarSplit" width="80" />
+  <h1>@stellar-split/sdk</h1>
+</div>
 
 ![npm](https://img.shields.io/npm/v/@stellar-split/sdk)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)
