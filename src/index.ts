@@ -150,14 +150,45 @@ export {
   isRequestTimeoutError,
   AdminOperationError,
   isAdminOperationError,
+  IPFSPinError,
+  isIPFSPinError,
+  IPFSFetchError,
+  isIPFSFetchError,
+  CIDMismatchError,
+  isCIDMismatchError,
+  IPFSConfigError,
+  isIPFSConfigError,
 } from "./errors.js";
 export { getScheduledReleaseCountdown } from "./client.js";
 export { verifyCompletionProof } from "./client.js";
 export { MultiTenantClient } from "./multiTenant.js";
 export { ProfilerSession } from "./profiler.js";
 export type { ProfileReport } from "./profiler.js";
-export { enrichInvoice, registerInvoiceFetcher } from "./enricher.js";
-export type { EnrichedInvoice } from "./enricher.js";
+export {
+  enrichInvoice,
+  enrichInvoices,
+  registerInvoiceFetcher,
+  hasIPFSMetadata,
+  getInvoiceMetadataCID,
+} from "./enricher.js";
+export type { EnrichedInvoice, EnrichOptions } from "./enricher.js";
+
+// IPFS functionality
+export {
+  pinInvoiceMetadata,
+  verifyCID,
+  verifyCIDOrThrow,
+  fetchFromIPFS,
+  fetchInvoiceMetadata,
+  parseIPFSCid,
+  configureIPFS,
+  getIPFSConfig,
+  resetIPFSConfig,
+  createLineItem,
+  createInvoiceMetadata,
+  deserializeMetadata,
+  DEFAULT_IPFS_CONFIG,
+} from "./ipfs.js";
 
 export { Deduplicator } from "./dedup.js";
 
@@ -539,4 +570,8 @@ export type {
   AutoResolveSimulation,
   InvoiceStats,
   PrerequisiteChainEntry,
+  LineItem,
+  InvoiceMetadata,
+  IPFSConfig,
+  CIDVerificationResult,
 } from "./types.js";
