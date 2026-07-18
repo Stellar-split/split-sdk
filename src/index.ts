@@ -570,3 +570,31 @@ export type {
   InvoiceStats,
   PrerequisiteChainEntry,
 } from "./types.js";
+
+// ---------------------------------------------------------------------------
+// UI Components (React)
+// ---------------------------------------------------------------------------
+
+export type {
+  DisputePanelProps,
+  DisputeEvidenceItem,
+} from "./ui/DisputePanel.js";
+
+export type {
+  DisputeTimelineProps,
+  DisputeTimelineEvent,
+  DisputeEventType,
+} from "./ui/DisputeTimeline.js";
+
+export type {
+  InvoiceDetailPageProps,
+} from "./ui/InvoiceDetailPage.js";
+
+export type {
+  UseInvoiceStreamOptions,
+  UseInvoiceStreamResult,
+} from "./ui/hooks/useInvoiceStream.js";
+
+// Note: Actual React components are exported from ./ui/index for tree-shaking
+// Import them like: import { DisputePanel } from '@stellar-split/sdk/ui'
+

@@ -1143,6 +1143,79 @@ export class StellarSplitClient {
     });
   }
 
+  /**
+   * Submit a vote on a disputed invoice (arbitrator only).
+   * @param params - Vote parameters (invoiceId, arbiter address, approve boolean)
+   * @returns Transaction result with hash
+   */
+  async voteDispute(params: ArbiterVote): Promise<{ txHash: string }> {
+    return this._withTelemetry("voteDispute", params as unknown as Record<string, unknown>, async () => {
+      const operation = this.contract.call(
+        "vote_dispute",
+        nativeToScVal(BigInt(params.invoiceId), { type: "u64" }),
+        nativeToScVal(params.arbiter, { type: "address" }),
+        nativeToScVal(params.approve, { type: "bool" }),
+      );
+
+      const { txHash } = await this._submitTx(params.arbiter, operation);
+      return { txHash };
+    });
+  }
+
+  /**
+   * Add evidence to a dispute (stores IPFS CID in dispute notes).
+   * @param invoiceId - The invoice ID
+   * @param evidenceCid - IPFS CID of the evidence file
+   * @param fileName - Optional file name for reference
+   * @returns Transaction result with hash
+   */
+  async addDisputeEvidence(
+    invoiceId: string,
+    evidenceCid: string,
+    fileName?: string,
+  ): Promise<{ txHash: string; cid: string }> {
+    return this._withTelemetry(
+      "addDisputeEvidence",
+      { invoiceId, evidenceCid, fileName } as Record<string, unknown>,
+      async () => {
+        // Note: This assumes the contract has an add_dispute_evidence method
+        // If not, this would need to be stored off-chain or via memo field
+        const note = fileName ? `${fileName}: ${evidenceCid}` : evidenceCid;
+        
+        const operation = this.contract.call(
+          "add_dispute_note",
+          nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+          nativeToScVal(note, { type: "string" }),
+        );
+
+        // Use current wallet for signing
+        const publicKey = await (this._adapter 
+          ? this._adapter.getAddress() 
+          : signTransaction.call(this, "", this.config.networkPassphrase).then(() => "")
+        );
+
+        const { txHash } = await this._submitTx(publicKey, operation);
+        return { txHash, cid: evidenceCid };
+      },
+    );
+  }
+
+  /**
+   * Get SSE endpoint URL for real-time updates (if available).
+   * This is used by useInvoiceStream hook for live updates.
+   * @param path - The SSE path (e.g., "/invoice/123")
+   * @returns SSE endpoint URL
+   */
+  getSSEEndpoint(path: string): string {
+    // This would be configured based on your backend SSE server
+    // For now, return a placeholder that components can override
+    const primaryUrl = Array.isArray(this.config.rpcUrl) 
+      ? this.config.rpcUrl[0]! 
+      : this.config.rpcUrl;
+    const baseUrl = (this.config as any).sseUrl || primaryUrl.replace('/soroban/rpc', '');
+    return `${baseUrl}/sse${path}`;
+  }
+
   // ---------------------------------------------------------------------------
   // Public API
   // ---------------------------------------------------------------------------
