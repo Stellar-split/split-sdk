@@ -283,6 +283,36 @@ export {
   WebhookEventNotFoundError,
 } from "./webhookReplay.js";
 export type { WebhookRecord, WebhookReplayStore } from "./webhookReplay.js";
+
+// Webhook middleware for receiving and verifying incoming webhooks
+export {
+  createWebhookMiddleware,
+  generateWebhookSignature,
+  verifyWebhookSignature,
+  parseWebhookPayload,
+  isValidEventType,
+  isWebhookRequest,
+  InvalidSignatureError,
+  TimestampOutOfBoundsError,
+  ReplayAttackError,
+  MissingHeaderError,
+  InvalidPayloadError,
+  WebhookValidationError,
+} from "./webhookMiddleware.js";
+export type {
+  WebhookOptions,
+  InvoiceEventType,
+  WebhookPayload,
+  WebhookRequest,
+  RequestHandler,
+  InvoiceCreatedData,
+  InvoicePaidData,
+  InvoiceReleasedData,
+  InvoiceFailedData,
+  InvoiceRefundedData,
+  InvoiceCancelledData,
+  InvoiceExpiredData,
+} from "./webhookMiddleware.js";
 // ---------------------------------------------------------------------------
 // Lazy factories for heavy modules
 // ---------------------------------------------------------------------------
