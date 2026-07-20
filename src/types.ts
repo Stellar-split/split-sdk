@@ -819,3 +819,55 @@ export interface SetCrossChainRefParams {
   /** Cross-chain reference data. */
   ref: CrossChainRef;
 }
+
+// ---------------------------------------------------------------------------
+// IPFS Invoice Metadata Types
+// ---------------------------------------------------------------------------
+
+/** A single line item in an invoice. */
+export interface LineItem {
+  /** Description of the item or service. */
+  description: string;
+  /** Quantity of items. */
+  quantity: number;
+  /** Unit price in stroops. */
+  unitPrice: bigint;
+  /** Optional total override (defaults to quantity * unitPrice). */
+  total?: bigint;
+}
+
+/** Structured metadata for an invoice stored on IPFS. */
+export interface InvoiceMetadata {
+  /** Human-readable title for the invoice. */
+  title: string;
+  /** Detailed description of the invoice. */
+  description: string;
+  /** Itemized line items. */
+  lineItems: LineItem[];
+  /** CIDs of attachment files (documents, images, etc.). */
+  attachmentCIDs: string[];
+}
+
+/** Configuration for IPFS backend. */
+export interface IPFSConfig {
+  /** Backend type: 'gateway' for HTTP gateway or 'kubo' for Kubo RPC API. */
+  backend: "gateway" | "kubo";
+  /** Base URL for the IPFS endpoint. */
+  url: string;
+  /** Optional timeout in milliseconds. Defaults to 30000. */
+  timeout?: number;
+  /** Optional authorization header for authenticated endpoints. */
+  authorization?: string;
+}
+
+/** Result of a CID verification operation. */
+export interface CIDVerificationResult {
+  /** Whether the content matches the CID. */
+  valid: boolean;
+  /** The expected CID. */
+  expectedCID: string;
+  /** The computed CID from the fetched content, if available. */
+  computedCID?: string;
+  /** Error message if verification failed. */
+  error?: string;
+}
