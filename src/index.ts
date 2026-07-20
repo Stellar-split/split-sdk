@@ -150,6 +150,14 @@ export {
   isRequestTimeoutError,
   AdminOperationError,
   isAdminOperationError,
+  CommitmentGenerationError,
+  isCommitmentGenerationError,
+  BlindingFactorStorageError,
+  isBlindingFactorStorageError,
+  BlindingFactorNotFoundError,
+  isBlindingFactorNotFoundError,
+  BlindingFactorDecryptionError,
+  isBlindingFactorDecryptionError,
 } from "./errors.js";
 export { getScheduledReleaseCountdown } from "./client.js";
 export { verifyCompletionProof } from "./client.js";
@@ -158,6 +166,20 @@ export { ProfilerSession } from "./profiler.js";
 export type { ProfileReport } from "./profiler.js";
 export { enrichInvoice, registerInvoiceFetcher } from "./enricher.js";
 export type { EnrichedInvoice } from "./enricher.js";
+
+// Confidential payments (Pedersen commitments)
+export {
+  generateCommitment,
+  verifyCommitment,
+  storeBlindingFactor,
+  loadBlindingFactor,
+  deleteBlindingFactor,
+  configureBlindingFactorStorage,
+  resetBlindingFactorStorageConfig,
+  buildRevealTransaction,
+  generateAndStoreCommitment,
+  buildRevealTransactionFromStorage,
+} from "./confidential.js";
 
 export { Deduplicator } from "./dedup.js";
 
@@ -539,4 +561,8 @@ export type {
   AutoResolveSimulation,
   InvoiceStats,
   PrerequisiteChainEntry,
+  PedersenCommitment,
+  BlindingFactorStorageConfig,
+  StoredBlindingFactor,
+  RevealPaymentOptions,
 } from "./types.js";
