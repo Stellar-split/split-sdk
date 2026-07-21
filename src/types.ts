@@ -649,6 +649,12 @@ export interface DisputeStatus {
   arbiter: string;
   resolved: boolean;
   resolution: "approved" | "rejected" | null;
+  /** Reason for the dispute */
+  reason?: string;
+  /** Address that opened the dispute */
+  openedBy?: string;
+  /** Unix timestamp when dispute was opened */
+  openedAt?: number;
 }
 
 /** A single auction bid. */
