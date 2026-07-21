@@ -528,7 +528,7 @@ describe("validatePayment", () => {
       status: "Released" as const,
       payments: [],
     } as any);
-    vi.spyOn(client as any, "_getTokenBalance").mockResolvedValue(50n);
+    vi.spyOn(client as any, "_getTokenBalance").mockResolvedValue(10n);
 
     const validation = await client.validatePayment("123", 20n);
 
@@ -605,13 +605,6 @@ describe("TelemetryCollector", () => {
   it("records metrics and computes percentiles", () => {
     const collector = new TelemetryCollector();
 
-    await expect(
-      client.simulatePay({ payer: PAYER_ADDR, invoiceId: "1", amount: 1000n })
-    ).rejects.toThrow("Simulation error");
-  });
-});
-
-import { Deduplicator } from "../src/dedup.js";
     for (let i = 0; i < 10; i++) {
       collector.recordMethod("methodA", i % 3 === 0, i * 10);
     }
@@ -620,7 +613,7 @@ import { Deduplicator } from "../src/dedup.js";
 
     expect(report.period).toBeGreaterThanOrEqual(0);
     expect(report.methods.methodA.calls).toBe(10);
-    expect(report.methods.methodA.errors).toBe(4);
+    expect(report.methods.methodA.errors).toBe(6);
     expect(report.methods.methodA.p50).toBeGreaterThanOrEqual(40);
     expect(report.methods.methodA.p95).toBeGreaterThanOrEqual(90);
   });

@@ -10,7 +10,17 @@ export { StellarSplitClient } from "./client.js";
 export type { StellarSplitClientConfig, NetworkConfig, TxResult } from "./client.js";
 export { MultiTenantClient } from "./multiTenant.js";
 export { ProfilerSession } from "./profiler.js";
-export type { ProfileReport } from "./profiler.js";
+export type {
+  ProfileReport,
+  ProfileEntry,
+  ProfileSession,
+  RpcCallTiming,
+  SpeedscopeProfile,
+  SpeedscopeEventedProfile,
+  SpeedscopeFrame,
+  SpeedscopeEvent,
+  ProfilerSessionOptions,
+} from "./profiler.js";
 export { enrichInvoice, registerInvoiceFetcher } from "./enricher.js";
 export type { EnrichedInvoice } from "./enricher.js";
 
@@ -132,8 +142,6 @@ export type {
   ContractFeatures,
 } from "./types.js";
 export { InvalidTransitionError } from "./types.js";
-
-export { LedgerAdapter } from "./adapters/ledger.js";
 
 export { negotiateVersion, SDK_CONTRACT_VERSION } from "./version.js";
 export type { VersionInfo } from "./types.js";

@@ -23,9 +23,12 @@ export const SDK_CONTRACT_VERSION = "1.0.0";
 export async function negotiateVersion(
   config: StellarSplitClientConfig
 ): Promise<VersionInfo> {
-  const server = new SorobanRpc.Server(config.rpcUrl, {
-    allowHttp: config.rpcUrl.startsWith("http://"),
-  });
+  const server = new SorobanRpc.Server(
+    Array.isArray(config.rpcUrl) ? config.rpcUrl[0]! : config.rpcUrl,
+    {
+      allowHttp: (Array.isArray(config.rpcUrl) ? config.rpcUrl[0]! : config.rpcUrl).startsWith("http://"),
+    }
+  );
   const contract = new Contract(config.contractId);
 
   const operation = contract.call("get_version");

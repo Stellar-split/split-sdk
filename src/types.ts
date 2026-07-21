@@ -261,11 +261,21 @@ export interface SimulatePayResult {
   fee: string;
 }
 
+/** Lifecycle hooks for invoice events. */
+export interface InvoiceLifecycleHooks {
+  onCreated?: (invoice: Invoice) => void;
+  onPaid?: (invoice: Invoice, payment: Payment) => void;
+  onReleased?: (invoice: Invoice) => void;
+  onRefunded?: (invoice: Invoice) => void;
+  onCancelled?: (invoice: Invoice) => void;
+}
+
 /** Result of SDK/contract version negotiation. */
 export interface VersionInfo {
   contractVersion: string;
   sdkVersion: string;
   compatible: boolean;
+}
 /** Fee breakdown for a payment amount. */
 export interface FeeBreakdown {
   /** Gross amount before fee deduction. */
