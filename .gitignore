@@ -20,3 +20,11 @@ Thumbs.db
 *.log
 task1.md
 somzilla.md
+# Editor / IDE
+.idea/
+*.swp
+*.swo
+*~
+# Temp files
+*.tmp
+*.temp

@@ -678,3 +678,25 @@ export type {
 // Note: Actual React components are exported from ./ui/index for tree-shaking
 // Import them like: import { DisputePanel } from '@stellar-split/sdk/ui'
 
+
+// ---------------------------------------------------------------------------
+// Cross-chain bridge payment helpers
+// ---------------------------------------------------------------------------
+
+export {
+  estimateBridgeFee,
+  buildBridgePayment,
+  submitBridgePayment,
+  computePayloadHash,
+  DEFAULT_CHAIN_CONFIGS,
+} from "./bridge.js";
+
+export type { ChainBridgeConfig, BridgeConfig } from "./bridge.js";
+
+export type {
+  ChainId,
+  BridgeFeeEstimate,
+  BridgePaymentParams,
+  BridgePaymentRequest,
+  SignedBridgeProof,
+} from "./types.js";
