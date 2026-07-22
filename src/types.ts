@@ -414,6 +414,34 @@ export interface SimulatePayResult {
   fee: string;
 }
 
+/** Result of a dry-run transaction simulation. */
+export interface SimulationResult {
+  /** Whether the simulation succeeded. */
+  success: boolean;
+  /** Error message if simulation failed. */
+  error?: string;
+  /** Estimated fee in stroops. */
+  fee: bigint;
+  /** CPU instructions used. */
+  cpuInsns: bigint;
+  /** Memory bytes used. */
+  memBytes: bigint;
+  /** Ledger footprint. */
+  footprint: LedgerFootprint;
+}
+
+/** Ledger footprint representing storage requirements. */
+export interface LedgerFootprint {
+  /** Read footprint in bytes. */
+  readBytes: bigint;
+  /** Write footprint in bytes. */
+  writeBytes: bigint;
+  /** Read ledger entries. */
+  readLedgerEntries: bigint;
+  /** Write ledger entries. */
+  writeLedgerEntries: bigint;
+}
+
 /** Result of previewing a token swap via DEX contract. */
 export interface PreviewTokenSwapResult {
   /** Estimated output amount from the swap in stroops. */
