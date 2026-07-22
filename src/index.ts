@@ -348,6 +348,8 @@ export type {
 // Lazy factories for heavy modules
 // ---------------------------------------------------------------------------
 
+
+
 export async function getExportModule(): Promise<typeof import("./export.js")> {
   return await import("./export.js");
 }
@@ -524,6 +526,49 @@ export type {
   EventSourceLike,
 } from "./sse.js";
 export type { PollingInvoiceEventHandler } from "./stream.js";
+
+// Real-time invoice event subscription (Issue #417)
+export { createInvoiceSubscription } from "./subscription.js";
+export type {
+  SubscriptionLifecycleCallback,
+  InvoiceEventCallback,
+} from "./subscription.js";
+export {
+  isInvoicePaymentEvent,
+  isInvoiceReleasedEvent,
+  isInvoiceRefundedEvent,
+  isInvoiceCancelledEvent,
+  isInvoiceFrozenEvent,
+  isInvoiceUnfrozenEvent,
+  isInvoiceCreatedEvent,
+} from "./subscription.js";
+export type {
+  InvoiceEvent,
+  InvoiceCreatedEvent,
+  InvoicePaymentEvent,
+  InvoiceReleasedEvent,
+  InvoiceRefundedEvent,
+  InvoiceCancelledEvent,
+  InvoiceFrozenEvent,
+  InvoiceUnfrozenEvent,
+  DisputeOpenedEvent,
+  DisputeResolvedEvent,
+  SplitRulesUpdatedEvent,
+  AutoResolveRulesUpdatedEvent,
+  VelocityLimitUpdatedEvent,
+  PrerequisiteAddedEvent,
+  PrerequisiteRemovedEvent,
+  ForwardChainCreatedEvent,
+  ScheduledReleaseSetEvent,
+  PenaltyTiersUpdatedEvent,
+  AllowedCallersUpdatedEvent,
+  NftGateSetEvent,
+  NftGateRemovedEvent,
+  BaseInvoiceEvent,
+  Subscription,
+  SubscriptionOptions,
+  SubscriptionLifecycleEvent,
+} from "./types.js";
 
 // WebSocket transport (Issue #377)
 export { WebSocketTransport } from "./websocket.js";

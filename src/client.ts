@@ -55,6 +55,8 @@ import type { CompressionConfig } from "./compression.js";
 import { calculateFee } from "./fee.js";
 import { resolveToken } from "./token.js";
 import type { PaymentReceipt } from "./receipt.js";
+import { createInvoiceSubscription } from "./subscription.js";
+import type { Subscription, InvoiceEvent, SubscriptionOptions } from "./types.js";
 import type {
   ArchivedInvoice,
 
@@ -5364,6 +5366,49 @@ export class StellarSplitClient {
       { invoiceId },
       () => this._fetchPaymentHistory(invoiceId, opts?.traceId),
       opts,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #417 — Real-time invoice status subscriptions
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Subscribe to real-time invoice events via Soroban event streaming.
+   *
+   * Opens a long-lived event stream that polls the Soroban RPC for contract
+   * events and fires the callback on every state change for the given invoice.
+   * Handles reconnection with exponential backoff, deduplicates events by
+   * ledger sequence + topic hash, and manages backpressure.
+   *
+   * @param invoiceId - The invoice ID to subscribe to.
+   * @param callback - Callback fired on each invoice event.
+   * @param options - Optional subscription configuration.
+   * @returns A Subscription object with unsubscribe() method.
+   *
+   * @example
+   * ```typescript
+   * const subscription = client.subscribeInvoice(123n, (event) => {
+   *   console.log("Invoice event:", event.type, event);
+   * });
+   *
+   * // Later, to stop listening:
+   * subscription.unsubscribe();
+   * ```
+   */
+  subscribeInvoice(
+    invoiceId: bigint,
+    callback: (event: InvoiceEvent) => void,
+    options?: SubscriptionOptions,
+  ): Subscription {
+    const invoiceIdStr = invoiceId.toString();
+
+    return createInvoiceSubscription(
+      this.server,
+      this.config.contractId,
+      invoiceIdStr,
+      callback,
+      options,
     );
   }
 }
