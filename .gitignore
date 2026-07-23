@@ -3,6 +3,18 @@ node_modules/
 dist/
 
 # Environment
+coverage/
+.vitest/
+.nyc_output/
+test-results/
+**/__snapshots__/
+*.snap
+*.snapshot
+*.snapshot.json
+testsnapshot/
+testSnapshot/
+test-snapshot/
+test-snapshots/
 .env
 .env.local
 *.env.*
@@ -15,6 +27,7 @@ dist/
 Thumbs.db
 
 # Task / scratch files
+*.log
 task1.md
 task2.md
 task3.md
@@ -37,3 +50,11 @@ somzilla.md
 # Logs
 *.log
 npm-debug.log*
+# Editor / IDE
+.idea/
+*.swp
+*.swo
+*~
+# Temp files
+*.tmp
+*.temp

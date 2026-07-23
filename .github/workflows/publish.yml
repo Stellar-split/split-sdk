@@ -28,6 +28,9 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Type check (strict)
+        run: npx --no-install tsc --noEmit
+
       - name: Publish
         run: npm publish --provenance --access public
         env:

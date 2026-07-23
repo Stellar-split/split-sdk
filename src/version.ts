@@ -8,6 +8,7 @@ import {
 } from "@stellar/stellar-sdk";
 import type { StellarSplitClientConfig } from "./client.js";
 import type { VersionInfo } from "./types.js";
+import { SimulationFailedError, NoReturnValueError } from "./errors.js";
 
 /** The contract API version this SDK was built against. */
 export const SDK_CONTRACT_VERSION = "1.0.0";
@@ -29,6 +30,10 @@ export async function negotiateVersion(
       allowHttp: (Array.isArray(config.rpcUrl) ? config.rpcUrl[0]! : config.rpcUrl).startsWith("http://"),
     }
   );
+  const rpcUrl = Array.isArray(config.rpcUrl) ? config.rpcUrl[0]! : config.rpcUrl;
+  const server = new SorobanRpc.Server(rpcUrl, {
+    allowHttp: rpcUrl.startsWith("http://"),
+  });
   const contract = new Contract(config.contractId);
 
   const operation = contract.call("get_version");
@@ -47,13 +52,13 @@ export async function negotiateVersion(
 
   const simResult = await server.simulateTransaction(tx);
   if (SorobanRpc.Api.isSimulationError(simResult)) {
-    throw new Error(`Simulation failed: ${simResult.error}`);
+    throw new SimulationFailedError(`Simulation failed: ${simResult.error}`, "get_version", simResult.error);
   }
 
   const retval = (
     simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse
   ).result?.retval;
-  if (!retval) throw new Error("No return value from get_version");
+  if (!retval) throw new NoReturnValueError("get_version");
 
   const contractVersion = String(scValToNative(retval));
   const sdkVersion = SDK_CONTRACT_VERSION;

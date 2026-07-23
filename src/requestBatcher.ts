@@ -1,122 +1,174 @@
-import { rpc as SorobanRpc } from "@stellar/stellar-sdk";
-import { Invoice, Payment, Recipient } from "./types.js";
+import type { Invoice, Payment, InvoiceExt } from "./types.js";
 
-/**
- * Configuration for the request batcher.
- */
-export interface BatcherConfig {
-  /** Time window in milliseconds to collect requests before batching */
-  windowMs: number;
-  /** Maximum number of requests to include in a single batch */
-  maxBatchSize: number;
+/** Call types supported by the batcher. */
+export type BatchCallType = "getInvoice" | "getPaymentHistory" | "getInvoiceExt";
+
+interface PendingCall<T> {
+  type: BatchCallType;
+  invoiceId: string;
+  resolve: (value: T) => void;
+  reject: (error: Error) => void;
+}
+
+/** Fetch functions that BatchedRpcClient delegates to. */
+export interface BatchFetchers {
+  fetchInvoice: (id: string) => Promise<Invoice>;
+  fetchPaymentHistory: (id: string) => Promise<Payment[]>;
+  fetchInvoiceExt: (id: string) => Promise<InvoiceExt>;
 }
 
 /**
- * RequestBatcher collects read requests within a configurable time window
- * and submits them as a single batch RPC call.
+ * BatchedRpcClient collects getInvoice, getPaymentHistory, and getInvoiceExt
+ * calls within a 10 ms window (configurable) and dispatches them in groups
+ * of up to 20 (configurable). Each overflow group starts a new batch
+ * immediately.
  */
-export class RequestBatcher {
-  private pendingRequests: Array<{
-    invoiceId: string;
-    resolve: (invoice: Invoice) => void;
-    reject: (error: Error) => void;
-  }> = [];
-  private timeoutId: NodeJS.Timeout | null = null;
-  private config: BatcherConfig;
-  
-  /**
-   * Creates a new RequestBatcher instance.
-   * @param config - Batcher configuration
-   */
-  constructor(config: BatcherConfig = { windowMs: 10, maxBatchSize: 100 }) {
-    this.config = config;
+export class BatchedRpcClient {
+  private readonly _windowMs: number;
+  private readonly _maxBatchSize: number;
+  private readonly _fetchers: BatchFetchers;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _pending: PendingCall<any>[] = [];
+  private _timer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(
+    fetchers: BatchFetchers,
+    windowMs = 10,
+    maxBatchSize = 20,
+  ) {
+    this._fetchers = fetchers;
+    this._windowMs = windowMs;
+    this._maxBatchSize = maxBatchSize;
   }
 
-  /**
-   * Queues a getInvoice request for batching.
-   * @param invoiceId - The invoice ID to fetch
-   * @returns A promise that resolves with the invoice
-   */
-  async getInvoice(invoiceId: string): Promise<Invoice> {
-    return new Promise<Invoice>((resolve, reject) => {
-      this.pendingRequests.push({ invoiceId, resolve, reject });
-      
-      // Start the batching timer if not already running
-      if (!this.timeoutId) {
-        this.timeoutId = setTimeout(() => this._processBatch(), this.config.windowMs);
+  getInvoice(id: string): Promise<Invoice> {
+    return this._enqueue<Invoice>("getInvoice", id);
+  }
+
+  getPaymentHistory(id: string): Promise<Payment[]> {
+    return this._enqueue<Payment[]>("getPaymentHistory", id);
+  }
+
+  getInvoiceExt(id: string): Promise<InvoiceExt> {
+    return this._enqueue<InvoiceExt>("getInvoiceExt", id);
+  }
+
+  private _enqueue<T>(type: BatchCallType, invoiceId: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      this._pending.push({ type, invoiceId, resolve, reject } as PendingCall<T>);
+
+      // Overflow: flush immediately without waiting for the timer
+      if (this._pending.length >= this._maxBatchSize) {
+        this._flush();
+        return;
       }
-      
-      // If we've reached max batch size, process immediately
-      if (this.pendingRequests.length >= this.config.maxBatchSize) {
-        this._processBatch();
+
+      if (!this._timer) {
+        this._timer = setTimeout(() => this._flush(), this._windowMs);
       }
     });
   }
 
-  /**
-   * Processes the pending requests as a batch.
-   * In a real implementation, this would make a single RPC call to get multiple invoices.
-   */
-  private async _processBatch(): Promise<void> {
-    if (this.timeoutId) {
-      clearTimeout(this.timeoutId);
-      this.timeoutId = null;
+  private _flush(): void {
+    if (this._timer) {
+      clearTimeout(this._timer);
+      this._timer = null;
     }
-    
-    if (this.pendingRequests.length === 0) return;
-    
-    // In a real implementation, this would:
-    // 1. Make a single RPC call to get all pending invoice IDs
-    // 2. Distribute results to the appropriate promises
-    // 3. Handle errors appropriately
-    
-    // For now, we'll simulate by resolving each request individually
-    // This is just a placeholder for the real implementation
-    const requests = [...this.pendingRequests];
-    this.pendingRequests = [];
-    
-    // Simulate fetching invoices (in real implementation, this would be one RPC call)
-    for (const req of requests) {
-      try {
-        // Simulate fetching the invoice
-        const invoice: Invoice = {
-          id: req.invoiceId,
-          creator: "GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ",
-          recipients: [{ address: "GBPMKIE33DB77R5ITZKU6J76L6M5H6Z6G7YXZQYVWU7XZQYVWU7XZQYVWU7XZQYV", amount: 100000000n }],
-          token: "CA3D5KRYM6CB7OWQ6TWYRR3Z4T75RBSVHYQ5M53RFBI7YE3QN7ZD5WL8",
-          deadline: Date.now() + 86400,
-          funded: 0n,
-          status: "Pending",
-          payments: [],
-          recurring: false,
-        };
-        req.resolve(invoice);
-      } catch (error) {
-        req.reject(error instanceof Error ? error : new Error(String(error)));
+
+    if (this._pending.length === 0) return;
+
+    // Take up to _maxBatchSize calls and leave the rest for the next flush
+    const batch = this._pending.splice(0, this._maxBatchSize);
+
+    // If there are still items after the splice, schedule another flush
+    if (this._pending.length > 0 && !this._timer) {
+      this._timer = setTimeout(() => this._flush(), this._windowMs);
+    }
+
+    this._dispatchBatch(batch);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private _dispatchBatch(batch: PendingCall<any>[]): void {
+    for (const call of batch) {
+      let promise: Promise<unknown>;
+
+      switch (call.type) {
+        case "getInvoice":
+          promise = this._fetchers.fetchInvoice(call.invoiceId);
+          break;
+        case "getPaymentHistory":
+          promise = this._fetchers.fetchPaymentHistory(call.invoiceId);
+          break;
+        case "getInvoiceExt":
+          promise = this._fetchers.fetchInvoiceExt(call.invoiceId);
+          break;
       }
+
+      promise.then(call.resolve, call.reject);
     }
   }
 
-  /**
-   * Gets the current number of pending requests.
-   * @returns Number of pending requests
-   */
-  getPendingCount(): number {
-    return this.pendingRequests.length;
+  /** Number of calls queued but not yet dispatched. */
+  get pendingCount(): number {
+    return this._pending.length;
   }
 
-  /**
-   * Clears all pending requests.
-   */
+  /** Reject all pending calls and cancel any scheduled flush. */
   clear(): void {
-    if (this.timeoutId) {
-      clearTimeout(this.timeoutId);
-      this.timeoutId = null;
+    if (this._timer) {
+      clearTimeout(this._timer);
+      this._timer = null;
     }
-    
-    this.pendingRequests.forEach(req => {
-      req.reject(new Error("Request batcher cleared"));
-    });
-    this.pendingRequests = [];
+    for (const call of this._pending) {
+      call.reject(new Error("BatchedRpcClient cleared"));
+    }
+    this._pending = [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Legacy export — kept for backwards compatibility
+// ---------------------------------------------------------------------------
+
+/** @deprecated Use BatchedRpcClient instead */
+export interface BatcherConfig {
+  windowMs: number;
+  maxBatchSize: number;
+}
+
+/** @deprecated Use BatchedRpcClient instead */
+export class RequestBatcher {
+  private readonly _inner: BatchedRpcClient;
+
+  constructor(config: BatcherConfig = { windowMs: 10, maxBatchSize: 20 }) {
+    const stub: BatchFetchers = {
+      fetchInvoice: async (id) => ({
+        id,
+        creator: "",
+        recipients: [],
+        token: "",
+        deadline: 0,
+        funded: 0n,
+        status: "Pending",
+        payments: [],
+      } as Invoice),
+      fetchPaymentHistory: async () => [],
+      fetchInvoiceExt: async () => ({ parentInvoiceId: null, cloneDepth: 0 }),
+    };
+    this._inner = new BatchedRpcClient(stub, config.windowMs, config.maxBatchSize);
+  }
+
+  async getInvoice(invoiceId: string): Promise<Invoice> {
+    return this._inner.getInvoice(invoiceId);
+  }
+
+  getPendingCount(): number {
+    return this._inner.pendingCount;
+  }
+
+  clear(): void {
+    this._inner.clear();
   }
 }

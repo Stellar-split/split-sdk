@@ -1,5 +1,6 @@
 import { MockRPCServer } from "./mockServer.js";
 import { Invoice, Payment, Recipient } from "../types.js";
+import { TestHarnessNotInitializedError, UnknownTestWalletError } from "../errors.js";
 
 /**
  * Integration test harness that spins up a mock contract environment,
@@ -48,13 +49,13 @@ export class IntegrationTestHarness {
    */
   async fundTestWallet(address: string, amount: bigint): Promise<void> {
     if (!this.mockServer) {
-      throw new Error("Test harness not set up. Call setup() first.");
+      throw new TestHarnessNotInitializedError();
     }
     
     // In real implementation, this would fund the wallet on the mock server
     // For now, we just verify the address exists in our test wallets
     if (!this.testWallets.has(address)) {
-      throw new Error(`Unknown test wallet address: ${address}`);
+      throw new UnknownTestWalletError(address);
     }
     
     // Simulate funding

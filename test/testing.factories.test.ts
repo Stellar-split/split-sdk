@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isValidAddress } from "../src/utils.js";
+import { isValidStellarAddress } from "../src/utils.js";
 import {
   createMockInvoice,
   createMockPayment,
@@ -10,7 +10,7 @@ describe("Testing factories", () => {
   it("creates a mock recipient with valid defaults", () => {
     const recipient = createMockRecipient();
 
-    expect(isValidAddress(recipient.address)).toBe(true);
+    expect(isValidStellarAddress(recipient.address)).toBe(true);
     expect(recipient.amount).toBeGreaterThan(0n);
   });
 
@@ -23,7 +23,7 @@ describe("Testing factories", () => {
   it("creates a mock payment with valid defaults", () => {
     const payment = createMockPayment();
 
-    expect(isValidAddress(payment.payer)).toBe(true);
+    expect(isValidStellarAddress(payment.payer)).toBe(true);
     expect(payment.amount).toBeGreaterThan(0n);
   });
 
@@ -38,7 +38,7 @@ describe("Testing factories", () => {
     const now = Math.floor(Date.now() / 1000);
 
     expect(invoice.id).toBe("123");
-    expect(isValidAddress(invoice.creator)).toBe(true);
+    expect(isValidStellarAddress(invoice.creator)).toBe(true);
     expect(invoice.recipients.length).toBeGreaterThan(0);
     expect(invoice.payments.length).toBeGreaterThanOrEqual(1);
     expect(invoice.token.startsWith("CA")).toBe(true);

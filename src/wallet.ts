@@ -10,12 +10,13 @@ import {
   signTransaction as freighterSignTransaction,
   requestAccess,
 } from "@stellar/freighter-api";
+import { WalletNotConnectedError } from "./errors.js";
 
 /** Connect to the Freighter wallet extension and request access. */
 export async function connectWallet(): Promise<string> {
   const { isConnected: connected } = await isConnected();
   if (!connected) {
-    throw new Error(
+    throw new WalletNotConnectedError(
       "Freighter wallet is not installed. Please install it from https://freighter.app"
     );
   }
@@ -28,7 +29,7 @@ export async function connectWallet(): Promise<string> {
 export async function getPublicKey(): Promise<string> {
   const { isConnected: connected } = await isConnected();
   if (!connected) {
-    throw new Error("Freighter wallet is not connected.");
+    throw new WalletNotConnectedError("Freighter wallet is not connected.");
   }
   const { address } = await getAddress();
   return address;

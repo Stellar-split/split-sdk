@@ -3,6 +3,7 @@ import type { Invoice } from "./types.js";
 
 export interface IRPCClient extends SorobanRpc.Server {
   getFeeStats(): Promise<SorobanRpc.Api.GetFeeStatsResponse>;
+  close?(): Promise<void> | void;
 }
 
 export interface ICacheStore<T> {
@@ -10,6 +11,8 @@ export interface ICacheStore<T> {
   set(key: string, value: T): void;
   invalidate(key: string): void;
   clear(): void;
+  persist?(): Promise<void> | void;
+  close?(): Promise<void> | void;
 }
 
 export interface IWalletAdapter {

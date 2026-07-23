@@ -1,6 +1,7 @@
 export interface RPCRequest {
   method: string;
   params: unknown[];
+  headers?: Record<string, string>;
 }
 
 export interface RPCResponse {

@@ -1,0 +1,17 @@
+[
+  {
+    "path": "dist/index.js",
+    "import": "{ StellarSplitClient }",
+    "limit": "30 kB",
+    "ignore": [
+      "crypto",
+      "zlib",
+      "util",
+      "@stellar/stellar-sdk",
+      "@ledgerhq/hw-app-str",
+      "@ledgerhq/hw-transport-webhid",
+      "@stellar/freighter-api",
+      "@walletconnect/sign-client"
+    ]
+  }
+]

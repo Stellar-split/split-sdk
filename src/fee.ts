@@ -4,6 +4,7 @@
 
 import { Contract, rpc as SorobanRpc, TransactionBuilder, BASE_FEE, nativeToScVal, scValToNative, xdr } from "@stellar/stellar-sdk";
 import type { StellarSplitClientConfig } from "./client.js";
+import { SimulationFailedError, NoReturnValueError } from "./errors.js";
 
 /** Fee breakdown for a payment amount. */
 export interface FeeBreakdown {
@@ -53,11 +54,11 @@ export async function calculateFee(
 
   const simResult = await server.simulateTransaction(tx);
   if (SorobanRpc.Api.isSimulationError(simResult)) {
-    throw new Error(`Simulation failed: ${simResult.error}`);
+    throw new SimulationFailedError(`Simulation failed: ${simResult.error}`, "get_fee_bps", simResult.error);
   }
 
   const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
-  if (!returnVal) throw new Error("No return value from get_fee_bps");
+  if (!returnVal) throw new NoReturnValueError("get_fee_bps");
 
   const feeBps = Number(scValToNative(returnVal));
   const fee = (amount * BigInt(feeBps)) / 10_000n;

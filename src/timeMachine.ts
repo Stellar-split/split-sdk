@@ -1,6 +1,7 @@
 import type { HistoricalInvoice, Invoice } from "./types.js";
 import { replayEvents } from "./events.js";
 import type { rpc as SorobanRpc } from "@stellar/stellar-sdk";
+import { InvoiceNotFoundError } from "./errors.js";
 
 export async function getInvoiceAtTime(
   server: SorobanRpc.Server,
@@ -14,12 +15,12 @@ export async function getInvoiceAtTime(
     .sort((a, b) => a.ledger - b.ledger);
 
   if (filtered.length === 0) {
-    throw new Error(`No events found for invoice ${invoiceId}`);
+    throw new InvoiceNotFoundError(invoiceId);
   }
 
   // Attempt to find a 'created' event to seed the invoice
   const created = filtered.find((e) => e.type === "created");
-  if (!created) throw new Error(`No creation event for invoice ${invoiceId}`);
+  if (!created) throw new InvoiceNotFoundError(invoiceId);
 
   // Assume created.data contains base invoice fields
   const base = created.data as Partial<Invoice>;

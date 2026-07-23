@@ -19,4 +19,8 @@ export class Deduplicator<T> {
     const total = this._hits + this._misses;
     return total === 0 ? 0 : this._hits / total;
   }
+
+  getDedupStats(): { deduped: number; total: number } {
+    return { deduped: this._hits, total: this._hits + this._misses };
+  }
 }

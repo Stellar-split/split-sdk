@@ -10,6 +10,7 @@ import {
 } from "@stellar/stellar-sdk";
 import type { StellarSplitClientConfig } from "./client.js";
 import { signTransaction } from "./wallet.js";
+import { SimulationFailedError, TransactionFailedError, TransactionNotConfirmedError } from "./errors.js";
 
 /** Builder for composing multi-operation StellarSplit transactions. */
 export class StellarSplitTxBuilder {
@@ -33,6 +34,21 @@ export class StellarSplitTxBuilder {
       nativeToScVal(this.sourceAddress, { type: "address" }),
       nativeToScVal(BigInt(invoiceId), { type: "u64" }),
       nativeToScVal(BigInt(amount), { type: "i128" })
+    );
+    this.operations.push(op);
+    return this;
+  }
+
+  addRolloverInvoice(
+    invoiceId: string,
+    newDeadline: number,
+    caller: string
+  ): this {
+    const op = this.contract.call(
+      "rollover_invoice",
+      nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+      nativeToScVal(BigInt(newDeadline), { type: "u64" }),
+      nativeToScVal(caller, { type: "address" })
     );
     this.operations.push(op);
     return this;
@@ -97,7 +113,7 @@ export class StellarSplitTxBuilder {
 
     const simResult = await this.server.simulateTransaction(tx);
     if (SorobanRpc.Api.isSimulationError(simResult)) {
-      throw new Error(`Simulation failed: ${simResult.error}`);
+      throw new SimulationFailedError(`Simulation failed: ${simResult.error}`, "submit", simResult.error);
     }
 
     const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
@@ -111,7 +127,9 @@ export class StellarSplitTxBuilder {
     );
 
     if (sendResult.status === "ERROR") {
-      throw new Error(`Transaction failed: ${JSON.stringify(sendResult.errorResult)}`);
+      throw new TransactionFailedError(
+        `Transaction failed: ${JSON.stringify(sendResult.errorResult)}`
+      );
     }
 
     const txHash = sendResult.hash;
@@ -127,7 +145,7 @@ export class StellarSplitTxBuilder {
     }
 
     if (getResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-      throw new Error(`Transaction not confirmed: ${getResult.status}`);
+      throw new TransactionNotConfirmedError(String(getResult.status));
     }
 
     return { txHash };

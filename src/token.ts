@@ -4,6 +4,7 @@
 
 import { Contract, rpc as SorobanRpc, TransactionBuilder, BASE_FEE, scValToNative, xdr } from "@stellar/stellar-sdk";
 import type { StellarSplitClientConfig } from "./client.js";
+import { SimulationFailedError, NoReturnValueError } from "./errors.js";
 
 /** Token metadata information. */
 export interface TokenInfo {
@@ -92,11 +93,11 @@ async function _simulateCall(
 
   const simResult = await server.simulateTransaction(tx);
   if (SorobanRpc.Api.isSimulationError(simResult)) {
-    throw new Error(`Simulation failed: ${simResult.error}`);
+    throw new SimulationFailedError(`Simulation failed: ${simResult.error}`, "token", simResult.error);
   }
 
   const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
-  if (!returnVal) throw new Error("No return value from token contract");
+  if (!returnVal) throw new NoReturnValueError("token");
 
   return returnVal;
 }
