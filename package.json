@@ -37,7 +37,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "test": "vitest run test/client.test.ts test/retryPolicy.test.ts",
+    "test": "vitest run test/client.test.ts test/retryPolicy.test.ts test/property-roundtrip.test.ts test/property-address.test.ts test/property-deadline.test.ts test/property-invoice-params.test.ts test/property-client-invariants.test.ts",
     "test:ui": "vitest run test/ui/",
     "test:all": "vitest run",
     "test:e2e": "vitest run test/e2e",
@@ -63,6 +63,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "fake-indexeddb": "^6.2.5",
+    "fast-check": "^4.9.0",
     "graphql": "^16.14.0",
     "jsdom": "^29.1.1",
     "react": "^19.2.7",
