@@ -37,7 +37,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "test": "vitest run test/client.test.ts test/retryPolicy.test.ts",
+    "test": "vitest run test/client.test.ts test/retryPolicy.test.ts test/resilience.test.ts",
     "test:ui": "vitest run test/ui/",
     "test:all": "vitest run",
     "test:e2e": "vitest run test/e2e",

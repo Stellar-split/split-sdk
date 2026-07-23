@@ -205,6 +205,15 @@ export {
   defaultCircuitBreakerMonitor,
 } from "./circuitBreakerMonitor.js";
 
+// Circuit breaker + retry resilience layer (Issue #419)
+export { CircuitBreaker } from "./circuitBreaker.js";
+export type {
+  CircuitBreakerConfig,
+  CircuitBreakerState,
+} from "./circuitBreaker.js";
+export { ResilientRpcClient } from "./resilientRpc.js";
+export type { RetryConfig } from "./resilientRpc.js";
+
 export { connectWallet, getPublicKey, signTransaction } from "./wallet.js";
 
 export { checkRPCHealth } from "./health.js";
