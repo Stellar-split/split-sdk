@@ -1,3 +1,5 @@
+import { ValidationError } from "./errors.js";
+
 const textEncoder = new TextEncoder();
 
 function normalizeHex(hex: string): string {
@@ -7,7 +9,7 @@ function normalizeHex(hex: string): string {
 function hexToBytes(hex: string): Uint8Array {
   const normalized = normalizeHex(hex);
   if (normalized.length % 2 !== 0) {
-    throw new Error("Invalid hex string");
+    throw new ValidationError("Invalid hex string length", { hexLength: normalized.length });
   }
 
   const bytes = new Uint8Array(normalized.length / 2);

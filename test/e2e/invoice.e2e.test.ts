@@ -39,11 +39,26 @@ vi.mock("../../src/wallet.js", () => ({
   },
 }));
 
+import { execSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+let hasStellarCli = false;
+try {
+  execSync("stellar --version", { stdio: "ignore" });
+  hasStellarCli = true;
+} catch {}
+
+const canRunE2E = hasStellarCli || existsSync(join(__dirname, ".env.e2e"));
+
 // ---------------------------------------------------------------------------
 // Test suite
 // ---------------------------------------------------------------------------
 
-describe("StellarSplit E2E", () => {
+describe.runIf(canRunE2E)("StellarSplit E2E", () => {
   let env: E2EEnv;
   let client: StellarSplitClient;
 

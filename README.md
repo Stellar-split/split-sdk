@@ -1,4 +1,7 @@
-# @stellar-split/sdk
+<div align="center">
+  <img src="https://raw.githubusercontent.com/Stellar-split/.github/main/assets/stellarsplit-mark.svg" alt="StellarSplit" width="80" />
+  <h1>@stellar-split/sdk</h1>
+</div>
 
 ![npm](https://img.shields.io/npm/v/@stellar-split/sdk)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)
@@ -53,6 +56,41 @@ const invoice = await client.getInvoice(invoiceId);
 console.log(invoice.status); // "Released"
 ```
 
+### Webhook Receiver
+
+```typescript
+import express from 'express';
+import { createWebhookMiddleware } from "@stellar-split/sdk";
+
+const app = express();
+
+// Use raw body parser for webhook route
+app.use('/webhooks/stellarsplit', express.raw({ type: 'application/json' }));
+
+// Secure webhook receiver with HMAC-SHA256 verification and replay protection
+app.post(
+  '/webhooks/stellarsplit',
+  createWebhookMiddleware(process.env.WEBHOOK_SECRET!, {
+    toleranceSeconds: 300,    // 5 minutes
+    nonceWindowSize: 1000,    // Track 1000 recent nonces
+  }),
+  (req, res) => {
+    const { event, data } = req.webhookPayload;
+    
+    switch (event) {
+      case 'invoice.paid':
+        console.log('Payment received:', data);
+        break;
+      case 'invoice.released':
+        console.log('Funds released:', data);
+        break;
+    }
+    
+    res.status(200).json({ received: true });
+  }
+);
+```
+
 ## API Reference
 
 ### `StellarSplitClient`
@@ -103,6 +141,9 @@ new StellarSplitClient(config: StellarSplitClientConfig)
 | Function | Returns | Description |
 |----------|---------|-------------|
 | `validateWebhookSignature(payload, signature, secret)` | `Promise<boolean>` | Verify the HMAC-SHA256 signature on incoming invoice webhook payloads |
+| `createWebhookMiddleware(secret, options)` | `RequestHandler` | Create secure Express/Next.js middleware for receiving webhooks with HMAC verification and replay protection |
+| `generateWebhookSignature(payload, secret)` | `Promise<string>` | Generate HMAC-SHA256 signature for a webhook payload |
+| `verifyWebhookSignature(payload, signature, secret)` | `Promise<boolean>` | Manually verify a webhook signature without middleware |
 
 ### Invoice Metadata Enricher
 

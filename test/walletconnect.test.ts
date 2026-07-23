@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { WalletConnectAdapter } from "../src/adapters/walletconnect.js";
 import type { WalletAdapter } from "../src/adapters/types.js";
 

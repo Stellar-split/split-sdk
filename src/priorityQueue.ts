@@ -18,8 +18,14 @@ export class PriorityQueue {
   private heap: HeapItem<unknown>[] = [];
   private seq = 0;
   private running = false;
+  private closed = false;
+  private drainResolvers: Array<() => void> = [];
 
   enqueue<T>(priority: RequestPriority, execute: () => Promise<T>): Promise<T> {
+    if (this.closed) {
+      return Promise.reject(new Error("Queue is shut down"));
+    }
+
     return new Promise<T>((resolve, reject) => {
       const item: HeapItem<T> = {
         priority,
@@ -31,6 +37,21 @@ export class PriorityQueue {
       this._insert(item as HeapItem<unknown>);
       if (!this.running) void this._drain();
     });
+  }
+
+  async drain(): Promise<void> {
+    if (!this.running && this.heap.length === 0) {
+      return;
+    }
+
+    return new Promise((resolve) => {
+      this.drainResolvers.push(resolve);
+    });
+  }
+
+  async shutdown(): Promise<void> {
+    this.closed = true;
+    await this.drain();
   }
 
   private _compare(a: HeapItem<unknown>, b: HeapItem<unknown>): number {
@@ -91,5 +112,6 @@ export class PriorityQueue {
       }
     }
     this.running = false;
+    this.drainResolvers.splice(0).forEach((resolve) => resolve());
   }
 }

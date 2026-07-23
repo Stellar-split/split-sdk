@@ -6,6 +6,7 @@ import {
 } from "@stellar/stellar-sdk";
 import { signTransaction } from "./wallet.js";
 import type { TxResult } from "./client.js";
+import { QueueFailedError } from "./errors.js";
 
 /** Transaction queue for serialized submission. */
 export class TxQueue {
@@ -37,7 +38,7 @@ export class TxQueue {
     ) => Promise<{ txHash: string; returnValue: unknown }>
   ): Promise<TxResult> {
     if (this.failed) {
-      throw new Error("Queue has failed; cannot enqueue new operations");
+      throw new QueueFailedError();
     }
 
     this.queue = this.queue.then(async () => {
