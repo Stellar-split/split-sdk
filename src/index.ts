@@ -170,6 +170,7 @@ export {
 export { getScheduledReleaseCountdown } from "./client.js";
 export { verifyCompletionProof } from "./client.js";
 export { MultiTenantClient } from "./multiTenant.js";
+export type { PoolOptions, PoolStats } from "./multiTenant.js";
 export { ProfilerSession } from "./profiler.js";
 export type {
   ProfileReport,

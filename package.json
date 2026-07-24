@@ -37,6 +37,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
+    "test": "vitest run test/client.test.ts test/multiTenant.test.ts",
     "test": "vitest run test/client.test.ts test/profiler.test.ts",
     "test": "vitest run test/client.test.ts test/retryPolicy.test.ts",
     "test:ui": "vitest run test/ui/",
