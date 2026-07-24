@@ -16,6 +16,7 @@ import {
   xdr,
   Keypair,
 } from "@stellar/stellar-sdk";
+import { EventEmitter } from "events";
 import { signTransaction } from "./wallet.js";
 import { telemetry } from "./telemetry.js";
 import { TelemetryHookManager } from "./telemetryHooks.js";
@@ -55,6 +56,8 @@ import type { CompressionConfig } from "./compression.js";
 import { calculateFee } from "./fee.js";
 import { resolveToken } from "./token.js";
 import type { PaymentReceipt } from "./receipt.js";
+import { createInvoiceSubscription } from "./subscription.js";
+import type { Subscription, InvoiceEvent, SubscriptionOptions } from "./types.js";
 import type {
   ArchivedInvoice,
 
@@ -212,6 +215,11 @@ import type { TimeoutConfig } from "./timeout.js";
 import { RequestTimeoutError } from "./errors.js";
 import { TraceIdManager } from "./traceId.js";
 import type { RpcClient } from "./rpcClient.js";
+import { ResilientRpcClient } from "./resilientRpc.js";
+import type {
+  RetryConfig as ResilientRetryConfig,
+  CircuitBreakerConfig,
+} from "./resilientRpc.js";
 
 /** A plugin that extends StellarSplitClient with new methods and lifecycle hooks. */
 export interface StellarSplitPlugin {
@@ -260,6 +268,8 @@ export interface StellarSplitClientConfig {
   complianceRules?: import("./compliance.js").ComplianceRule[];
   /** Optional dependency injection container for RPC, cache, and wallet implementations. */
   container?: DIContainer;
+  /** Optional lifecycle hooks for invoice events. */
+  hooks?: import("./types.js").InvoiceLifecycleHooks;
   /** Optional request/response compression middleware. Disabled by default. */
   compression?: CompressionConfig;
   /** Optional invoice lifecycle hooks. */
@@ -365,6 +375,20 @@ export interface StellarSplitClientConfig {
    * passed to each admin method, so callers cannot forge an admin identity.
    */
   adminKeypair?: Keypair;
+  /**
+   * Optional circuit breaker configuration for RPC call resilience.
+   * When provided, a circuit breaker is created that tracks consecutive
+   * RPC failures and temporarily blocks calls when the failure threshold
+   * is exceeded, auto-resetting after a cooldown period.
+   * Retry configuration for the circuit breaker's internal retry layer.
+   * Applied to every RPC call wrapped by the circuit breaker.
+   */
+  circuitBreaker?: {
+    /** Circuit breaker settings (failure threshold, reset timeout). */
+    breaker?: Partial<CircuitBreakerConfig>;
+    /** Retry settings applied per RPC call (maxRetries, baseDelayMs, etc.). */
+    retry?: Partial<ResilientRetryConfig>;
+  };
 }
 
 /** Network configuration. */
@@ -473,7 +497,7 @@ export function verifyCompletionProof(proof: CompletionProof): {
   return { valid: true };
 }
 
-export class StellarSplitClient {
+export class StellarSplitClient extends EventEmitter {
   private _mainServer!: SorobanRpc.Server;
   private _standby: WarmStandby | null = null;
   private _queue = new PriorityQueue();
@@ -489,6 +513,10 @@ export class StellarSplitClient {
   private _rateLimiter: RateLimiter | null = null;
   private _rpcClient: IRPCClient | null = null;
   private _adapter: WalletAdapter | null = null;
+  private _hooks: import("./types.js").InvoiceLifecycleHooks = {};
+
+  private get server(): SorobanRpc.Server {
+    return this._rpcClient ?? this._standby?.server ?? this._mainServer;
   private _hooks: InvoiceLifecycleHooks = {};
   private _retryOptions: RetryOptions | null = null;
   private _horizonReader: HorizonFallbackReader | null = null;
@@ -512,9 +540,12 @@ export class StellarSplitClient {
   private _fallbackListeners: Array<(event: { from: 'websocket'; to: 'http' }) => void> = [];
   /** Admin keypair used to sign admin-only operations (freeze/unfreeze). */
   private _adminKeypair: Keypair | null = null;
+  /** Resilient RPC wrapper providing retry + circuit breaker for all RPC calls. */
+  private _resilientRpc: ResilientRpcClient | null = null;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private get server(): any {
+    if (this._resilientRpc) return this._resilientRpc;
     return (
       this._injectedRpcClient ??
       this._rpcClient ??
@@ -595,6 +626,7 @@ export class StellarSplitClient {
   }
 
   constructor(config: StellarSplitClientConfig) {
+    super();
     validateOrThrow(config);
     this.config = config;
     const primaryUrl = Array.isArray(config.rpcUrl)
@@ -614,6 +646,19 @@ export class StellarSplitClient {
     this._mainServer = new SorobanRpc.Server(primaryUrl, {
       allowHttp: primaryUrl.startsWith("http://"),
     });
+
+    // Circuit breaker + retry resilience layer (Issue #419)
+    if (config.circuitBreaker) {
+      const rpcTarget = this._injectedRpcClient ?? this._rpcClient ?? this._mainServer;
+      this._resilientRpc = new ResilientRpcClient(
+        rpcTarget,
+        config.circuitBreaker.retry,
+        config.circuitBreaker.breaker,
+      );
+      this._resilientRpc.on("circuit:open", () => this.emit("circuit:open"));
+      this._resilientRpc.on("circuit:close", () => this.emit("circuit:close"));
+      this._resilientRpc.on("circuit:half-open", () => this.emit("circuit:half-open"));
+    }
 
     if (
       !this._rpcClient &&
@@ -1598,6 +1643,30 @@ export class StellarSplitClient {
    */
   getDedupStats(): { deduped: number; total: number } {
     return this._dedup.getDedupStats();
+  }
+
+  /**
+   * Returns the current circuit breaker state, or null if no circuit breaker
+   * is configured.
+   */
+  getCircuitBreakerState(): import("./circuitBreaker.js").CircuitBreakerState | null {
+    return this._resilientRpc?.circuitBreaker?.state ?? null;
+  }
+
+  /**
+   * Returns the number of consecutive failures recorded by the circuit breaker,
+   * or null if no circuit breaker is configured.
+   */
+  getCircuitBreakerFailureCount(): number | null {
+    return this._resilientRpc?.circuitBreaker?.failureCount ?? null;
+  }
+
+  /**
+   * Manually reset the circuit breaker to the CLOSED state.
+   * No-op if no circuit breaker is configured.
+   */
+  resetCircuitBreaker(): void {
+    this._resilientRpc?.circuitBreaker?.reset();
   }
 
   private async _fetchInvoice(invoiceId: string, traceId?: string): Promise<Invoice> {

@@ -150,6 +150,14 @@ export {
   isRequestTimeoutError,
   AdminOperationError,
   isAdminOperationError,
+  CommitmentGenerationError,
+  isCommitmentGenerationError,
+  BlindingFactorStorageError,
+  isBlindingFactorStorageError,
+  BlindingFactorNotFoundError,
+  isBlindingFactorNotFoundError,
+  BlindingFactorDecryptionError,
+  isBlindingFactorDecryptionError,
   IPFSPinError,
   isIPFSPinError,
   IPFSFetchError,
@@ -162,7 +170,21 @@ export {
 export { getScheduledReleaseCountdown } from "./client.js";
 export { verifyCompletionProof } from "./client.js";
 export { MultiTenantClient } from "./multiTenant.js";
+export type { PoolOptions, PoolStats } from "./multiTenant.js";
 export { ProfilerSession } from "./profiler.js";
+export type {
+  ProfileReport,
+  ProfileEntry,
+  ProfileSession,
+  RpcCallTiming,
+  SpeedscopeProfile,
+  SpeedscopeEventedProfile,
+  SpeedscopeFrame,
+  SpeedscopeEvent,
+  ProfilerSessionOptions,
+} from "./profiler.js";
+export { enrichInvoice, registerInvoiceFetcher } from "./enricher.js";
+export type { EnrichedInvoice } from "./enricher.js";
 export type { ProfileReport } from "./profiler.js";
 export {
   enrichInvoice,
@@ -190,6 +212,20 @@ export {
   DEFAULT_IPFS_CONFIG,
 } from "./ipfs.js";
 
+// Confidential payments (Pedersen commitments)
+export {
+  generateCommitment,
+  verifyCommitment,
+  storeBlindingFactor,
+  loadBlindingFactor,
+  deleteBlindingFactor,
+  configureBlindingFactorStorage,
+  resetBlindingFactorStorageConfig,
+  buildRevealTransaction,
+  generateAndStoreCommitment,
+  buildRevealTransactionFromStorage,
+} from "./confidential.js";
+
 export { Deduplicator } from "./dedup.js";
 
 export { TxQueue } from "./queue.js";
@@ -204,6 +240,15 @@ export {
   CircuitBreakerMonitor,
   defaultCircuitBreakerMonitor,
 } from "./circuitBreakerMonitor.js";
+
+// Circuit breaker + retry resilience layer (Issue #419)
+export { CircuitBreaker } from "./circuitBreaker.js";
+export type {
+  CircuitBreakerConfig,
+  CircuitBreakerState,
+} from "./circuitBreaker.js";
+export { ResilientRpcClient } from "./resilientRpc.js";
+export type { RetryConfig } from "./resilientRpc.js";
 
 export { connectWallet, getPublicKey, signTransaction } from "./wallet.js";
 
@@ -303,6 +348,49 @@ export type { PayerReadinessResult, PayerReadinessReason } from "./preflightChec
 
 export { getSuggestion } from "./errorSuggestions.js";
 
+// Real-time invoice event subscription (Issue #417)
+export { createInvoiceSubscription } from "./subscription.js";
+export type {
+  SubscriptionLifecycleCallback,
+  InvoiceEventCallback,
+} from "./subscription.js";
+export {
+  isInvoicePaymentEvent,
+  isInvoiceReleasedEvent,
+  isInvoiceRefundedEvent,
+  isInvoiceCancelledEvent,
+  isInvoiceFrozenEvent,
+  isInvoiceUnfrozenEvent,
+  isInvoiceCreatedEvent,
+} from "./subscription.js";
+export type {
+  InvoiceEvent,
+  InvoiceCreatedEvent,
+  InvoicePaymentEvent,
+  InvoiceReleasedEvent,
+  InvoiceRefundedEvent,
+  InvoiceCancelledEvent,
+  InvoiceFrozenEvent,
+  InvoiceUnfrozenEvent,
+  DisputeOpenedEvent,
+  DisputeResolvedEvent,
+  SplitRulesUpdatedEvent,
+  AutoResolveRulesUpdatedEvent,
+  VelocityLimitUpdatedEvent,
+  PrerequisiteAddedEvent,
+  PrerequisiteRemovedEvent,
+  ForwardChainCreatedEvent,
+  ScheduledReleaseSetEvent,
+  PenaltyTiersUpdatedEvent,
+  AllowedCallersUpdatedEvent,
+  NftGateSetEvent,
+  NftGateRemovedEvent,
+  BaseInvoiceEvent,
+  Subscription,
+  SubscriptionOptions,
+  SubscriptionLifecycleEvent,
+} from "./types.js";
+
 export { analyzeCohorts } from "./cohortAnalyzer.js";
 export type { CohortBucket } from "./cohortAnalyzer.js";
 
@@ -347,6 +435,8 @@ export type {
 // ---------------------------------------------------------------------------
 // Lazy factories for heavy modules
 // ---------------------------------------------------------------------------
+
+
 
 export async function getExportModule(): Promise<typeof import("./export.js")> {
   return await import("./export.js");
@@ -525,6 +615,49 @@ export type {
 } from "./sse.js";
 export type { PollingInvoiceEventHandler } from "./stream.js";
 
+// Real-time invoice event subscription (Issue #417)
+export { createInvoiceSubscription } from "./subscription.js";
+export type {
+  SubscriptionLifecycleCallback,
+  InvoiceEventCallback,
+} from "./subscription.js";
+export {
+  isInvoicePaymentEvent,
+  isInvoiceReleasedEvent,
+  isInvoiceRefundedEvent,
+  isInvoiceCancelledEvent,
+  isInvoiceFrozenEvent,
+  isInvoiceUnfrozenEvent,
+  isInvoiceCreatedEvent,
+} from "./subscription.js";
+export type {
+  InvoiceEvent,
+  InvoiceCreatedEvent,
+  InvoicePaymentEvent,
+  InvoiceReleasedEvent,
+  InvoiceRefundedEvent,
+  InvoiceCancelledEvent,
+  InvoiceFrozenEvent,
+  InvoiceUnfrozenEvent,
+  DisputeOpenedEvent,
+  DisputeResolvedEvent,
+  SplitRulesUpdatedEvent,
+  AutoResolveRulesUpdatedEvent,
+  VelocityLimitUpdatedEvent,
+  PrerequisiteAddedEvent,
+  PrerequisiteRemovedEvent,
+  ForwardChainCreatedEvent,
+  ScheduledReleaseSetEvent,
+  PenaltyTiersUpdatedEvent,
+  AllowedCallersUpdatedEvent,
+  NftGateSetEvent,
+  NftGateRemovedEvent,
+  BaseInvoiceEvent,
+  Subscription,
+  SubscriptionOptions,
+  SubscriptionLifecycleEvent,
+} from "./types.js";
+
 // WebSocket transport (Issue #377)
 export { WebSocketTransport } from "./websocket.js";
 export type { TransportType, TransportStatus, TransportEventMap } from "./websocket.js";
@@ -600,6 +733,10 @@ export type {
   AutoResolveSimulation,
   InvoiceStats,
   PrerequisiteChainEntry,
+  PedersenCommitment,
+  BlindingFactorStorageConfig,
+  StoredBlindingFactor,
+  RevealPaymentOptions,
   LineItem,
   InvoiceMetadata,
   IPFSConfig,
