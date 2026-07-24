@@ -1092,6 +1092,14 @@ export function isAdminOperationError(err: unknown): err is AdminOperationError 
 }
 
 // ---------------------------------------------------------------------------
+// Confidential Payment Errors (Pedersen Commitments)
+// ---------------------------------------------------------------------------
+
+/** Thrown when Pedersen commitment generation fails. */
+export class CommitmentGenerationError extends StellarSplitError {
+  constructor(message: string) {
+    super(message, "COMMITMENT_GENERATION_ERROR", undefined, message);
+    this.name = "CommitmentGenerationError";
 // IPFS-related errors
 // ---------------------------------------------------------------------------
 
@@ -1107,6 +1115,18 @@ export class IPFSPinError extends StellarSplitError {
   }
 }
 
+export function isCommitmentGenerationError(err: unknown): err is CommitmentGenerationError {
+  return err instanceof CommitmentGenerationError;
+}
+
+/** Thrown when blinding factor storage operation fails. */
+export class BlindingFactorStorageError extends StellarSplitError {
+  readonly invoiceId?: string;
+
+  constructor(message: string, invoiceId?: string) {
+    super(message, "BLINDING_FACTOR_STORAGE_ERROR", { invoiceId }, message);
+    this.name = "BlindingFactorStorageError";
+    this.invoiceId = invoiceId;
 export function isIPFSPinError(err: unknown): err is IPFSPinError {
   return err instanceof IPFSPinError;
 }
@@ -1123,6 +1143,22 @@ export class IPFSFetchError extends StellarSplitError {
   }
 }
 
+export function isBlindingFactorStorageError(err: unknown): err is BlindingFactorStorageError {
+  return err instanceof BlindingFactorStorageError;
+}
+
+/** Thrown when blinding factor is not found for an invoice. */
+export class BlindingFactorNotFoundError extends StellarSplitError {
+  readonly invoiceId: string;
+
+  constructor(invoiceId: string) {
+    super(
+      `Blinding factor not found for invoice: ${invoiceId}`,
+      "BLINDING_FACTOR_NOT_FOUND",
+      { invoiceId }
+    );
+    this.name = "BlindingFactorNotFoundError";
+    this.invoiceId = invoiceId;
 export function isIPFSFetchError(err: unknown): err is IPFSFetchError {
   return err instanceof IPFSFetchError;
 }
@@ -1144,6 +1180,18 @@ export class CIDMismatchError extends StellarSplitError {
   }
 }
 
+export function isBlindingFactorNotFoundError(err: unknown): err is BlindingFactorNotFoundError {
+  return err instanceof BlindingFactorNotFoundError;
+}
+
+/** Thrown when blinding factor decryption fails. */
+export class BlindingFactorDecryptionError extends StellarSplitError {
+  readonly invoiceId?: string;
+
+  constructor(message: string, invoiceId?: string) {
+    super(message, "BLINDING_FACTOR_DECRYPTION_ERROR", { invoiceId }, message);
+    this.name = "BlindingFactorDecryptionError";
+    this.invoiceId = invoiceId;
 export function isCIDMismatchError(err: unknown): err is CIDMismatchError {
   return err instanceof CIDMismatchError;
 }
@@ -1157,6 +1205,8 @@ export class IPFSConfigError extends StellarSplitError {
   }
 }
 
+export function isBlindingFactorDecryptionError(err: unknown): err is BlindingFactorDecryptionError {
+  return err instanceof BlindingFactorDecryptionError;
 export function isIPFSConfigError(err: unknown): err is IPFSConfigError {
   return err instanceof IPFSConfigError;
 }
