@@ -158,14 +158,45 @@ export {
   isBlindingFactorNotFoundError,
   BlindingFactorDecryptionError,
   isBlindingFactorDecryptionError,
+  IPFSPinError,
+  isIPFSPinError,
+  IPFSFetchError,
+  isIPFSFetchError,
+  CIDMismatchError,
+  isCIDMismatchError,
+  IPFSConfigError,
+  isIPFSConfigError,
 } from "./errors.js";
 export { getScheduledReleaseCountdown } from "./client.js";
 export { verifyCompletionProof } from "./client.js";
 export { MultiTenantClient } from "./multiTenant.js";
 export { ProfilerSession } from "./profiler.js";
 export type { ProfileReport } from "./profiler.js";
-export { enrichInvoice, registerInvoiceFetcher } from "./enricher.js";
-export type { EnrichedInvoice } from "./enricher.js";
+export {
+  enrichInvoice,
+  enrichInvoices,
+  registerInvoiceFetcher,
+  hasIPFSMetadata,
+  getInvoiceMetadataCID,
+} from "./enricher.js";
+export type { EnrichedInvoice, EnrichOptions } from "./enricher.js";
+
+// IPFS functionality
+export {
+  pinInvoiceMetadata,
+  verifyCID,
+  verifyCIDOrThrow,
+  fetchFromIPFS,
+  fetchInvoiceMetadata,
+  parseIPFSCid,
+  configureIPFS,
+  getIPFSConfig,
+  resetIPFSConfig,
+  createLineItem,
+  createInvoiceMetadata,
+  deserializeMetadata,
+  DEFAULT_IPFS_CONFIG,
+} from "./ipfs.js";
 
 // Confidential payments (Pedersen commitments)
 export {
@@ -305,6 +336,36 @@ export {
   WebhookEventNotFoundError,
 } from "./webhookReplay.js";
 export type { WebhookRecord, WebhookReplayStore } from "./webhookReplay.js";
+
+// Webhook middleware for receiving and verifying incoming webhooks
+export {
+  createWebhookMiddleware,
+  generateWebhookSignature,
+  verifyWebhookSignature,
+  parseWebhookPayload,
+  isValidEventType,
+  isWebhookRequest,
+  InvalidSignatureError,
+  TimestampOutOfBoundsError,
+  ReplayAttackError,
+  MissingHeaderError,
+  InvalidPayloadError,
+  WebhookValidationError,
+} from "./webhookMiddleware.js";
+export type {
+  WebhookOptions,
+  InvoiceEventType,
+  WebhookPayload,
+  WebhookRequest,
+  RequestHandler,
+  InvoiceCreatedData,
+  InvoicePaidData,
+  InvoiceReleasedData,
+  InvoiceFailedData,
+  InvoiceRefundedData,
+  InvoiceCancelledData,
+  InvoiceExpiredData,
+} from "./webhookMiddleware.js";
 // ---------------------------------------------------------------------------
 // Lazy factories for heavy modules
 // ---------------------------------------------------------------------------
@@ -565,4 +626,58 @@ export type {
   BlindingFactorStorageConfig,
   StoredBlindingFactor,
   RevealPaymentOptions,
+  LineItem,
+  InvoiceMetadata,
+  IPFSConfig,
+  CIDVerificationResult,
+} from "./types.js";
+
+// ---------------------------------------------------------------------------
+// UI Components (React)
+// ---------------------------------------------------------------------------
+
+export type {
+  DisputePanelProps,
+  DisputeEvidenceItem,
+} from "./ui/DisputePanel.js";
+
+export type {
+  DisputeTimelineProps,
+  DisputeTimelineEvent,
+  DisputeEventType,
+} from "./ui/DisputeTimeline.js";
+
+export type {
+  InvoiceDetailPageProps,
+} from "./ui/InvoiceDetailPage.js";
+
+export type {
+  UseInvoiceStreamOptions,
+  UseInvoiceStreamResult,
+} from "./ui/hooks/useInvoiceStream.js";
+
+// Note: Actual React components are exported from ./ui/index for tree-shaking
+// Import them like: import { DisputePanel } from '@stellar-split/sdk/ui'
+
+
+// ---------------------------------------------------------------------------
+// Cross-chain bridge payment helpers
+// ---------------------------------------------------------------------------
+
+export {
+  estimateBridgeFee,
+  buildBridgePayment,
+  submitBridgePayment,
+  computePayloadHash,
+  DEFAULT_CHAIN_CONFIGS,
+} from "./bridge.js";
+
+export type { ChainBridgeConfig, BridgeConfig } from "./bridge.js";
+
+export type {
+  ChainId,
+  BridgeFeeEstimate,
+  BridgePaymentParams,
+  BridgePaymentRequest,
+  SignedBridgeProof,
 } from "./types.js";

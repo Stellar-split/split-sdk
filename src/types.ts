@@ -649,6 +649,12 @@ export interface DisputeStatus {
   arbiter: string;
   resolved: boolean;
   resolution: "approved" | "rejected" | null;
+  /** Reason for the dispute */
+  reason?: string;
+  /** Address that opened the dispute */
+  openedBy?: string;
+  /** Unix timestamp when dispute was opened */
+  openedAt?: number;
 }
 
 /** A single auction bid. */
@@ -860,4 +866,130 @@ export interface RevealPaymentOptions {
   blindingFactor: Buffer;
   /** Payer's Stellar address. */
   payer: string;
+// IPFS Invoice Metadata Types
+// ---------------------------------------------------------------------------
+
+/** A single line item in an invoice. */
+export interface LineItem {
+  /** Description of the item or service. */
+  description: string;
+  /** Quantity of items. */
+  quantity: number;
+  /** Unit price in stroops. */
+  unitPrice: bigint;
+  /** Optional total override (defaults to quantity * unitPrice). */
+  total?: bigint;
+}
+
+/** Structured metadata for an invoice stored on IPFS. */
+export interface InvoiceMetadata {
+  /** Human-readable title for the invoice. */
+  title: string;
+  /** Detailed description of the invoice. */
+  description: string;
+  /** Itemized line items. */
+  lineItems: LineItem[];
+  /** CIDs of attachment files (documents, images, etc.). */
+  attachmentCIDs: string[];
+}
+
+/** Configuration for IPFS backend. */
+export interface IPFSConfig {
+  /** Backend type: 'gateway' for HTTP gateway or 'kubo' for Kubo RPC API. */
+  backend: "gateway" | "kubo";
+  /** Base URL for the IPFS endpoint. */
+  url: string;
+  /** Optional timeout in milliseconds. Defaults to 30000. */
+  timeout?: number;
+  /** Optional authorization header for authenticated endpoints. */
+  authorization?: string;
+}
+
+/** Result of a CID verification operation. */
+export interface CIDVerificationResult {
+  /** Whether the content matches the CID. */
+  valid: boolean;
+  /** The expected CID. */
+  expectedCID: string;
+  /** The computed CID from the fetched content, if available. */
+  computedCID?: string;
+  /** Error message if verification failed. */
+  error?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Cross-Chain Bridge Payment Types
+// ---------------------------------------------------------------------------
+
+/**
+ * Supported source chain identifiers for cross-chain bridge payments.
+ * Ethereum mainnet and Solana mainnet are the minimum required chains.
+ */
+export type ChainId = "ethereum" | "solana";
+
+/**
+ * Fee estimate returned by the bridge for routing a payment from a foreign chain
+ * to a StellarSplit invoice on Stellar Soroban.
+ */
+export interface BridgeFeeEstimate {
+  /** Bridge relay fee in source-chain native units (e.g. wei for ETH, lamports for SOL). */
+  bridgeFee: bigint;
+  /** Net amount that will arrive on Stellar after fee deduction, in stroops. */
+  netAmount: bigint;
+  /** Estimated bridging time in seconds. */
+  estimatedTimeSeconds: number;
+}
+
+/**
+ * Parameters required to build an unsigned bridge payment relay proof struct.
+ */
+export interface BridgePaymentParams {
+  /** Source chain identifier. */
+  sourceChain: ChainId;
+  /** Stellar address of the payer (used as the Stellar recipient identity). */
+  payer: string;
+  /** StellarSplit invoice ID to pay toward. */
+  invoiceId: string;
+  /** Amount to send from the source chain (in source-chain atomic units). */
+  amount: bigint;
+  /** Token contract/mint address on the source chain. */
+  sourceToken: string;
+  /** Deadline timestamp (Unix seconds) for this bridge payment. */
+  deadline: number;
+}
+
+/**
+ * Unsigned relay proof struct built by buildBridgePayment.
+ * This must be signed by the payer's source-chain wallet before submission.
+ */
+export interface BridgePaymentRequest {
+  /** Source chain identifier. */
+  sourceChain: ChainId;
+  /** Stellar invoice ID. */
+  invoiceId: string;
+  /** Stellar payer address. */
+  payer: string;
+  /** Amount in source-chain atomic units. */
+  amount: bigint;
+  /** Source-chain token identifier. */
+  sourceToken: string;
+  /** Deadline for the bridge payment (Unix seconds). */
+  deadline: number;
+  /** Unique nonce preventing replay attacks. */
+  nonce: string;
+  /** SHA-256 hex digest of the canonical relay payload. */
+  payloadHash: string;
+}
+
+/**
+ * A bridge payment request that has been signed by the source-chain wallet.
+ * Passed to submitBridgePayment to relay to the Stellar contract.
+ */
+export interface SignedBridgeProof {
+  /** The original unsigned payment request. */
+  request: BridgePaymentRequest;
+  /** Source-chain signature over the payloadHash (hex-encoded). */
+  signature: string;
+  /** Source-chain address of the signer. */
+  signerAddress: string;
 }

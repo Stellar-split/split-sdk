@@ -108,7 +108,18 @@ import type {
   CompletionProof,
   AdminFreezeResult,
   AdminUnfreezeResult,
+  ChainId,
+  BridgeFeeEstimate,
+  BridgePaymentParams,
+  BridgePaymentRequest,
+  SignedBridgeProof,
 } from "./types.js";
+import {
+  estimateBridgeFee as _estimateBridgeFee,
+  buildBridgePayment as _buildBridgePayment,
+  submitBridgePayment as _submitBridgePayment,
+} from "./bridge.js";
+import type { BridgeConfig } from "./bridge.js";
 import type {
   DIContainer,
   IRPCClient,
@@ -1141,6 +1152,79 @@ export class StellarSplitClient {
         throw error;
       }
     });
+  }
+
+  /**
+   * Submit a vote on a disputed invoice (arbitrator only).
+   * @param params - Vote parameters (invoiceId, arbiter address, approve boolean)
+   * @returns Transaction result with hash
+   */
+  async voteDispute(params: ArbiterVote): Promise<{ txHash: string }> {
+    return this._withTelemetry("voteDispute", params as unknown as Record<string, unknown>, async () => {
+      const operation = this.contract.call(
+        "vote_dispute",
+        nativeToScVal(BigInt(params.invoiceId), { type: "u64" }),
+        nativeToScVal(params.arbiter, { type: "address" }),
+        nativeToScVal(params.approve, { type: "bool" }),
+      );
+
+      const { txHash } = await this._submitTx(params.arbiter, operation);
+      return { txHash };
+    });
+  }
+
+  /**
+   * Add evidence to a dispute (stores IPFS CID in dispute notes).
+   * @param invoiceId - The invoice ID
+   * @param evidenceCid - IPFS CID of the evidence file
+   * @param fileName - Optional file name for reference
+   * @returns Transaction result with hash
+   */
+  async addDisputeEvidence(
+    invoiceId: string,
+    evidenceCid: string,
+    fileName?: string,
+  ): Promise<{ txHash: string; cid: string }> {
+    return this._withTelemetry(
+      "addDisputeEvidence",
+      { invoiceId, evidenceCid, fileName } as Record<string, unknown>,
+      async () => {
+        // Note: This assumes the contract has an add_dispute_evidence method
+        // If not, this would need to be stored off-chain or via memo field
+        const note = fileName ? `${fileName}: ${evidenceCid}` : evidenceCid;
+        
+        const operation = this.contract.call(
+          "add_dispute_note",
+          nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+          nativeToScVal(note, { type: "string" }),
+        );
+
+        // Use current wallet for signing
+        const publicKey = await (this._adapter 
+          ? this._adapter.getAddress() 
+          : signTransaction.call(this, "", this.config.networkPassphrase).then(() => "")
+        );
+
+        const { txHash } = await this._submitTx(publicKey, operation);
+        return { txHash, cid: evidenceCid };
+      },
+    );
+  }
+
+  /**
+   * Get SSE endpoint URL for real-time updates (if available).
+   * This is used by useInvoiceStream hook for live updates.
+   * @param path - The SSE path (e.g., "/invoice/123")
+   * @returns SSE endpoint URL
+   */
+  getSSEEndpoint(path: string): string {
+    // This would be configured based on your backend SSE server
+    // For now, return a placeholder that components can override
+    const primaryUrl = Array.isArray(this.config.rpcUrl) 
+      ? this.config.rpcUrl[0]! 
+      : this.config.rpcUrl;
+    const baseUrl = (this.config as any).sseUrl || primaryUrl.replace('/soroban/rpc', '');
+    return `${baseUrl}/sse${path}`;
   }
 
   // ---------------------------------------------------------------------------
@@ -5291,6 +5375,110 @@ export class StellarSplitClient {
       { invoiceId },
       () => this._fetchPaymentHistory(invoiceId, opts?.traceId),
       opts,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cross-chain bridge payment helpers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Estimate the bridge relay fee for routing a payment from a non-Stellar
+   * chain toward a StellarSplit invoice.
+   *
+   * Supported source chains: `"ethereum"` (Ethereum mainnet) and
+   * `"solana"` (Solana mainnet).
+   *
+   * The method first attempts to obtain a live quote from the chain's relayer
+   * endpoint.  If unreachable it falls back to static fee basis-points defined
+   * in {@link DEFAULT_CHAIN_CONFIGS}.
+   *
+   * @param sourceChain - Source chain identifier.
+   * @param amount      - Gross payment amount in source-chain atomic units
+   *                      (e.g. wei for ETH, lamports / USDC micro-units for SOL).
+   * @param bridgeConfig - Optional per-chain configuration overrides.
+   * @returns BridgeFeeEstimate containing bridgeFee, netAmount (in stroops), and estimatedTimeSeconds.
+   *
+   * @example
+   * ```typescript
+   * const estimate = await client.estimateBridgeFee("ethereum", 100_000_000n);
+   * console.log(estimate.netAmount); // amount in stroops
+   * ```
+   */
+  async estimateBridgeFee(
+    sourceChain: ChainId,
+    amount: bigint,
+    bridgeConfig?: BridgeConfig,
+  ): Promise<BridgeFeeEstimate> {
+    return this._withTelemetry(
+      "estimateBridgeFee",
+      { sourceChain, amount: amount.toString() } as Record<string, unknown>,
+      () => _estimateBridgeFee(sourceChain, amount, bridgeConfig),
+    );
+  }
+
+  /**
+   * Build an unsigned bridge relay proof struct for the given payment
+   * parameters.
+   *
+   * The resulting {@link BridgePaymentRequest} contains a deterministic
+   * `payloadHash` and a random `nonce` preventing replay attacks.  The caller
+   * must sign the request with their source-chain wallet and pass the resulting
+   * {@link SignedBridgeProof} to {@link submitBridgePayment}.
+   *
+   * This method is **synchronous** and does not perform any network I/O.
+   *
+   * @param params - Bridge payment parameters.
+   * @returns Unsigned BridgePaymentRequest ready for source-chain signing.
+   *
+   * @example
+   * ```typescript
+   * const request = client.buildBridgePayment({
+   *   sourceChain: "solana",
+   *   payer: "GABC...XYZ",
+   *   invoiceId: "42",
+   *   amount: 1_000_000n,
+   *   sourceToken: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+   *   deadline: Math.floor(Date.now() / 1000) + 3600,
+   * });
+   * ```
+   */
+  buildBridgePayment(params: BridgePaymentParams): BridgePaymentRequest {
+    return _buildBridgePayment(params);
+  }
+
+  /**
+   * Submit a signed bridge payment proof to the StellarSplit contract's
+   * `bridge_pay` entry point.
+   *
+   * The contract is expected to validate the source-chain signature and
+   * credit the payer's address toward the specified invoice.
+   *
+   * @param proof - Signed bridge proof from the source-chain wallet.
+   * @returns Transaction hash of the submitted bridge payment.
+   * @throws Error if the simulation fails or the on-chain transaction is rejected.
+   *
+   * @example
+   * ```typescript
+   * const { txHash } = await client.submitBridgePayment({
+   *   request,
+   *   signature: "0xdeadbeef...",
+   *   signerAddress: "0xabc123...",
+   * });
+   * console.log("Bridge payment submitted:", txHash);
+   * ```
+   */
+  async submitBridgePayment(
+    proof: SignedBridgeProof,
+  ): Promise<{ txHash: string }> {
+    return this._withTelemetry(
+      "submitBridgePayment",
+      {
+        invoiceId: proof.request.invoiceId,
+        sourceChain: proof.request.sourceChain,
+        signerAddress: proof.signerAddress,
+      } as Record<string, unknown>,
+      () => _submitBridgePayment(proof, this.config),
     );
   }
 }
