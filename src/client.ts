@@ -56,6 +56,8 @@ import type { CompressionConfig } from "./compression.js";
 import { calculateFee } from "./fee.js";
 import { resolveToken } from "./token.js";
 import type { PaymentReceipt } from "./receipt.js";
+import { createInvoiceSubscription } from "./subscription.js";
+import type { Subscription, InvoiceEvent, SubscriptionOptions } from "./types.js";
 import type {
   ArchivedInvoice,
 
@@ -266,6 +268,8 @@ export interface StellarSplitClientConfig {
   complianceRules?: import("./compliance.js").ComplianceRule[];
   /** Optional dependency injection container for RPC, cache, and wallet implementations. */
   container?: DIContainer;
+  /** Optional lifecycle hooks for invoice events. */
+  hooks?: import("./types.js").InvoiceLifecycleHooks;
   /** Optional request/response compression middleware. Disabled by default. */
   compression?: CompressionConfig;
   /** Optional invoice lifecycle hooks. */
@@ -509,6 +513,10 @@ export class StellarSplitClient extends EventEmitter {
   private _rateLimiter: RateLimiter | null = null;
   private _rpcClient: IRPCClient | null = null;
   private _adapter: WalletAdapter | null = null;
+  private _hooks: import("./types.js").InvoiceLifecycleHooks = {};
+
+  private get server(): SorobanRpc.Server {
+    return this._rpcClient ?? this._standby?.server ?? this._mainServer;
   private _hooks: InvoiceLifecycleHooks = {};
   private _retryOptions: RetryOptions | null = null;
   private _horizonReader: HorizonFallbackReader | null = null;
