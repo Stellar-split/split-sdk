@@ -55,6 +55,8 @@ import type { CompressionConfig } from "./compression.js";
 import { calculateFee } from "./fee.js";
 import { resolveToken } from "./token.js";
 import type { PaymentReceipt } from "./receipt.js";
+import { createInvoiceSubscription } from "./subscription.js";
+import type { Subscription, InvoiceEvent, SubscriptionOptions } from "./types.js";
 import type {
   ArchivedInvoice,
 

@@ -630,6 +630,264 @@ export interface WeightedEndpoint {
   weight: number;
 }
 
+// ---------------------------------------------------------------------------
+// Invoice Event Subscription Types (Issue #417)
+// ---------------------------------------------------------------------------
+
+/** Invoice event types emitted by the StellarSplit contract. */
+export type InvoiceEventType =
+  | "created"
+  | "payment"
+  | "released"
+  | "refunded"
+  | "cancelled"
+  | "frozen"
+  | "unfrozen"
+  | "dispute_opened"
+  | "dispute_resolved"
+  | "split_rules_updated"
+  | "auto_resolve_rules_updated"
+  | "velocity_limit_updated"
+  | "prerequisite_added"
+  | "prerequisite_removed"
+  | "forward_chain_created"
+  | "scheduled_release_set"
+  | "penalty_tiers_updated"
+  | "allowed_callers_updated"
+  | "nft_gate_set"
+  | "nft_gate_removed";
+
+/** Base invoice event structure. */
+export interface BaseInvoiceEvent {
+  /** Invoice ID this event belongs to. */
+  invoiceId: string;
+  /** Ledger sequence number where event was emitted. */
+  ledger: number;
+  /** Unix timestamp when event was emitted. */
+  timestamp: number;
+  /** Unique event identifier for deduplication (ledger + topic hash). */
+  eventId: string;
+}
+
+/** Invoice created event. */
+export interface InvoiceCreatedEvent extends BaseInvoiceEvent {
+  type: "created";
+  creator: string;
+  recipients: Recipient[];
+  token: string;
+  deadline: number;
+}
+
+/** Payment received event. */
+export interface InvoicePaymentEvent extends BaseInvoiceEvent {
+  type: "payment";
+  payer: string;
+  amount: bigint;
+  donateOnFailure?: boolean;
+  payment?: Payment & { ledger: number; timestamp: number };
+}
+
+/** Invoice released event. */
+export interface InvoiceReleasedEvent extends BaseInvoiceEvent {
+  type: "released";
+  releasedBy: string;
+  amount: bigint;
+  totalAmount?: bigint;
+}
+
+/** Invoice refunded event. */
+export interface InvoiceRefundedEvent extends BaseInvoiceEvent {
+  type: "refunded";
+  refundedBy?: string;
+  refundedTo: string;
+  amount: bigint;
+  totalAmount?: bigint;
+}
+
+/** Invoice cancelled event. */
+export interface InvoiceCancelledEvent extends BaseInvoiceEvent {
+  type: "cancelled";
+  cancelledBy: string;
+}
+
+/** Invoice frozen event. */
+export interface InvoiceFrozenEvent extends BaseInvoiceEvent {
+  type: "frozen";
+  frozenBy: string;
+  reason: string;
+}
+
+/** Invoice unfrozen event. */
+export interface InvoiceUnfrozenEvent extends BaseInvoiceEvent {
+  type: "unfrozen";
+  unfrozenBy: string;
+}
+
+/** Dispute opened event. */
+export interface DisputeOpenedEvent extends BaseInvoiceEvent {
+  type: "dispute_opened";
+  disputeId: string;
+  openedBy: string;
+  reason: string;
+}
+
+/** Dispute resolved event. */
+export interface DisputeResolvedEvent extends BaseInvoiceEvent {
+  type: "dispute_resolved";
+  disputeId: string;
+  resolvedBy: string;
+  resolution: string;
+}
+
+/** Split rules updated event. */
+export interface SplitRulesUpdatedEvent extends BaseInvoiceEvent {
+  type: "split_rules_updated";
+  updatedBy: string;
+}
+
+/** Auto-resolve rules updated event. */
+export interface AutoResolveRulesUpdatedEvent extends BaseInvoiceEvent {
+  type: "auto_resolve_rules_updated";
+  updatedBy: string;
+}
+
+/** Velocity limit updated event. */
+export interface VelocityLimitUpdatedEvent extends BaseInvoiceEvent {
+  type: "velocity_limit_updated";
+  updatedBy: string;
+  limitPerWindow: bigint;
+  windowDuration: number;
+}
+
+/** Prerequisite added event. */
+export interface PrerequisiteAddedEvent extends BaseInvoiceEvent {
+  type: "prerequisite_added";
+  prerequisiteId: string;
+}
+
+/** Prerequisite removed event. */
+export interface PrerequisiteRemovedEvent extends BaseInvoiceEvent {
+  type: "prerequisite_removed";
+  prerequisiteId: string;
+}
+
+/** Forward chain created event. */
+export interface ForwardChainCreatedEvent extends BaseInvoiceEvent {
+  type: "forward_chain_created";
+  forwardInvoiceId: string;
+}
+
+/** Scheduled release set event. */
+export interface ScheduledReleaseSetEvent extends BaseInvoiceEvent {
+  type: "scheduled_release_set";
+  scheduledAt: number;
+}
+
+/** Penalty tiers updated event. */
+export interface PenaltyTiersUpdatedEvent extends BaseInvoiceEvent {
+  type: "penalty_tiers_updated";
+  updatedBy: string;
+}
+
+/** Allowed callers updated event. */
+export interface AllowedCallersUpdatedEvent extends BaseInvoiceEvent {
+  type: "allowed_callers_updated";
+  updatedBy: string;
+}
+
+/** NFT gate set event. */
+export interface NftGateSetEvent extends BaseInvoiceEvent {
+  type: "nft_gate_set";
+  contractAddress: string;
+}
+
+/** NFT gate removed event. */
+export interface NftGateRemovedEvent extends BaseInvoiceEvent {
+  type: "nft_gate_removed";
+}
+
+/** Union type of all possible invoice events. */
+export type InvoiceEvent =
+  | InvoiceCreatedEvent
+  | InvoicePaymentEvent
+  | InvoiceReleasedEvent
+  | InvoiceRefundedEvent
+  | InvoiceCancelledEvent
+  | InvoiceFrozenEvent
+  | InvoiceUnfrozenEvent
+  | DisputeOpenedEvent
+  | DisputeResolvedEvent
+  | SplitRulesUpdatedEvent
+  | AutoResolveRulesUpdatedEvent
+  | VelocityLimitUpdatedEvent
+  | PrerequisiteAddedEvent
+  | PrerequisiteRemovedEvent
+  | ForwardChainCreatedEvent
+  | ScheduledReleaseSetEvent
+  | PenaltyTiersUpdatedEvent
+  | AllowedCallersUpdatedEvent
+  | NftGateSetEvent
+  | NftGateRemovedEvent;
+
+/** Subscription configuration options. */
+export interface SubscriptionOptions {
+  /** Polling interval in milliseconds. Default: 3000. */
+  pollIntervalMs?: number;
+  /** Maximum number of reconnection retries. Default: 5. */
+  maxRetries?: number;
+  /** Initial backoff in milliseconds. Default: 1000. */
+  initialBackoffMs?: number;
+  /** Maximum backoff in milliseconds. Default: 30000. */
+  maxBackoffMs?: number;
+  /** Backoff multiplier for exponential backoff. Default: 2. */
+  backoffMultiplier?: number;
+  /** Optional callback for subscription lifecycle events. */
+  onLifecycleEvent?: (event: SubscriptionLifecycleEvent) => void;
+}
+
+/** Subscription lifecycle event types. */
+export interface SubscriptionErrorEvent {
+  type: "error";
+  invoiceId: string;
+  error: Error;
+  retryCount: number;
+  maxRetries: number;
+}
+
+export interface SubscriptionCloseEvent {
+  type: "close";
+  invoiceId: string;
+  reason: "unsubscribed" | "max_retries" | "error";
+}
+
+export interface SubscriptionReconnectEvent {
+  type: "reconnect";
+  invoiceId: string;
+  retryCount: number;
+  nextRetryMs: number;
+}
+
+export type SubscriptionLifecycleEvent =
+  | SubscriptionErrorEvent
+  | SubscriptionCloseEvent
+  | SubscriptionReconnectEvent;
+
+/** Subscription interface returned by subscribeInvoice. */
+export interface Subscription {
+  /** Cancel the subscription and stop polling. */
+  unsubscribe(): void;
+  /** Pause polling without unsubscribing. */
+  pause(): void;
+  /** Resume polling after pause. */
+  resume(): void;
+  /** Get the invoice ID this subscription is for. */
+  getInvoiceId(): string;
+  /** Check if subscription is active (not stopped). */
+  isActive(): boolean;
+  /** Check if subscription is paused. */
+  isPaused(): boolean;
+}
+
 /** Result of rolling over an expired invoice into a new one. */
 export interface RolloverResult {
   /** The ID of the newly created invoice. */
