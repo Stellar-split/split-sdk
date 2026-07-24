@@ -442,6 +442,13 @@ export interface LedgerFootprint {
   writeLedgerEntries: bigint;
 }
 
+/** Lifecycle hooks for invoice events. */
+export interface InvoiceLifecycleHooks {
+  onCreated?: (invoice: Invoice) => void;
+  onPaid?: (invoice: Invoice, payment: Payment) => void;
+  onReleased?: (invoice: Invoice) => void;
+  onRefunded?: (invoice: Invoice) => void;
+  onCancelled?: (invoice: Invoice) => void;
 /** Result of previewing a token swap via DEX contract. */
 export interface PreviewTokenSwapResult {
   /** Estimated output amount from the swap in stroops. */
@@ -1113,6 +1120,45 @@ export interface SetCrossChainRefParams {
 }
 
 // ---------------------------------------------------------------------------
+// Confidential Payment Types (Pedersen Commitments)
+// ---------------------------------------------------------------------------
+
+/** Result of generating a Pedersen commitment for a payment amount. */
+export interface PedersenCommitment {
+  /** The commitment point C = aH + vG, serialized as 33-byte compressed point. */
+  commitment: Buffer;
+  /** The random blinding factor 'a' used in the commitment (32 bytes). */
+  blindingFactor: Buffer;
+}
+
+/** Configuration for blinding factor storage. */
+export interface BlindingFactorStorageConfig {
+  /** Storage key prefix. Defaults to "stellarsplit:bf:". */
+  keyPrefix?: string;
+}
+
+/** Stored blinding factor entry with metadata. */
+export interface StoredBlindingFactor {
+  /** The encrypted blinding factor. */
+  encryptedData: Uint8Array;
+  /** AES-GCM initialization vector (12 bytes). */
+  iv: Uint8Array;
+  /** Invoice ID this blinding factor belongs to. */
+  invoiceId: string;
+  /** Unix timestamp when stored. */
+  storedAt: number;
+}
+
+/** Options for building a reveal payment transaction. */
+export interface RevealPaymentOptions {
+  /** Invoice ID to reveal payment for. */
+  invoiceId: bigint;
+  /** The actual payment value that was committed. */
+  value: bigint;
+  /** The blinding factor used in the original commitment. */
+  blindingFactor: Buffer;
+  /** Payer's Stellar address. */
+  payer: string;
 // IPFS Invoice Metadata Types
 // ---------------------------------------------------------------------------
 
