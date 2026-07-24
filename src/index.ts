@@ -339,6 +339,49 @@ export type { PayerReadinessResult, PayerReadinessReason } from "./preflightChec
 
 export { getSuggestion } from "./errorSuggestions.js";
 
+// Real-time invoice event subscription (Issue #417)
+export { createInvoiceSubscription } from "./subscription.js";
+export type {
+  SubscriptionLifecycleCallback,
+  InvoiceEventCallback,
+} from "./subscription.js";
+export {
+  isInvoicePaymentEvent,
+  isInvoiceReleasedEvent,
+  isInvoiceRefundedEvent,
+  isInvoiceCancelledEvent,
+  isInvoiceFrozenEvent,
+  isInvoiceUnfrozenEvent,
+  isInvoiceCreatedEvent,
+} from "./subscription.js";
+export type {
+  InvoiceEvent,
+  InvoiceCreatedEvent,
+  InvoicePaymentEvent,
+  InvoiceReleasedEvent,
+  InvoiceRefundedEvent,
+  InvoiceCancelledEvent,
+  InvoiceFrozenEvent,
+  InvoiceUnfrozenEvent,
+  DisputeOpenedEvent,
+  DisputeResolvedEvent,
+  SplitRulesUpdatedEvent,
+  AutoResolveRulesUpdatedEvent,
+  VelocityLimitUpdatedEvent,
+  PrerequisiteAddedEvent,
+  PrerequisiteRemovedEvent,
+  ForwardChainCreatedEvent,
+  ScheduledReleaseSetEvent,
+  PenaltyTiersUpdatedEvent,
+  AllowedCallersUpdatedEvent,
+  NftGateSetEvent,
+  NftGateRemovedEvent,
+  BaseInvoiceEvent,
+  Subscription,
+  SubscriptionOptions,
+  SubscriptionLifecycleEvent,
+} from "./types.js";
+
 export { analyzeCohorts } from "./cohortAnalyzer.js";
 export type { CohortBucket } from "./cohortAnalyzer.js";
 
