@@ -150,6 +150,14 @@ export {
   isRequestTimeoutError,
   AdminOperationError,
   isAdminOperationError,
+  CommitmentGenerationError,
+  isCommitmentGenerationError,
+  BlindingFactorStorageError,
+  isBlindingFactorStorageError,
+  BlindingFactorNotFoundError,
+  isBlindingFactorNotFoundError,
+  BlindingFactorDecryptionError,
+  isBlindingFactorDecryptionError,
   IPFSPinError,
   isIPFSPinError,
   IPFSFetchError,
@@ -189,6 +197,20 @@ export {
   deserializeMetadata,
   DEFAULT_IPFS_CONFIG,
 } from "./ipfs.js";
+
+// Confidential payments (Pedersen commitments)
+export {
+  generateCommitment,
+  verifyCommitment,
+  storeBlindingFactor,
+  loadBlindingFactor,
+  deleteBlindingFactor,
+  configureBlindingFactorStorage,
+  resetBlindingFactorStorageConfig,
+  buildRevealTransaction,
+  generateAndStoreCommitment,
+  buildRevealTransactionFromStorage,
+} from "./confidential.js";
 
 export { Deduplicator } from "./dedup.js";
 
@@ -600,6 +622,10 @@ export type {
   AutoResolveSimulation,
   InvoiceStats,
   PrerequisiteChainEntry,
+  PedersenCommitment,
+  BlindingFactorStorageConfig,
+  StoredBlindingFactor,
+  RevealPaymentOptions,
   LineItem,
   InvoiceMetadata,
   IPFSConfig,
