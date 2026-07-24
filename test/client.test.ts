@@ -701,7 +701,7 @@ describe("validatePayment", () => {
       status: "Released" as const,
       payments: [],
     } as any);
-    vi.spyOn(client as any, "_getTokenBalance").mockResolvedValue(50n);
+    vi.spyOn(client as any, "_getTokenBalance").mockResolvedValue(10n);
 
     const validation = await client.validatePayment("123", 100n);
 

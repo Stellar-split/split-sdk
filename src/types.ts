@@ -414,6 +414,13 @@ export interface SimulatePayResult {
   fee: string;
 }
 
+/** Lifecycle hooks for invoice events. */
+export interface InvoiceLifecycleHooks {
+  onCreated?: (invoice: Invoice) => void;
+  onPaid?: (invoice: Invoice, payment: Payment) => void;
+  onReleased?: (invoice: Invoice) => void;
+  onRefunded?: (invoice: Invoice) => void;
+  onCancelled?: (invoice: Invoice) => void;
 /** Result of previewing a token swap via DEX contract. */
 export interface PreviewTokenSwapResult {
   /** Estimated output amount from the swap in stroops. */

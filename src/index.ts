@@ -171,6 +171,19 @@ export { getScheduledReleaseCountdown } from "./client.js";
 export { verifyCompletionProof } from "./client.js";
 export { MultiTenantClient } from "./multiTenant.js";
 export { ProfilerSession } from "./profiler.js";
+export type {
+  ProfileReport,
+  ProfileEntry,
+  ProfileSession,
+  RpcCallTiming,
+  SpeedscopeProfile,
+  SpeedscopeEventedProfile,
+  SpeedscopeFrame,
+  SpeedscopeEvent,
+  ProfilerSessionOptions,
+} from "./profiler.js";
+export { enrichInvoice, registerInvoiceFetcher } from "./enricher.js";
+export type { EnrichedInvoice } from "./enricher.js";
 export type { ProfileReport } from "./profiler.js";
 export {
   enrichInvoice,
