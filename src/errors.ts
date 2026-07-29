@@ -708,6 +708,22 @@ export class Sep41AdapterError extends StellarSplitError {
   }
 }
 
+/** Thrown when a line item's asset has no oracle price available for normalisation. */
+export class UnsupportedLineItemAssetError extends StellarSplitError {
+  readonly asset: string;
+
+  constructor(asset: string) {
+    super(
+      `No oracle price available for line item asset: ${asset}`,
+      "UNSUPPORTED_LINE_ITEM_ASSET",
+      { asset }
+    );
+    this.name = "UnsupportedLineItemAssetError";
+    this.asset = asset;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Thrown when tranche status check fails. */
 export class TrancheProgressError extends StellarSplitError {
   constructor(message: string) {
@@ -1085,6 +1101,10 @@ export function isUnknownNetworkError(err: unknown): err is UnknownNetworkError 
 
 export function isInsufficientSignaturesError(err: unknown): err is InsufficientSignaturesError {
   return err instanceof InsufficientSignaturesError;
+}
+
+export function isUnsupportedLineItemAssetError(err: unknown): err is UnsupportedLineItemAssetError {
+  return err instanceof UnsupportedLineItemAssetError;
 }
 
 export function isCloneChainTooDeepError(err: unknown): err is CloneChainTooDeepError {

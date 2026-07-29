@@ -1410,6 +1410,48 @@ export interface InvoiceMetadata {
   attachmentCIDs: string[];
 }
 
+// ---------------------------------------------------------------------------
+// Multi-Asset Line Item Normalizer Types
+// ---------------------------------------------------------------------------
+
+/** A line item denominated in its own asset, prior to settlement normalisation. */
+export interface InvoiceLineItem {
+  /** Description of the item or service. */
+  description: string;
+  /** Quantity of items. */
+  quantity: number;
+  /** Unit price in stroops, denominated in `asset`. */
+  unitPrice: bigint;
+  /** Optional total override (defaults to quantity * unitPrice), denominated in `asset`. */
+  total?: bigint;
+  /** Asset identifier this line item is priced in: "native" or "CODE:ISSUER" or a contract address. */
+  asset: string;
+}
+
+/** A line item after conversion to the invoice's settlement asset. */
+export interface NormalizedLineItem {
+  /** Description of the item or service. */
+  description: string;
+  /** Original amount in stroops, denominated in `originalAsset`. */
+  originalAmount: bigint;
+  /** Asset identifier the line item was originally denominated in. */
+  originalAsset: string;
+  /** Amount in stroops after conversion to the settlement asset. */
+  convertedAmount: bigint;
+  /** Fixed-point rate (1e18 = 1.0) used for the conversion; 1e18 when no conversion was needed. */
+  conversionRate: bigint;
+}
+
+/** Aggregate result of normalising an invoice's line items to a single settlement asset. */
+export interface NormalizedInvoiceTotal {
+  /** Asset identifier all amounts were normalised to. */
+  settlementAsset: string;
+  /** Sum of all `convertedAmount` values, in stroops. */
+  total: bigint;
+  /** Per-item normalised amounts, in the same order as the input. */
+  items: NormalizedLineItem[];
+}
+
 /** Configuration for IPFS backend. */
 export interface IPFSConfig {
   /** Backend type: 'gateway' for HTTP gateway or 'kubo' for Kubo RPC API. */

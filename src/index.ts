@@ -580,6 +580,17 @@ export type {
 export { aggregateEffects } from "./effectAggregator.js";
 export type { AccountEffectSummary, AssetDelta } from "./types.js";
 
+// Multi-asset invoice line item normalizer
+export { normalizeLineItems } from "./lineItemNormalizer.js";
+export { ContractPriceOracle } from "./priceOracle.js";
+export type { PriceOracle } from "./priceOracle.js";
+export type {
+  InvoiceLineItem,
+  NormalizedLineItem,
+  NormalizedInvoiceTotal,
+} from "./types.js";
+export { UnsupportedLineItemAssetError, isUnsupportedLineItemAssetError } from "./errors.js";
+
 // Merkle proof functionality
 export { generateMerkleProof, verifyMerkleProof } from "./merkle.js";
 export type { MerkleProof } from "./merkle.js";
