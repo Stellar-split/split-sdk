@@ -1662,3 +1662,27 @@ export interface AccountDataEntry {
 
 /** All data entries currently stored on an account, keyed by entry name. */
 export type AccountDataMap = Record<string, string>;
+
+// ---------------------------------------------------------------------------
+// Soroban Feature Detection Types (Issue #529)
+// ---------------------------------------------------------------------------
+
+/**
+ * Typed flags for protocol-version-gated Soroban features, plus the raw
+ * resource limits pulled from the network's `ConfigSettingEntry` ledger
+ * entries.
+ */
+export interface SorobanFeatureFlags {
+  /** Current Stellar protocol version integer. */
+  protocolVersion: number;
+  /** Whether the network supports the `ExtendFootprintTtl` operation (protocol >= 20). */
+  supportsExtendFootprint: boolean;
+  /** Whether the network supports archived-entry restoration (protocol >= 20). */
+  supportsRestoreFootprint: boolean;
+  /** Maximum Soroban instructions allowed per transaction. */
+  maxInstructionsPerTx: number;
+  /** Maximum Soroban instructions allowed per ledger. */
+  maxInstructionsPerLedger: number;
+  /** Unix timestamp (ms) when these flags were detected. */
+  detectedAt: number;
+}

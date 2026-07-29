@@ -1127,3 +1127,14 @@ export {
   DataEntryValidationError,
   isDataEntryValidationError,
 } from "./errors.js";
+
+// ---------------------------------------------------------------------------
+// #529 — SorobanFeatureDetector: protocol upgrade / feature flag detection
+// ---------------------------------------------------------------------------
+
+export { SorobanFeatureDetector } from "./sorobanFeatureDetector.js";
+export type {
+  SorobanFeatureDetectorConfig,
+  SorobanFeatureDetectorEventMap,
+} from "./sorobanFeatureDetector.js";
+export type { SorobanFeatureFlags } from "./types.js";

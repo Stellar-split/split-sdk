@@ -55,6 +55,8 @@ import { PluginRegistry } from "./plugin.js";
 import type { SdkPlugin } from "./plugin.js";
 import { checkRPCHealth } from "./health.js";
 import { Deduplicator } from "./dedup.js";
+import { SorobanFeatureDetector } from "./sorobanFeatureDetector.js";
+import type { SorobanFeatureFlags } from "./types.js";
 import { verifyBatchPayments } from "./batchVerifier.js";
 import { type HealthCheckResult, HealthCheckTimeoutError } from "./types.js";
 import type {
@@ -652,6 +654,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
   private _advancedCircuitBreaker: AdvancedCircuitBreaker | null = null;
   /** Optimistic UI cache for Invoice reads during a pending pay() call. */
   private _optimisticCache: OptimisticCache<Invoice> | null = null;
+  private _sorobanFeatureDetector: SorobanFeatureDetector;
   private _shutdownInProgress = false;
   private _pluginsDestroyed = false;
   private _runtimeShutdownPromise: Promise<void> | null = null;
@@ -805,6 +808,13 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
     }
 
     this._stateMachine = new InvoiceStateMachine(config.stateMachine);
+
+    // Soroban protocol feature detection (Issue #529): probe once at startup;
+    // the detector caches internally and re-probes after its staleness window.
+    this._sorobanFeatureDetector = new SorobanFeatureDetector({ rpcUrl: primaryUrl });
+    this._sorobanFeatureDetector.detect().catch(() => {
+      // Best-effort startup probe; getSorobanFeatures() will retry on demand.
+    });
 
     if (
       !this._rpcClient &&
@@ -1213,6 +1223,16 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
    * Performs a health check of the client's RPC connection and contract.
    * Resolves with status information or throws HealthCheckTimeoutError if taking > 5000ms.
    */
+  /**
+   * Return the current Soroban protocol feature flags, detected once at
+   * startup and re-probed automatically after the detector's staleness
+   * window (default 1 hour). Emits `protocolUpgradeDetected` on the
+   * underlying detector when a re-probe observes a version change.
+   */
+  async getSorobanFeatures(): Promise<SorobanFeatureFlags> {
+    return this._sorobanFeatureDetector.detect();
+  }
+
   async healthCheck(): Promise<HealthCheckResult> {
     const start = Date.now();
     try {
