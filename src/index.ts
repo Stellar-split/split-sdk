@@ -597,6 +597,14 @@ export type { ContractInvocationExecutor, ContractRetryQueueConfig } from "./con
 export type { ContractInvocation, ContractResult } from "./types.js";
 export { ContractRetryExhaustedError, isContractRetryExhaustedError } from "./errors.js";
 
+// Invoice batch processor with concurrency limiter
+export { InvoiceBatchProcessor } from "./invoiceBatchProcessor.js";
+export type {
+  BatchInvoiceResult,
+  InvoiceBatchConfig,
+  InvoicePaymentSubmitter,
+} from "./invoiceBatchProcessor.js";
+
 // Merkle proof functionality
 export { generateMerkleProof, verifyMerkleProof } from "./merkle.js";
 export type { MerkleProof } from "./merkle.js";
