@@ -1296,6 +1296,16 @@ export interface DecodedOperation {
   body: Record<string, unknown>;
 }
 
+/** A single decoded per-operation result within a DecodedTransactionResult. */
+export interface DecodedOperationResult {
+  /** OperationResultCode switch name (e.g. "opInner", "opBadAuth", "opNoAccount"). */
+  code: string;
+  /** Operation type name when `code === "opInner"` (e.g. "payment", "createClaimableBalance"). */
+  operationType?: string;
+  /** The operation-specific result code (e.g. "paymentSuccess", "paymentUnderfunded"). */
+  resultCode?: string;
+}
+
 /** Decoded TransactionResult as a structured JSON-safe object. */
 export interface DecodedTransactionResult {
   type: "TransactionResult";
@@ -1303,6 +1313,13 @@ export interface DecodedTransactionResult {
   result: {
     code: string;
     innerResult?: Record<string, unknown>;
+  };
+  /** Per-operation results, in the same order as the submitted transaction's operations. */
+  operationResults?: DecodedOperationResult[];
+  /** Present only for fee-bump transactions: the outer fee-bump result plus the nested inner transaction result. */
+  feeBump?: {
+    outer: { feeCharged: string; code: string };
+    inner: DecodedTransactionResult;
   };
 }
 

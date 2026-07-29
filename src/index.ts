@@ -383,6 +383,7 @@ export type {
   DecodedXDR,
   DecodedTransactionEnvelope,
   DecodedTransactionResult,
+  DecodedOperationResult,
   DecodedTransactionMeta,
   DecodedLedgerEntry,
   DecodedOperation,
@@ -423,6 +424,7 @@ export { getSuggestion } from "./errorSuggestions.js";
 // ---------------------------------------------------------------------------
 
 export { decodeXDR } from "./xdrDecoder.js";
+export { decodeTransactionResult } from "./txResultDecoder.js";
 
 // ---------------------------------------------------------------------------
 // SSE Cursor Tracker — persistent cursor for stream resumption
