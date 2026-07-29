@@ -166,7 +166,57 @@ export {
   isCIDMismatchError,
   IPFSConfigError,
   isIPFSConfigError,
+  // #484
+  RecipientPreCheckFailedError,
+  isRecipientPreCheckFailedError,
+  // #485
+  ChannelExhaustedError,
+  isChannelExhaustedError,
+  // #486
+  InvoiceNotCloneableError,
+  isInvoiceNotCloneableError,
+  // #487
+  StellarTomlFetchError,
+  isStellarTomlFetchError,
+  AnchorVerificationError,
+  isAnchorVerificationError,
 } from "./errors.js";
+
+// #484 — Recipient Balance Pre-Check
+export { RecipientBalancePreCheck } from "./preflight/RecipientBalancePreCheck.js";
+export type {
+  CheckItem,
+  CheckName,
+  PreCheckResult,
+  RecipientPreCheckOptions,
+} from "./preflight/RecipientBalancePreCheck.js";
+
+// #485 — Channel Account Manager
+export { ChannelAccountManager } from "./submission/ChannelAccountManager.js";
+export type {
+  ChannelAccount,
+  ChannelAssignment,
+  ChannelPoolConfig,
+} from "./types/channels.js";
+
+// #486 — Invoice Cloneability Validator
+export { InvoiceCloneabilityValidator } from "./preflight/InvoiceCloneabilityValidator.js";
+export type {
+  CloneabilityReport,
+  FieldReport,
+  CloneabilityOptions,
+} from "./preflight/InvoiceCloneabilityValidator.js";
+
+// #487 — Stellar TOML Parser & Anchor Verifier
+export { StellarTomlParser } from "./anchors/StellarTomlParser.js";
+export { AnchorVerifier } from "./anchors/AnchorVerifier.js";
+export type {
+  TomlMetadata,
+  TomlCurrency,
+  TomlValidator,
+  TomlDocumentation,
+} from "./anchors/StellarTomlParser.js";
+export type { VerificationResult } from "./anchors/AnchorVerifier.js";
 export { getScheduledReleaseCountdown } from "./client.js";
 export { verifyCompletionProof } from "./client.js";
 export { MultiTenantClient } from "./multiTenant.js";

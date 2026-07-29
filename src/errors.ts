@@ -1260,3 +1260,164 @@ export class PassphraseMismatchError extends StellarSplitError {
 export function isIPFSConfigError(err: unknown): err is IPFSConfigError {
   return err instanceof IPFSConfigError;
 }
+
+// ---------------------------------------------------------------------------
+// #484 — Recipient Balance Pre-Check Errors
+// ---------------------------------------------------------------------------
+
+import type { PreCheckResult } from "./preflight/RecipientBalancePreCheck.js";
+
+/**
+ * Thrown by `createInvoice` when one or more recipients fail the
+ * `RecipientBalancePreCheck` (missing account, missing trustline, or
+ * insufficient reserve).
+ */
+export class RecipientPreCheckFailedError extends StellarSplitError {
+  /** The full pre-check results for every failing recipient. */
+  readonly failingResults: PreCheckResult[];
+
+  constructor(failingResults: PreCheckResult[]) {
+    const summary = failingResults
+      .map(
+        (r) =>
+          `${r.recipient}: [${r.checks
+            .filter((c) => !c.passed)
+            .map((c) => c.name)
+            .join(", ")}]`,
+      )
+      .join("; ");
+    super(
+      `Recipient pre-check failed for ${failingResults.length} recipient(s): ${summary}`,
+      "RECIPIENT_PRE_CHECK_FAILED",
+      { count: failingResults.length },
+    );
+    this.name = "RecipientPreCheckFailedError";
+    this.failingResults = failingResults;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isRecipientPreCheckFailedError(
+  err: unknown,
+): err is RecipientPreCheckFailedError {
+  return err instanceof RecipientPreCheckFailedError;
+}
+
+// ---------------------------------------------------------------------------
+// #485 — Channel Account Manager Errors
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown when `ChannelAccountManager.acquire()` times out because all
+ * channel accounts are in use and none is released within `acquireTimeoutMs`.
+ */
+export class ChannelExhaustedError extends StellarSplitError {
+  /** Number of channel accounts in the pool. */
+  readonly poolSize: number;
+  /** Timeout duration that elapsed, in milliseconds. */
+  readonly timeoutMs: number;
+
+  constructor(poolSize: number, timeoutMs: number) {
+    super(
+      `All ${poolSize} channel account(s) are in use. No channel was released within ${timeoutMs}ms.`,
+      "CHANNEL_EXHAUSTED",
+      { poolSize, timeoutMs },
+    );
+    this.name = "ChannelExhaustedError";
+    this.poolSize = poolSize;
+    this.timeoutMs = timeoutMs;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isChannelExhaustedError(
+  err: unknown,
+): err is ChannelExhaustedError {
+  return err instanceof ChannelExhaustedError;
+}
+
+// ---------------------------------------------------------------------------
+// #486 — Invoice Cloneability Validator Errors
+// ---------------------------------------------------------------------------
+
+import type { CloneabilityReport } from "./preflight/InvoiceCloneabilityValidator.js";
+
+/**
+ * Thrown by `cloneInvoice` when the source invoice fails the
+ * `InvoiceCloneabilityValidator` pre-flight check.
+ */
+export class InvoiceNotCloneableError extends StellarSplitError {
+  /** The full cloneability report produced by the validator. */
+  readonly details: CloneabilityReport;
+
+  constructor(report: CloneabilityReport) {
+    const failing = report.fieldReports
+      .filter((f) => !f.valid)
+      .map((f) => f.field)
+      .join(", ");
+    super(
+      `Invoice ${report.invoiceId} cannot be cloned. Failing fields: ${failing}`,
+      "INVOICE_NOT_CLONEABLE",
+      { invoiceId: report.invoiceId },
+    );
+    this.name = "InvoiceNotCloneableError";
+    this.details = report;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isInvoiceNotCloneableError(
+  err: unknown,
+): err is InvoiceNotCloneableError {
+  return err instanceof InvoiceNotCloneableError;
+}
+
+// ---------------------------------------------------------------------------
+// #487 — Anchor / TOML Errors
+// ---------------------------------------------------------------------------
+
+/** Thrown when fetching or parsing a stellar.toml file fails. */
+export class StellarTomlFetchError extends StellarSplitError {
+  readonly domain: string;
+
+  constructor(domain: string, message: string) {
+    super(
+      `Failed to fetch stellar.toml for domain "${domain}": ${message}`,
+      "STELLAR_TOML_FETCH_ERROR",
+      { domain },
+      message,
+    );
+    this.name = "StellarTomlFetchError";
+    this.domain = domain;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isStellarTomlFetchError(
+  err: unknown,
+): err is StellarTomlFetchError {
+  return err instanceof StellarTomlFetchError;
+}
+
+/** Thrown when anchor verification cannot be completed. */
+export class AnchorVerificationError extends StellarSplitError {
+  readonly issuer: string;
+
+  constructor(issuer: string, message: string) {
+    super(
+      `Anchor verification failed for issuer "${issuer}": ${message}`,
+      "ANCHOR_VERIFICATION_ERROR",
+      { issuer },
+      message,
+    );
+    this.name = "AnchorVerificationError";
+    this.issuer = issuer;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isAnchorVerificationError(
+  err: unknown,
+): err is AnchorVerificationError {
+  return err instanceof AnchorVerificationError;
+}

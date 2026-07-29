@@ -232,6 +232,10 @@ import type {
   RetryConfig as ResilientRetryConfig,
   CircuitBreakerConfig,
 } from "./resilientRpc.js";
+import { RecipientBalancePreCheck } from "./preflight/RecipientBalancePreCheck.js";
+import { RecipientPreCheckFailedError } from "./errors.js";
+import { InvoiceCloneabilityValidator } from "./preflight/InvoiceCloneabilityValidator.js";
+import { InvoiceNotCloneableError } from "./errors.js";
 
 /** A plugin that extends StellarSplitClient with new methods and lifecycle hooks. */
 export interface StellarSplitPlugin {
@@ -252,33 +256,6 @@ export interface StellarSplitPlugin {
    */
   onDestroy?(client: StellarSplitClient): void | Promise<void>;
 }
-/**
-   * Internal startup validation. Throws PassphraseMismatchError if 
-   * the configured passphrase doesn't match the RPC node.
-   */
-  private async _validateStartupConfig(): Promise<void> {
-    const primaryUrl = Array.isArray(this.config.rpcUrl) ? this.config.rpcUrl[0]! : this.config.rpcUrl;
-    const result = await NetworkPassphraseValidator.validate(
-      this.config.networkPassphrase,
-      primaryUrl
-    );
-    if (result.mismatch) {
-      throw new PassphraseMismatchError(result.configured, result.reported);
-    }
-  }
-
-  /**
-   * Live network switcher. Migrates state and re-subscribes.
-   * @param network - 'mainnet' | 'testnet' | 'futurenet'
-   */
-  public async switchTo(network: 'mainnet' | 'testnet' | 'futurenet'): Promise<void> {
-    const { NetworkSwitcher } = await import("./network/NetworkSwitcher.js");
-    return NetworkSwitcher.switchTo(network, this);
-  }
-/** Whether to validate the passphrase against the RPC node on startup. Defaults to true. */
-  validatePassphrase?: boolean;
-  /** Map of available networks for the live switcher. */
-  networks?: Record<string, NetworkConfig>;
 
 /** Configuration for StellarSplitClient. */
 export interface StellarSplitClientConfig {
@@ -440,6 +417,10 @@ export interface StellarSplitClientConfig {
    * instead of returning stale data while the transaction is pending.
    */
   optimisticCache?: boolean;
+  /** Whether to validate the passphrase against the RPC node on startup. Defaults to true. */
+  validatePassphrase?: boolean;
+  /** Map of available networks for the live switcher. */
+  networks?: Record<string, NetworkConfig>;
 }
 
 /** Network configuration. */
@@ -547,10 +528,6 @@ export function verifyCompletionProof(proof: CompletionProof): {
   }
   return { valid: true };
 }
-// ... end of constructor logic
-    if (config.validatePassphrase !== false) {
-      this._validateStartupConfig();
-    }
 
 export class StellarSplitClient extends EventEmitter {
   private _mainServer!: SorobanRpc.Server;
@@ -823,6 +800,10 @@ export class StellarSplitClient extends EventEmitter {
     for (const p of this._pluginInstances) {
       p.onInit?.(this);
     }
+
+    if (config.validatePassphrase !== false) {
+      void this._validateStartupConfig();
+    }
   }
 
   /**
@@ -936,6 +917,36 @@ export class StellarSplitClient extends EventEmitter {
       return (this._cache as any).getStats();
     }
     return null;
+  }
+
+  /**
+   * Internal startup validation. Throws PassphraseMismatchError if
+   * the configured passphrase doesn't match the RPC node.
+   */
+  private async _validateStartupConfig(): Promise<void> {
+    const { NetworkPassphraseValidator } = await import("./network/NetworkPassphraseValidator.js");
+    const { PassphraseMismatchError } = await import("./errors.js");
+    const primaryUrl = Array.isArray(this.config.rpcUrl)
+      ? this.config.rpcUrl[0]!
+      : this.config.rpcUrl;
+    const result = await NetworkPassphraseValidator.validate(
+      this.config.networkPassphrase,
+      primaryUrl,
+    );
+    if (result.mismatch) {
+      throw new PassphraseMismatchError(result.configured, result.reported);
+    }
+  }
+
+  /**
+   * Live network switcher. Migrates state and re-subscribes.
+   * @param network - 'mainnet' | 'testnet' | 'futurenet'
+   */
+  public async switchTo(
+    network: "mainnet" | "testnet" | "futurenet",
+  ): Promise<void> {
+    const { NetworkSwitcher } = await import("./network/NetworkSwitcher.js");
+    return NetworkSwitcher.switchTo(network, this);
   }
 
   private _logAudit(
@@ -1369,6 +1380,27 @@ export class StellarSplitClient extends EventEmitter {
             validateInvoicePayload(params, this.config.payloadGuard);
           }
 
+          // -----------------------------------------------------------
+          // Recipient balance pre-check (#484)
+          // -----------------------------------------------------------
+          if (!params.skipPreCheck) {
+            const assetParts =
+              params.token && params.token !== "native"
+                ? params.token.split(":")
+                : [];
+            const checker = new RecipientBalancePreCheck({
+              assetCode: assetParts[0],
+              assetIssuer: assetParts[1],
+              horizonUrl:
+                params.horizonUrl ?? this.config.horizonUrl,
+            });
+            const recipientAddrs = params.recipients.map((r) => r.address);
+            const failing = await checker.runAndGetFailing(recipientAddrs);
+            if (failing.length > 0) {
+              throw new RecipientPreCheckFailedError(failing);
+            }
+          }
+
           const gate = await this.checkNftGate(params.creator);
           if (gate.gated && !gate.hasNft) {
             throw new NftGateRequiredError(
@@ -1449,6 +1481,23 @@ export class StellarSplitClient extends EventEmitter {
   ): Promise<string> {
     const startTime = Date.now();
     const sourceInvoice = await this.getInvoice(sourceId);
+
+    // -------------------------------------------------------------------
+    // Cloneability pre-flight validation (#486)
+    // -------------------------------------------------------------------
+    if (!overrides.skipValidation) {
+      const rpcUrl = Array.isArray(this.config.rpcUrl)
+        ? this.config.rpcUrl[0]
+        : this.config.rpcUrl;
+      const validator = new InvoiceCloneabilityValidator({
+        horizonUrl: overrides.horizonUrl ?? this.config.horizonUrl,
+        rpcUrl,
+      });
+      const report = await validator.validate(sourceInvoice);
+      if (!report.cloneable) {
+        throw new InvoiceNotCloneableError(report);
+      }
+    }
 
     const mapEntries: xdr.ScMapEntry[] = [];
 
