@@ -1,5 +1,6 @@
 import { createHash } from "crypto";
-import type { Invoice, Payment } from "./types.js";
+import type { FinalityStatus, Invoice, Payment } from "./types.js";
+import type { FinalityChecker } from "./finalityChecker.js";
 import { PayerAddressRequiredError } from "./errors.js";
 
 /** A verified payment receipt compiled from on-chain invoice data. */
@@ -18,6 +19,8 @@ export interface PaymentReceipt {
   generatedAt: number;
   /** Ledger timestamp or sequence used in the proof hash calculation. */
   ledgerTimestamp: number;
+  /** Finality status for the submitted payment transaction, when checked. */
+  finality?: FinalityStatus;
   /** Convert receipt to a JSON-serializable object (with bigints represented as strings). */
   toJSON(): PaymentReceiptJSON;
 }
@@ -37,6 +40,7 @@ export interface PaymentReceiptJSON {
   proofHash: string;
   generatedAt: number;
   ledgerTimestamp: number;
+  finality?: FinalityStatus;
 }
 
 /** Interface for any client capable of fetching an invoice by ID. */
@@ -155,6 +159,25 @@ export function deserializePaymentReceipt(json: string): PaymentReceipt {
   });
 }
 
+/** Run a finality check for a submitted payment transaction and attach it to the receipt. */
+export async function finalizePaymentReceipt(
+  receipt: PaymentReceipt,
+  txHash: string,
+  checker: FinalityChecker,
+): Promise<PaymentReceipt> {
+  const finality = await checker.check(txHash);
+  return _buildReceiptObject({
+    invoiceId: receipt.invoiceId,
+    payer: receipt.payer,
+    totalPaid: receipt.totalPaid,
+    payments: receipt.payments,
+    proofHash: receipt.proofHash,
+    generatedAt: receipt.generatedAt,
+    ledgerTimestamp: receipt.ledgerTimestamp,
+    finality,
+  });
+}
+
 function _buildReceiptObject(data: {
   invoiceId: string;
   payer: string;
@@ -163,6 +186,7 @@ function _buildReceiptObject(data: {
   proofHash: string;
   generatedAt: number;
   ledgerTimestamp: number;
+  finality?: FinalityStatus;
 }): PaymentReceipt {
   return {
     invoiceId: data.invoiceId,
@@ -172,6 +196,7 @@ function _buildReceiptObject(data: {
     proofHash: data.proofHash,
     generatedAt: data.generatedAt,
     ledgerTimestamp: data.ledgerTimestamp,
+    finality: data.finality,
     toJSON(): PaymentReceiptJSON {
       return {
         invoiceId: this.invoiceId,
@@ -184,6 +209,7 @@ function _buildReceiptObject(data: {
         proofHash: this.proofHash,
         generatedAt: this.generatedAt,
         ledgerTimestamp: this.ledgerTimestamp,
+        finality: this.finality,
       };
     },
   };

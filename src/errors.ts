@@ -1699,3 +1699,93 @@ export class ClassifiedHorizonError extends StellarSplitError {
 export function isClassifiedHorizonError(err: unknown): err is ClassifiedHorizonError {
   return err instanceof ClassifiedHorizonError;
 }
+
+export class FinalityTimeoutError extends StellarSplitError {
+  constructor(txHash: string, maxWaitMs: number) {
+    super(
+      `Transaction ${txHash} did not reach finality within ${maxWaitMs}ms`,
+      "FINALITY_TIMEOUT",
+      { txHash, maxWaitMs },
+    );
+    this.name = "FinalityTimeoutError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isFinalityTimeoutError(err: unknown): err is FinalityTimeoutError {
+  return err instanceof FinalityTimeoutError;
+}
+
+export class ApprovalTimeoutError extends StellarSplitError {
+  constructor(timeoutMs: number) {
+    super(
+      `Approval workflow did not complete within ${timeoutMs}ms`,
+      "APPROVAL_TIMEOUT",
+      { timeoutMs },
+    );
+    this.name = "ApprovalTimeoutError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isApprovalTimeoutError(err: unknown): err is ApprovalTimeoutError {
+  return err instanceof ApprovalTimeoutError;
+}
+
+export class PaymentExpiredError extends StellarSplitError {
+  constructor(invoiceId: string, expiresAt: number) {
+    super(
+      `Payment for invoice ${invoiceId} expired at ${expiresAt}`,
+      "PAYMENT_EXPIRED",
+      { invoiceId, expiresAt },
+    );
+    this.name = "PaymentExpiredError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class InsufficientSponsorReserveError extends StellarSplitError {
+  constructor(
+    sponsorAddress: string,
+    availableStroops: bigint,
+    requiredStroops: bigint,
+    newEntryCount: number,
+  ) {
+    super(
+      `Sponsor ${sponsorAddress} has insufficient reserve for ${newEntryCount} entries`,
+      "INSUFFICIENT_SPONSOR_RESERVE",
+      {
+        sponsorAddress,
+        availableStroops: availableStroops.toString(),
+        requiredStroops: requiredStroops.toString(),
+        newEntryCount,
+      },
+    );
+    this.name = "InsufficientSponsorReserveError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class InvalidTransactionTypeError extends StellarSplitError {
+  constructor(typeName: string) {
+    super(
+      `Invalid transaction type: ${typeName}`,
+      "INVALID_TRANSACTION_TYPE",
+      { typeName },
+    );
+    this.name = "InvalidTransactionTypeError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class InvoiceIntegrityError extends StellarSplitError {
+  constructor(invoiceId: string, expectedHash?: string, computedHash?: string) {
+    super(
+      `Invoice integrity check failed: ${invoiceId}`,
+      "INVOICE_INTEGRITY",
+      { invoiceId, expectedHash, computedHash },
+    );
+    this.name = "InvoiceIntegrityError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}

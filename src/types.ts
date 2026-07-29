@@ -1647,3 +1647,45 @@ export interface CursorStore {
   /** Delete a saved cursor. */
   delete(key: string): Promise<void>;
 }
+
+export interface FinalityStatus {
+  finalized: boolean;
+  confirmations: number;
+  ledgerSequence: number;
+}
+
+export interface FinalityCheckConfig {
+  minConfirmations?: number;
+  pollIntervalMs?: number;
+  maxWaitMs?: number;
+}
+
+export interface MultiSigPolicy {
+  threshold: number;
+  timeoutMs: number;
+  signers: Array<{
+    publicKey: string;
+    weight: number;
+  }>;
+}
+
+export interface ApprovalSessionResult {
+  complete: boolean;
+  weight: number;
+}
+
+export interface BatchPaymentResult {
+  succeeded: Array<{
+    chunkIndex: number;
+    txHash: string;
+  }>;
+  failed: {
+    chunkIndex: number;
+    error: Error;
+  } | null;
+}
+
+export type ChunkSubmitter<T> = (
+  operations: T[],
+  chunkIndex: number,
+) => Promise<{ txHash: string }>;
