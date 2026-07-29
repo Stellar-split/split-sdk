@@ -1647,3 +1647,23 @@ export interface CursorStore {
   /** Delete a saved cursor. */
   delete(key: string): Promise<void>;
 }
+
+// ---------------------------------------------------------------------------
+// Effect Aggregator Types
+// ---------------------------------------------------------------------------
+
+/** Net balance change for a single asset within an account's effect summary. */
+export interface AssetDelta {
+  /** Asset identifier: "native" or "CODE:ISSUER". */
+  asset: string;
+  /** Net change in stroops; positive = credited, negative = debited. */
+  delta: bigint;
+}
+
+/** Net effect summary for one account, aggregated across a transaction's effects. */
+export interface AccountEffectSummary {
+  /** Stellar account ID affected. */
+  accountId: string;
+  /** Net asset balance changes for this account. */
+  assetDeltas: AssetDelta[];
+}

@@ -1,6 +1,8 @@
 import { createHash } from "crypto";
-import type { Invoice, Payment } from "./types.js";
+import type { Horizon } from "@stellar/stellar-sdk";
+import type { AccountEffectSummary, Invoice, Payment } from "./types.js";
 import { PayerAddressRequiredError } from "./errors.js";
+import { aggregateEffects } from "./effectAggregator.js";
 
 /** A verified payment receipt compiled from on-chain invoice data. */
 export interface PaymentReceipt {
@@ -18,8 +20,20 @@ export interface PaymentReceipt {
   generatedAt: number;
   /** Ledger timestamp or sequence used in the proof hash calculation. */
   ledgerTimestamp: number;
+  /** Net per-account asset balance changes for the underlying transaction, when requested via `ReceiptConfig.includeEffects`. */
+  effectSummary?: AccountEffectSummary[];
   /** Convert receipt to a JSON-serializable object (with bigints represented as strings). */
   toJSON(): PaymentReceiptJSON;
+}
+
+/** Options controlling optional receipt enrichment. */
+export interface ReceiptConfig {
+  /** When true (and `server`/`txHash` are supplied), attach an effect summary to the receipt. */
+  includeEffects?: boolean;
+  /** Horizon server used to fetch effects when `includeEffects` is set. */
+  server?: Horizon.Server;
+  /** Hash of the transaction to aggregate effects for. */
+  txHash?: string;
 }
 
 /** JSON-serializable representation of a PaymentReceipt. */
@@ -37,6 +51,7 @@ export interface PaymentReceiptJSON {
   proofHash: string;
   generatedAt: number;
   ledgerTimestamp: number;
+  effectSummary?: AccountEffectSummary[];
 }
 
 /** Interface for any client capable of fetching an invoice by ID. */
@@ -100,22 +115,31 @@ export function compilePaymentReceipt(
  * @param source - Either a client with `getInvoice` or an `Invoice` object.
  * @param invoiceIdOrPayer - The invoice ID (if passing a client) or payer address (if passing an Invoice).
  * @param payerAddress - The payer address (if passing a client).
+ * @param config - Optional enrichment config; set `includeEffects` (with `server`/`txHash`) to attach an effect summary.
  * @returns Promise resolving to the PaymentReceipt.
  */
 export async function generatePaymentReceipt(
   source: InvoiceFetcher | Invoice,
   invoiceIdOrPayer: string,
-  payerAddress?: string
+  payerAddress?: string,
+  config?: ReceiptConfig
 ): Promise<PaymentReceipt> {
+  let receipt: PaymentReceipt;
   if ("getInvoice" in source && typeof source.getInvoice === "function") {
     if (!payerAddress) {
       throw new PayerAddressRequiredError();
     }
     const invoice = await source.getInvoice(invoiceIdOrPayer);
-    return compilePaymentReceipt(invoice, payerAddress);
+    receipt = compilePaymentReceipt(invoice, payerAddress);
+  } else {
+    receipt = compilePaymentReceipt(source as Invoice, invoiceIdOrPayer);
   }
 
-  return compilePaymentReceipt(source as Invoice, invoiceIdOrPayer);
+  if (config?.includeEffects && config.server && config.txHash) {
+    receipt.effectSummary = await aggregateEffects(config.server, config.txHash);
+  }
+
+  return receipt;
 }
 
 /**
@@ -152,6 +176,7 @@ export function deserializePaymentReceipt(json: string): PaymentReceipt {
     proofHash: data.proofHash,
     generatedAt: data.generatedAt,
     ledgerTimestamp: data.ledgerTimestamp,
+    effectSummary: data.effectSummary,
   });
 }
 
@@ -163,6 +188,7 @@ function _buildReceiptObject(data: {
   proofHash: string;
   generatedAt: number;
   ledgerTimestamp: number;
+  effectSummary?: AccountEffectSummary[];
 }): PaymentReceipt {
   return {
     invoiceId: data.invoiceId,
@@ -172,6 +198,7 @@ function _buildReceiptObject(data: {
     proofHash: data.proofHash,
     generatedAt: data.generatedAt,
     ledgerTimestamp: data.ledgerTimestamp,
+    effectSummary: data.effectSummary,
     toJSON(): PaymentReceiptJSON {
       return {
         invoiceId: this.invoiceId,
@@ -184,6 +211,7 @@ function _buildReceiptObject(data: {
         proofHash: this.proofHash,
         generatedAt: this.generatedAt,
         ledgerTimestamp: this.ledgerTimestamp,
+        effectSummary: this.effectSummary,
       };
     },
   };

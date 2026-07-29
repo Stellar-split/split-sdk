@@ -573,7 +573,12 @@ export type {
   PaymentReceipt,
   PaymentReceiptJSON,
   InvoiceFetcher,
+  ReceiptConfig,
 } from "./receipt.js";
+
+// Transaction operation effect aggregator
+export { aggregateEffects } from "./effectAggregator.js";
+export type { AccountEffectSummary, AssetDelta } from "./types.js";
 
 // Merkle proof functionality
 export { generateMerkleProof, verifyMerkleProof } from "./merkle.js";
