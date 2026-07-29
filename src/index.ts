@@ -192,6 +192,9 @@ export {
   ClassifiedHorizonError,
   isClassifiedHorizonError,
   HorizonErrorClassification,
+  // New: Split Rollback Coordinator
+  UnknownSplitError,
+  isUnknownSplitError,
 } from "./errors.js";
 
 // ---------------------------------------------------------------------------
@@ -807,6 +810,11 @@ export type {
 } from "./usageAnalytics.js";
 export { IdempotencyManager } from "./idempotency.js";
 export type { IdempotencyConfig } from "./idempotency.js";
+
+export { RollbackCoordinator } from "./splitRollbackCoordinator.js";
+export type { SplitRollbackEventMap } from "./splitRollbackCoordinator.js";
+export type { SplitRollbackRecord } from "./snapshot.js";
+export type { SplitLeg, SplitLegState, SplitResult, SplitRollbackCheckpoint } from "./types.js";
 
 export {
   validateInvoicePayload,

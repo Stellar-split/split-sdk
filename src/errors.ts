@@ -1699,3 +1699,20 @@ export class ClassifiedHorizonError extends StellarSplitError {
 export function isClassifiedHorizonError(err: unknown): err is ClassifiedHorizonError {
   return err instanceof ClassifiedHorizonError;
 }
+
+// ---------------------------------------------------------------------------
+// Split rollback coordinator errors
+// ---------------------------------------------------------------------------
+
+/** Thrown when a rollback coordinator operation references an unknown split checkpoint or leg. */
+export class UnknownSplitError extends StellarSplitError {
+  constructor(splitId: string) {
+    super(`No rollback checkpoint found for split: ${splitId}`, "UNKNOWN_SPLIT", { splitId });
+    this.name = "UnknownSplitError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isUnknownSplitError(err: unknown): err is UnknownSplitError {
+  return err instanceof UnknownSplitError;
+}
