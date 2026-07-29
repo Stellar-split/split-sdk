@@ -1734,3 +1734,38 @@ export interface PriceOracleAdapter {
    */
   getPrice(base: string, quote: string): Promise<number>;
 }
+
+// ---------------------------------------------------------------------------
+// Path Query Builder Types
+// ---------------------------------------------------------------------------
+
+/** A validated strict-send Horizon path query, built by PathQueryBuilder. */
+export interface StrictSendPathQuery {
+  kind: "strictSend";
+  sourceAsset: import("@stellar/stellar-sdk").Asset;
+  sourceAmount: bigint;
+  /** A specific destination account, or a fixed list of acceptable destination assets. */
+  destination: string | import("@stellar/stellar-sdk").Asset[];
+}
+
+/** A validated strict-receive Horizon path query, built by PathQueryBuilder. */
+export interface StrictReceivePathQuery {
+  kind: "strictReceive";
+  /** A specific source account, or a fixed list of acceptable source assets. */
+  source: string | import("@stellar/stellar-sdk").Asset[];
+  destinationAsset: import("@stellar/stellar-sdk").Asset;
+  destinationAmount: bigint;
+}
+
+/** A path query built by PathQueryBuilder, ready to execute. */
+export type PathQuery = StrictSendPathQuery | StrictReceivePathQuery;
+
+/** A single resolved conversion path returned by executing a PathQuery. */
+export interface PathQueryResult {
+  /** Ordered list of intermediate assets forming the conversion route. */
+  path: Array<{ asset_code: string; asset_issuer: string; asset_type: string }>;
+  /** Amount sent from the source, in the source asset's base unit. */
+  sourceAmount: bigint;
+  /** Amount the destination receives, in the destination asset's base unit. */
+  destinationAmount: bigint;
+}

@@ -1750,3 +1750,20 @@ export class PriceOracleFetchError extends StellarSplitError {
 export function isPriceOracleFetchError(err: unknown): err is PriceOracleFetchError {
   return err instanceof PriceOracleFetchError;
 }
+
+// ---------------------------------------------------------------------------
+// Path query builder errors
+// ---------------------------------------------------------------------------
+
+/** Thrown when a PathQueryBuilder query is missing required parameters or fails validation. */
+export class InvalidPathQueryError extends StellarSplitError {
+  constructor(message: string, context?: Record<string, unknown>) {
+    super(message, "INVALID_PATH_QUERY", context);
+    this.name = "InvalidPathQueryError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isInvalidPathQueryError(err: unknown): err is InvalidPathQueryError {
+  return err instanceof InvalidPathQueryError;
+}

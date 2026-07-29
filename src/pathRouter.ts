@@ -5,13 +5,14 @@
  * Horizon's path-payment endpoints to find the best conversion route and
  * returns the optimal path for each split leg.
  *
- * Integrates with {@link SimpleCache} to avoid redundant Horizon calls for
- * identical source/destination pairs within the cache TTL window.
+ * Delegates query assembly, validation, and caching to {@link PathQueryBuilder}
+ * to avoid redundant Horizon calls for identical source/destination pairs
+ * within the cache TTL window.
  */
 
 import { Asset, Horizon, Operation } from "@stellar/stellar-sdk";
-import { SimpleCache } from "./cache.js";
 import { PathNotFoundError, PathRouterError } from "./errors.js";
+import { PathQueryBuilder } from "./pathQueryBuilder.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -70,7 +71,7 @@ export interface PathRouterConfig {
  */
 export class PathRouter {
   private readonly server: Horizon.Server;
-  private readonly cache: SimpleCache<PathResult>;
+  private readonly queryBuilder: PathQueryBuilder;
 
   /**
    * @param horizonUrl - Horizon server URL.
@@ -78,8 +79,7 @@ export class PathRouter {
    */
   constructor(horizonUrl: string, config: PathRouterConfig = {}) {
     this.server = new Horizon.Server(horizonUrl);
-    this.cache = new SimpleCache<PathResult>({
-      enabled: true,
+    this.queryBuilder = new PathQueryBuilder(this.server, {
       ttlMs: config.ttlMs ?? 15_000,
       maxEntries: config.maxEntries ?? 5_000,
     });
@@ -97,45 +97,24 @@ export class PathRouter {
    * the destination amount is estimated.
    */
   async findStrictSendPath(req: PathRequest): Promise<PathResult> {
-    const cacheKey = this.cacheKey("send", req);
-    const cached = this.cache.get(cacheKey);
-    if (cached) return cached;
+    const sourceAssetType = assetType(req.sourceAsset);
+    const destAssetType = assetType(req.destinationAsset);
 
     try {
-      const sourceAssetType = req.sourceAsset.isNative()
-        ? "native"
-        : `${req.sourceAsset.getCode()}:${req.sourceAsset.getIssuer()}`;
-      const destAssetType = req.destinationAsset.isNative()
-        ? "native"
-        : `${req.destinationAsset.getCode()}:${req.destinationAsset.getIssuer()}`;
+      const query = this.queryBuilder.forStrictSend({
+        sourceAsset: req.sourceAsset,
+        sourceAmount: req.sourceAmount,
+        destinationAssets: [req.destinationAsset],
+      });
+      const results = await this.queryBuilder.execute(query);
 
-      const records = await this.server
-        .strictSendPaths(
-          req.sourceAsset,
-          req.sourceAmount.toString(),
-          [req.destinationAsset],
-        )
-        .call();
-
-      if (records.records.length === 0) {
-        throw new PathNotFoundError(
-          sourceAssetType,
-          destAssetType,
-          req.sourceAmount,
-        );
+      if (results.length === 0) {
+        throw new PathNotFoundError(sourceAssetType, destAssetType, req.sourceAmount);
       }
 
-      // First record is the best path (highest destination amount)
-      const best = records.records[0]!;
-
-      const result: PathResult = {
-        path: best.path,
-        destinationAmount: BigInt(best.destination_amount),
-        sourceAmount: BigInt(best.source_amount),
-      };
-
-      this.cache.set(cacheKey, result);
-      return result;
+      // Results are sorted best-first (highest destination amount).
+      const best = results[0]!;
+      return { path: best.path, destinationAmount: best.destinationAmount, sourceAmount: best.sourceAmount };
     } catch (err) {
       if (err instanceof PathNotFoundError) throw err;
       throw new PathRouterError(
@@ -156,51 +135,24 @@ export class PathRouter {
     destAmount: bigint,
     destinationAsset: Asset,
   ): Promise<PathResult> {
-    const cacheKey = this.cacheKeyReceive(sourceAsset, destAmount, destinationAsset);
-    const cached = this.cache.get(cacheKey);
-    if (cached) return cached;
+    const sourceAssetType = assetType(sourceAsset);
+    const destAssetType = assetType(destinationAsset);
 
     try {
-      const sourceAssetType = sourceAsset.isNative()
-        ? "native"
-        : `${sourceAsset.getCode()}:${sourceAsset.getIssuer()}`;
-      const destAssetType = destinationAsset.isNative()
-        ? "native"
-        : `${destinationAsset.getCode()}:${destinationAsset.getIssuer()}`;
+      const query = this.queryBuilder.forStrictReceive({
+        sourceAssets: [sourceAsset],
+        destinationAsset,
+        destinationAmount: destAmount,
+      });
+      const results = await this.queryBuilder.execute(query);
 
-      const srcStr = sourceAsset.isNative()
-        ? "native"
-        : `${sourceAsset.getCode()}:${sourceAsset.getIssuer()}`;
-      const dstStr = destinationAsset.isNative()
-        ? "native"
-        : `${destinationAsset.getCode()}:${destinationAsset.getIssuer()}`;
-
-      const records = await this.server
-        .strictReceivePaths(
-          srcStr,
-          destinationAsset,
-          destAmount.toString(),
-        )
-        .call();
-
-      if (records.records.length === 0) {
-        throw new PathNotFoundError(
-          sourceAssetType,
-          destAssetType,
-          destAmount,
-        );
+      if (results.length === 0) {
+        throw new PathNotFoundError(sourceAssetType, destAssetType, destAmount);
       }
 
-      const best = records.records[0]!;
-
-      const result: PathResult = {
-        path: best.path,
-        destinationAmount: BigInt(best.destination_amount),
-        sourceAmount: BigInt(best.source_amount),
-      };
-
-      this.cache.set(cacheKey, result);
-      return result;
+      // Results are sorted best-first (lowest source amount).
+      const best = results[0]!;
+      return { path: best.path, destinationAmount: best.destinationAmount, sourceAmount: best.sourceAmount };
     } catch (err) {
       if (err instanceof PathNotFoundError) throw err;
       throw new PathRouterError(
@@ -262,34 +214,10 @@ export class PathRouter {
    * Clear all cached paths.
    */
   clearCache(): void {
-    this.cache.clear();
+    this.queryBuilder.clearCache();
   }
+}
 
-  // -------------------------------------------------------------------------
-  // Internal helpers
-  // -------------------------------------------------------------------------
-
-  private cacheKey(kind: "send" | "receive", req: PathRequest): string {
-    const src = req.sourceAsset.isNative()
-      ? "native"
-      : `${req.sourceAsset.getCode()}:${req.sourceAsset.getIssuer()}`;
-    const dst = req.destinationAsset.isNative()
-      ? "native"
-      : `${req.destinationAsset.getCode()}:${req.destinationAsset.getIssuer()}`;
-    return `path:${kind}:${src}:${dst}:${req.sourceAmount.toString()}`;
-  }
-
-  private cacheKeyReceive(
-    sourceAsset: Asset,
-    destAmount: bigint,
-    destinationAsset: Asset,
-  ): string {
-    const src = sourceAsset.isNative()
-      ? "native"
-      : `${sourceAsset.getCode()}:${sourceAsset.getIssuer()}`;
-    const dst = destinationAsset.isNative()
-      ? "native"
-      : `${destinationAsset.getCode()}:${destinationAsset.getIssuer()}`;
-    return `path:receive:${src}:${dst}:${destAmount.toString()}`;
-  }
+function assetType(asset: Asset): string {
+  return asset.isNative() ? "native" : `${asset.getCode()}:${asset.getIssuer()}`;
 }

@@ -200,6 +200,9 @@ export {
   isRateLimitError,
   PriceOracleFetchError,
   isPriceOracleFetchError,
+  // New: Path Query Builder
+  InvalidPathQueryError,
+  isInvalidPathQueryError,
 } from "./errors.js";
 
 // ---------------------------------------------------------------------------
@@ -325,6 +328,13 @@ export type { SequenceCacheConfig } from "./sequenceCache.js";
 
 export { PathRouter } from "./pathRouter.js";
 export type { PathResult, PathHop, PathRequest, PathRouterConfig } from "./pathRouter.js";
+export { PathQueryBuilder } from "./pathQueryBuilder.js";
+export type {
+  StrictSendQueryParams,
+  StrictReceiveQueryParams,
+  PathQueryBuilderConfig,
+} from "./pathQueryBuilder.js";
+export type { PathQuery, PathQueryResult, StrictSendPathQuery, StrictReceivePathQuery } from "./types.js";
 
 export { OfferTracker } from "./offerTracker.js";
 export type { OfferTrackerConfig, OfferTrackerEventMap } from "./offerTracker.js";
