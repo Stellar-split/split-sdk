@@ -1138,3 +1138,20 @@ export type {
   SorobanFeatureDetectorEventMap,
 } from "./sorobanFeatureDetector.js";
 export type { SorobanFeatureFlags } from "./types.js";
+
+// ---------------------------------------------------------------------------
+// #530 — StreamDeduplicator: paging-token-based stream event dedup
+// ---------------------------------------------------------------------------
+
+export { StreamDeduplicator } from "./streamDeduplicator.js";
+export type {
+  StreamDeduplicatorOptions,
+  StreamDeduplicatorEventMap,
+} from "./streamDeduplicator.js";
+export {
+  InMemoryDedupTokenStore,
+  setDefaultDedupTokenStore,
+  saveDedupTokens,
+  loadDedupTokens,
+} from "./snapshot.js";
+export type { DedupTokenStore } from "./snapshot.js";
