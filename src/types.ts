@@ -1716,3 +1716,21 @@ export interface InvoicePaymentProgress {
   /** Present when the invoice defines a tranche schedule (see trancheProgress.ts). */
   trancheProgress?: import("./trancheProgress.js").TrancheProgressReport;
 }
+
+// ---------------------------------------------------------------------------
+// Price Oracle Adapter Types
+// ---------------------------------------------------------------------------
+
+/**
+ * Pluggable adapter contract for resolving fiat-to-asset conversion rates.
+ * Implementations may call an external REST API, an on-chain oracle
+ * contract, or a static table; the SDK ships {@link CoinGeckoPriceOracle}
+ * (see priceOracle.ts) as the default REST-backed implementation.
+ */
+export interface PriceOracleAdapter {
+  /**
+   * Resolve the price of one unit of `base` denominated in `quote`
+   * (e.g. `getPrice("XLM", "USD")` resolves to how many USD one XLM is worth).
+   */
+  getPrice(base: string, quote: string): Promise<number>;
+}

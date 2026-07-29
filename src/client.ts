@@ -488,6 +488,12 @@ export interface StellarSplitClientConfig {
    * for inspecting in-flight transaction envelopes. Defaults to false.
    */
   debug?: boolean;
+  /**
+   * Optional fiat-to-asset price oracle adapter (see `PriceOracleAdapter` in
+   * types.ts). Used by `convertFiatToAsset` in currencyConverter.ts to
+   * resolve display conversions. Defaults to no oracle configured.
+   */
+  priceOracle?: import("./types.js").PriceOracleAdapter;
 }
 
 /** Network configuration. */
@@ -2394,6 +2400,11 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
       this._rollbackCoordinator = new RollbackCoordinator(this._idempotency ?? undefined);
     }
     return this._rollbackCoordinator;
+  }
+
+  /** The configured fiat-to-asset price oracle adapter, or null if none was provided. */
+  get priceOracle(): import("./types.js").PriceOracleAdapter | null {
+    return this.config.priceOracle ?? null;
   }
 
   /**

@@ -1716,3 +1716,37 @@ export class UnknownSplitError extends StellarSplitError {
 export function isUnknownSplitError(err: unknown): err is UnknownSplitError {
   return err instanceof UnknownSplitError;
 }
+
+// ---------------------------------------------------------------------------
+// Price oracle adapter errors
+// ---------------------------------------------------------------------------
+
+/** Thrown when a price oracle request is rate-limited by the upstream provider. */
+export class RateLimitError extends StellarSplitError {
+  /** Seconds the caller should wait before retrying, if known. */
+  readonly retryAfterSeconds?: number;
+
+  constructor(message: string, retryAfterSeconds?: number) {
+    super(message, "RATE_LIMITED", { retryAfterSeconds });
+    this.name = "RateLimitError";
+    this.retryAfterSeconds = retryAfterSeconds;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isRateLimitError(err: unknown): err is RateLimitError {
+  return err instanceof RateLimitError;
+}
+
+/** Thrown when a price oracle request fails for a reason other than rate limiting. */
+export class PriceOracleFetchError extends StellarSplitError {
+  constructor(message: string) {
+    super(message, "PRICE_ORACLE_FETCH_FAILED", undefined, message);
+    this.name = "PriceOracleFetchError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isPriceOracleFetchError(err: unknown): err is PriceOracleFetchError {
+  return err instanceof PriceOracleFetchError;
+}

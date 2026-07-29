@@ -195,6 +195,11 @@ export {
   // New: Split Rollback Coordinator
   UnknownSplitError,
   isUnknownSplitError,
+  // New: Price Oracle Adapter
+  RateLimitError,
+  isRateLimitError,
+  PriceOracleFetchError,
+  isPriceOracleFetchError,
 } from "./errors.js";
 
 // ---------------------------------------------------------------------------
@@ -719,6 +724,15 @@ export type {
   PaymentProgressTrackerOptions,
 } from "./paymentProgressTracker.js";
 export type { InvoicePaymentProgress, RecipientPaymentState } from "./types.js";
+
+// Fiat-to-asset price oracle adapter
+export { CoinGeckoPriceOracle } from "./priceOracle.js";
+export type { CoinGeckoPriceOracleOptions } from "./priceOracle.js";
+export { RateCache } from "./rateCache.js";
+export type { RateCacheConfig } from "./rateCache.js";
+export type { PriceOracleAdapter } from "./types.js";
+export { convertFiatToAsset } from "./currencyConverter.js";
+export type { FiatConversion, ConvertedAmount } from "./currencyConverter.js";
 
 export { Sep41Adapter, createSep41Adapter } from "./sep41Adapter.js";
 export type { Sep41TokenCapabilities } from "./sep41Adapter.js";

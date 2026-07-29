@@ -14,6 +14,7 @@ import {
   scValToNative,
 } from "@stellar/stellar-sdk";
 import { OraclePriceError, NoReturnValueError } from "./errors.js";
+import type { PriceOracleAdapter } from "./types.js";
 
 export interface ConvertedAmount {
   original: bigint;
@@ -109,5 +110,44 @@ export async function convertAmount(
     rate,
     fromToken,
     toDisplayCurrency,
+  };
+}
+
+/** Result of converting a fiat-denominated invoice amount to an on-chain asset. */
+export interface FiatConversion {
+  /** The requested fiat amount. */
+  fiatAmount: number;
+  /** The fiat currency code the amount was denominated in (e.g. "USD"). */
+  fiatCurrency: string;
+  /** The equivalent amount in the target asset. */
+  assetAmount: number;
+  /** The asset code the amount was converted to (e.g. "XLM"). */
+  assetCode: string;
+  /** The base/quote rate used for the conversion (units of `fiatCurrency` per 1 `assetCode`). */
+  rate: number;
+}
+
+/**
+ * Convert a fiat-denominated amount into its equivalent in `assetCode` using
+ * a pluggable {@link PriceOracleAdapter} (see priceOracle.ts for the default
+ * CoinGecko-backed implementation). Display-only, like the rest of this module.
+ */
+export async function convertFiatToAsset(
+  fiatAmount: number,
+  fiatCurrency: string,
+  assetCode: string,
+  oracle: PriceOracleAdapter,
+): Promise<FiatConversion> {
+  const rate = await oracle.getPrice(assetCode, fiatCurrency);
+  if (!(rate > 0)) {
+    throw new OraclePriceError(`Invalid oracle rate for ${assetCode}/${fiatCurrency}: ${rate}`);
+  }
+
+  return {
+    fiatAmount,
+    fiatCurrency,
+    assetAmount: fiatAmount / rate,
+    assetCode,
+    rate,
   };
 }
