@@ -778,6 +778,9 @@ export { PredicateBuilder } from "./predicateBuilder.js";
 export type { ClaimPredicate } from "./predicateBuilder.js";
 export type { PredicateConfig } from "./types.js";
 
+export { RateCache } from "./rateCache.js";
+export type { RateCacheEntry, RateOracleFn, RateCacheConfig } from "./rateCache.js";
+
 export { subscribeToInvoice } from "./sse.js";
 export type {
   SSEInvoiceEventType,
