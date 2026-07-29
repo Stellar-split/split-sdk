@@ -1,4 +1,5 @@
 import { rpc as SorobanRpc, Horizon } from "@stellar/stellar-sdk";
+import { inspectAccountFlags } from "./accountFlagsInspector.js";
 
 export type PayerReadinessReason =
   | "account_not_found"
@@ -155,6 +156,37 @@ export async function checkSponsorReserve(
     requiredStroops,
     shortfallStroops: sufficient ? 0n : requiredStroops - availableStroops,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Auth-Required Trustline Preflight Check
+// ---------------------------------------------------------------------------
+
+/** Result of checking whether an asset issuer requires trustline authorization. */
+export interface TrustlineAuthPreflightResult {
+  /** Whether the issuer has the AUTH_REQUIRED flag set. */
+  authRequired: boolean;
+  /** The asset issuer that was inspected. */
+  issuer: string;
+}
+
+/**
+ * Preflight check: determine whether an asset's issuer requires explicit
+ * trustline authorization (AUTH_REQUIRED) before a recipient can hold it.
+ *
+ * Used by {@link ./trustlineAuthHandler.js} to detect when an approval flow
+ * is needed before a payment can reach a recipient.
+ *
+ * @param server      - Horizon server instance.
+ * @param assetIssuer - Stellar address of the asset issuer.
+ * @returns Whether the issuer requires trustline authorization.
+ */
+export async function checkTrustlineAuthRequirement(
+  server: Horizon.Server,
+  assetIssuer: string,
+): Promise<TrustlineAuthPreflightResult> {
+  const flags = await inspectAccountFlags(server, assetIssuer);
+  return { authRequired: flags.authRequired, issuer: assetIssuer };
 }
 
 // ---------------------------------------------------------------------------

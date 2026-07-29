@@ -413,8 +413,17 @@ export type { RpcClient } from "./rpcClient.js";
 export { negotiateVersion, SDK_CONTRACT_VERSION } from "./version.js";
 export type { VersionInfo } from "./types.js";
 
-export { checkPayerReadiness, checkInvoiceExpiry, checkSponsorReserve } from "./preflightChecker.js";
-export type { PayerReadinessResult, PayerReadinessReason, InvoiceExpiryResult, InvoiceExpiryReason, SponsorReserveCheck } from "./preflightChecker.js";
+export { checkPayerReadiness, checkInvoiceExpiry, checkSponsorReserve, checkTrustlineAuthRequirement } from "./preflightChecker.js";
+export type { PayerReadinessResult, PayerReadinessReason, InvoiceExpiryResult, InvoiceExpiryReason, SponsorReserveCheck, TrustlineAuthPreflightResult } from "./preflightChecker.js";
+
+export { inspectAccountFlags } from "./accountFlagsInspector.js";
+export type { AccountFlagsResult } from "./accountFlagsInspector.js";
+
+export { detectProtocolVersion, supportsSetTrustLineFlags, SET_TRUST_LINE_FLAGS_PROTOCOL } from "./sorobanFeatureDetector.js";
+
+export { TrustlineAuthHandler } from "./trustlineAuthHandler.js";
+export type { TrustlineAuthHandlerEventMap, TrustlineAuthAsset } from "./trustlineAuthHandler.js";
+export type { TrustlineAuthRequest, TrustlineAuthStatus, TrustlineAuthOperationType } from "./types.js";
 
 export { getSuggestion } from "./errorSuggestions.js";
 
@@ -678,6 +687,15 @@ export type {
 export { ScheduledPaymentManager } from "./scheduler.js";
 export type { ScheduledPayment } from "./scheduler.js";
 
+export { InvoiceReminderScheduler, DEFAULT_GRACE_PERIOD_MS } from "./invoiceReminderScheduler.js";
+export type {
+  InvoiceReminderSchedulerEventMap,
+  InvoiceDueAtResolver,
+  InvoiceReminderSchedulerOptions,
+} from "./invoiceReminderScheduler.js";
+export { loadReminderSchedules, saveReminderSchedules } from "./snapshot.js";
+export type { ReminderSchedule, ReminderEvent, ReminderStatus } from "./types.js";
+
 export { compileFilter, applyFilter, FilterIndex } from "./invoiceFilter.js";
 export type { FilterCriteria, CompiledFilter } from "./invoiceFilter.js";
 
@@ -710,6 +728,21 @@ export type {
 } from "./trancheProgress.js";
 export { Sep41Adapter, createSep41Adapter } from "./sep41Adapter.js";
 export type { Sep41TokenCapabilities } from "./sep41Adapter.js";
+
+export { Sep31Initiator, resolveDirectPaymentServer } from "./sep/sep31Initiator.js";
+export type {
+  Sep31InitiatorEventMap,
+  Sep31Asset,
+  Sep31PartyInfo,
+  Sep31InitiateParams,
+} from "./sep/sep31Initiator.js";
+export type {
+  Sep31PaymentRecord,
+  Sep31Status,
+  Sep31StatusChangedEvent,
+  Sep31FieldSpec,
+  Sep31RequiredFields,
+} from "./types.js";
 
 export { HorizonFallbackReader } from "./horizonFallback.js";
 export type { NormalizedAccount, NormalizedBalance } from "./horizonFallback.js";
