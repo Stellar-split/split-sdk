@@ -708,6 +708,22 @@ export class Sep41AdapterError extends StellarSplitError {
   }
 }
 
+/** Thrown when a queued contract invocation exhausts its retry attempts. */
+export class ContractRetryExhaustedError extends StellarSplitError {
+  readonly attempts: number;
+
+  constructor(attempts: number, lastError: unknown) {
+    super(
+      `Contract invocation retry exhausted after ${attempts} attempts`,
+      "CONTRACT_RETRY_EXHAUSTED",
+      { attempts, lastError: lastError instanceof Error ? lastError.message : String(lastError) }
+    );
+    this.name = "ContractRetryExhaustedError";
+    this.attempts = attempts;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Thrown when a line item's asset has no oracle price available for normalisation. */
 export class UnsupportedLineItemAssetError extends StellarSplitError {
   readonly asset: string;
@@ -1105,6 +1121,10 @@ export function isInsufficientSignaturesError(err: unknown): err is Insufficient
 
 export function isUnsupportedLineItemAssetError(err: unknown): err is UnsupportedLineItemAssetError {
   return err instanceof UnsupportedLineItemAssetError;
+}
+
+export function isContractRetryExhaustedError(err: unknown): err is ContractRetryExhaustedError {
+  return err instanceof ContractRetryExhaustedError;
 }
 
 export function isCloneChainTooDeepError(err: unknown): err is CloneChainTooDeepError {

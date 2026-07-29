@@ -1452,6 +1452,30 @@ export interface NormalizedInvoiceTotal {
   items: NormalizedLineItem[];
 }
 
+// ---------------------------------------------------------------------------
+// Contract Retry Queue Types
+// ---------------------------------------------------------------------------
+
+/** A single Soroban contract invocation to be submitted (with retry on failure). */
+export interface ContractInvocation {
+  /** Contract address being invoked. */
+  contractId: string;
+  /** Contract method name. */
+  method: string;
+  /** Method arguments, in the order the contract expects them. */
+  args: unknown[];
+  /** Stellar address the invocation is submitted on behalf of. */
+  source: string;
+}
+
+/** Result of a successfully submitted contract invocation. */
+export interface ContractResult {
+  /** Hash of the submitted transaction. */
+  txHash: string;
+  /** Decoded return value from the contract call, if any. */
+  returnValue?: unknown;
+}
+
 /** Configuration for IPFS backend. */
 export interface IPFSConfig {
   /** Backend type: 'gateway' for HTTP gateway or 'kubo' for Kubo RPC API. */

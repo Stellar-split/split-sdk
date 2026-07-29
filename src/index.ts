@@ -591,6 +591,12 @@ export type {
 } from "./types.js";
 export { UnsupportedLineItemAssetError, isUnsupportedLineItemAssetError } from "./errors.js";
 
+// Contract invocation retry queue
+export { ContractRetryQueue } from "./contractRetryQueue.js";
+export type { ContractInvocationExecutor, ContractRetryQueueConfig } from "./contractRetryQueue.js";
+export type { ContractInvocation, ContractResult } from "./types.js";
+export { ContractRetryExhaustedError, isContractRetryExhaustedError } from "./errors.js";
+
 // Merkle proof functionality
 export { generateMerkleProof, verifyMerkleProof } from "./merkle.js";
 export type { MerkleProof } from "./merkle.js";
