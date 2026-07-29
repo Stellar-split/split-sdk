@@ -774,6 +774,10 @@ export type {
   ClaimableBalanceLifecycleEventMap,
 } from "./claimableBalanceFallback.js";
 
+export { PredicateBuilder } from "./predicateBuilder.js";
+export type { ClaimPredicate } from "./predicateBuilder.js";
+export type { PredicateConfig } from "./types.js";
+
 export { subscribeToInvoice } from "./sse.js";
 export type {
   SSEInvoiceEventType,

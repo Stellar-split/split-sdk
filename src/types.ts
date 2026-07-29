@@ -1351,6 +1351,14 @@ export interface DecodedLedgerEntry {
   };
 }
 
+/** Declarative description of a claimable-balance claim predicate, buildable via `PredicateBuilder.build()`. */
+export type PredicateConfig =
+  | { type: "unconditional" }
+  | { type: "absoluteWindow"; start: number; end: number }
+  | { type: "relativeWindow"; secondsFromNow: number }
+  | { type: "and"; predicates: [PredicateConfig, PredicateConfig] }
+  | { type: "or"; predicates: [PredicateConfig, PredicateConfig] };
+
 /** Union type of all decoded XDR variants. */
 export type DecodedXDR =
   | DecodedTransactionEnvelope
