@@ -1112,3 +1112,18 @@ export type {
   ScValPrimitive,
   ContractStorageExporterOptions,
 } from "./diagnostics/ContractStorageExporter.js";
+
+// ---------------------------------------------------------------------------
+// #528 — AccountDataManager: typed CRUD for account data entries
+// ---------------------------------------------------------------------------
+
+export { AccountDataManager } from "./accountDataManager.js";
+export type {
+  AccountDataManagerConfig,
+  TransactionResult as AccountDataTransactionResult,
+} from "./accountDataManager.js";
+export type { AccountDataEntry, AccountDataMap } from "./types.js";
+export {
+  DataEntryValidationError,
+  isDataEntryValidationError,
+} from "./errors.js";

@@ -1699,3 +1699,26 @@ export class ClassifiedHorizonError extends StellarSplitError {
 export function isClassifiedHorizonError(err: unknown): err is ClassifiedHorizonError {
   return err instanceof ClassifiedHorizonError;
 }
+
+// ---------------------------------------------------------------------------
+// Account Data Entry errors
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown when an account data entry key/value exceeds the 64-byte Stellar
+ * protocol limit, or when adding a new key would exceed the 64-entry cap.
+ */
+export class DataEntryValidationError extends StellarSplitError {
+  readonly reason: string;
+
+  constructor(reason: string, context?: Record<string, unknown>) {
+    super(`Account data entry validation failed: ${reason}`, "DATA_ENTRY_VALIDATION_ERROR", context);
+    this.name = "DataEntryValidationError";
+    this.reason = reason;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isDataEntryValidationError(err: unknown): err is DataEntryValidationError {
+  return err instanceof DataEntryValidationError;
+}

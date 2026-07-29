@@ -1647,3 +1647,18 @@ export interface CursorStore {
   /** Delete a saved cursor. */
   delete(key: string): Promise<void>;
 }
+
+// ---------------------------------------------------------------------------
+// Account Data Entry Types (Issue #528)
+// ---------------------------------------------------------------------------
+
+/** A single decoded key-value data entry stored on a Stellar account. */
+export interface AccountDataEntry {
+  /** Data entry key (max 64 bytes). */
+  key: string;
+  /** Decoded (UTF-8) value, or null when the entry has been cleared. */
+  value: string | null;
+}
+
+/** All data entries currently stored on an account, keyed by entry name. */
+export type AccountDataMap = Record<string, string>;
