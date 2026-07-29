@@ -1688,3 +1688,31 @@ export interface CursorStore {
   /** Delete a saved cursor. */
   delete(key: string): Promise<void>;
 }
+
+// ---------------------------------------------------------------------------
+// Payment Progress Tracker Types
+// ---------------------------------------------------------------------------
+
+/** Per-recipient payment state tracked by PaymentProgressTracker. */
+export interface RecipientPaymentState {
+  /** Stellar address of the recipient. */
+  accountId: string;
+  /** Last known lifecycle status for this recipient's payment leg. */
+  status: string;
+  /** Amount settled to this recipient so far, in stroops. */
+  settledAmount: bigint;
+  /** Unix epoch ms when this state was last updated. */
+  lastUpdatedAt: number;
+}
+
+/** Aggregated payment progress across all recipients of an invoice. */
+export interface InvoicePaymentProgress {
+  /** Invoice this progress report describes. */
+  invoiceId: string;
+  /** Settled legs divided by total legs, expressed as 0-100. */
+  percentComplete: number;
+  /** Current state of every tracked recipient leg. */
+  recipientStates: RecipientPaymentState[];
+  /** Present when the invoice defines a tranche schedule (see trancheProgress.ts). */
+  trancheProgress?: import("./trancheProgress.js").TrancheProgressReport;
+}

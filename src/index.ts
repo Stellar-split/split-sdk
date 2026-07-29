@@ -711,6 +711,15 @@ export type {
   TranchedInvoice,
   TrancheStatus,
 } from "./trancheProgress.js";
+
+// Invoice payment progress tracking
+export { PaymentProgressTracker } from "./paymentProgressTracker.js";
+export type {
+  PaymentProgressEventMap,
+  PaymentProgressTrackerOptions,
+} from "./paymentProgressTracker.js";
+export type { InvoicePaymentProgress, RecipientPaymentState } from "./types.js";
+
 export { Sep41Adapter, createSep41Adapter } from "./sep41Adapter.js";
 export type { Sep41TokenCapabilities } from "./sep41Adapter.js";
 
