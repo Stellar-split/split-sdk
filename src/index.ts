@@ -1112,3 +1112,43 @@ export type {
   ScValPrimitive,
   ContractStorageExporterOptions,
 } from "./diagnostics/ContractStorageExporter.js";
+
+// ---------------------------------------------------------------------------
+// #582 — DeployPipeline: Soroban WASM upload + contract instantiation
+// ---------------------------------------------------------------------------
+
+export { DeployPipeline } from "./soroban/deploy.js";
+export type { DeployPipelineOptions } from "./soroban/deploy.js";
+export type { DeployOptions, DeployResult } from "./types.js";
+export { DeploySequenceError } from "./errors.js";
+
+// ---------------------------------------------------------------------------
+// #583 — WebhookAgent: JWT/HMAC-signed webhook delivery
+// ---------------------------------------------------------------------------
+
+export { WebhookAgent, WEBHOOK_SIGNATURE_HEADER } from "./webhooks/delivery.js";
+export type { WebhookAgentOptions, WebhookDeliveryInput } from "./webhooks/delivery.js";
+// Aliased: `WebhookPayload` / `verifyWebhookSignature` are already exported by
+// ./webhookMiddleware.js for the unrelated invoice-event webhook system.
+export { verifyWebhookSignature as verifyWebhookDeliverySignature } from "./webhooks/verify.js";
+export type { WebhookPayload as WebhookDeliveryPayload } from "./types.js";
+export { WebhookExhaustedError } from "./errors.js";
+
+// ---------------------------------------------------------------------------
+// #584 — FeeTrendAnalyzer: rolling Horizon fee_stats percentile tracker
+// ---------------------------------------------------------------------------
+
+export { FeeTrendAnalyzer } from "./fees/trend.js";
+export type { FeePercentile, WindowCapacity } from "./fees/trend.js";
+export type { FeeTrendOptions } from "./types.js";
+export { CircularBuffer } from "./utils/circularBuffer.js";
+export { percentile } from "./utils/stats.js";
+
+// ---------------------------------------------------------------------------
+// #585 — Sep12Client: SEP-12 KYC field submission
+// ---------------------------------------------------------------------------
+
+export { Sep12Client } from "./sep/sep12.js";
+export type { Sep12ClientOptions, Sep12PollOptions } from "./sep/sep12.js";
+export type { KycFields, KycDocument, KycStatus } from "./types.js";
+export { KycNeedsInfoError } from "./types.js";

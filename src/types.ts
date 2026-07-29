@@ -1647,3 +1647,101 @@ export interface CursorStore {
   /** Delete a saved cursor. */
   delete(key: string): Promise<void>;
 }
+
+// ---------------------------------------------------------------------------
+// #582 — Soroban DeployPipeline: WASM upload + contract instantiation
+// ---------------------------------------------------------------------------
+
+/** Inputs for a full upload-then-instantiate deployment via {@link DeployPipeline}. */
+export interface DeployOptions {
+  /** Raw Soroban contract WASM bytecode to upload. */
+  wasmBytes: Buffer;
+  /**
+   * 32-byte salt used to derive the deterministic contract address.
+   * A random salt is generated when omitted.
+   */
+  salt?: Buffer;
+}
+
+/** Result of a completed {@link DeployPipeline} deployment. */
+export interface DeployResult {
+  /** Hex-encoded hash of the uploaded WASM bytecode. */
+  wasmHash: string;
+  /** Address (C...) of the instantiated contract. */
+  contractId: string;
+}
+
+// ---------------------------------------------------------------------------
+// #583 — WebhookAgent: JWT/HMAC-signed webhook delivery
+// ---------------------------------------------------------------------------
+
+/** Structured envelope delivered to webhook consumers. */
+export interface WebhookPayload<T = unknown> {
+  /** Unique identifier (UUID v4) for this delivery, for consumer-side dedup. */
+  event_id: string;
+  /** Machine-readable event type, e.g. "invoice.payment.completed". */
+  event_type: string;
+  /** ISO-8601 timestamp of when the payload was generated. */
+  timestamp: string;
+  /** Event-specific data. */
+  data: T;
+}
+
+// ---------------------------------------------------------------------------
+// #584 — FeeTrendAnalyzer: rolling Horizon fee_stats percentile tracker
+// ---------------------------------------------------------------------------
+
+/** Configuration for {@link FeeTrendAnalyzer}. */
+export interface FeeTrendOptions {
+  /** Horizon server base URL, e.g. "https://horizon.stellar.org". */
+  horizonUrl: string;
+  /** Rolling window capacity (min 5, max 100). Default: 20. */
+  windowSize?: number;
+  /** Sample time-to-live in milliseconds before eviction. Default: 5 minutes. */
+  ttlMs?: number;
+}
+
+// ---------------------------------------------------------------------------
+// #585 — Sep12Client: SEP-12 KYC field submission
+// ---------------------------------------------------------------------------
+
+/** Text KYC fields submitted via SEP-12 `PUT /customer`. */
+export type KycFields = Record<string, string>;
+
+/** A single binary KYC document attachment (e.g. photo ID). */
+export interface KycDocument {
+  /** SEP-9 field name, e.g. "photo_id_front". */
+  field: string;
+  /** Raw file bytes. */
+  content: Buffer | Blob;
+  /** File name sent in the multipart part. */
+  filename: string;
+  /** MIME type, e.g. "image/jpeg". */
+  contentType: string;
+}
+
+/** Discriminated union of SEP-12 customer statuses. */
+export type KycStatus =
+  | { status: "ACCEPTED"; id: string }
+  | { status: "PROCESSING"; id: string; message?: string }
+  | { status: "NEEDS_INFO"; id: string; missingFields: string[]; message?: string }
+  | { status: "REJECTED"; id: string; message?: string };
+
+/** Thrown when an anchor reports SEP-12 status `NEEDS_INFO` or `REJECTED`. */
+export class KycNeedsInfoError extends StellarSplitError {
+  readonly status: KycStatus;
+  readonly missingFields: string[];
+
+  constructor(status: KycStatus) {
+    const missingFields = status.status === "NEEDS_INFO" ? status.missingFields : [];
+    super(
+      `SEP-12 customer status "${status.status}" requires attention`,
+      "KYC_NEEDS_INFO",
+      { status, missingFields }
+    );
+    this.name = "KycNeedsInfoError";
+    this.status = status;
+    this.missingFields = missingFields;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
