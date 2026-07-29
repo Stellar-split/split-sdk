@@ -1686,3 +1686,27 @@ export interface SorobanFeatureFlags {
   /** Unix timestamp (ms) when these flags were detected. */
   detectedAt: number;
 }
+
+// ---------------------------------------------------------------------------
+// Per-Split Audit Log Types (Issue #531)
+// ---------------------------------------------------------------------------
+
+/** A granular audit record for a single settled leg of a multi-recipient split payment. */
+export interface SplitAuditEntry {
+  /** Invoice the split payment belongs to. */
+  invoiceId: string;
+  /** Zero-based index of this leg within the split. */
+  legIndex: number;
+  /** Stellar address of the recipient for this leg. */
+  recipientId: string;
+  /** Asset code paid out for this leg. */
+  assetCode: string;
+  /** Amount paid to this recipient, in stroops. */
+  amount: bigint;
+  /** Operation ID of the settlement operation. */
+  operationId: string;
+  /** Ledger sequence number at which the leg settled. */
+  ledgerSequence: number;
+  /** Unix timestamp (seconds) when the leg settled. */
+  settledAt: number;
+}

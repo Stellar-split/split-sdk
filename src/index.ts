@@ -1155,3 +1155,15 @@ export {
   loadDedupTokens,
 } from "./snapshot.js";
 export type { DedupTokenStore } from "./snapshot.js";
+
+// ---------------------------------------------------------------------------
+// #531 — Per-Split Audit Log Emitter
+// ---------------------------------------------------------------------------
+
+export { AuditLogger } from "./auditLogger.js";
+export type { AuditEntry } from "./auditLogger.js";
+export type { SplitAuditEntry } from "./types.js";
+export {
+  exportSplitAuditTrail,
+  SPLIT_AUDIT_CSV_COLUMNS,
+} from "./complianceExporter.js";
