@@ -1351,6 +1351,20 @@ export interface DecodedLedgerEntry {
   };
 }
 
+/** Decoded AUTH_* flags for a Stellar account, with operation-compatibility checks. */
+export interface AccountFlagSet {
+  /** AUTH_REQUIRED — the issuer must approve an account before it can hold this asset. */
+  authRequired: boolean;
+  /** AUTH_REVOCABLE — the issuer can revoke an account's authorization to hold this asset. */
+  authRevocable: boolean;
+  /** AUTH_IMMUTABLE — this account's flags can never be changed again. */
+  authImmutable: boolean;
+  /** AUTH_CLAWBACK_ENABLED — the issuer can claw back this asset from holders. */
+  authClawbackEnabled: boolean;
+  /** Returns `false` when this account's flags make `operation` impossible without prior authorization. */
+  isCompatibleWith(operation: string): boolean;
+}
+
 /** Declarative description of a claimable-balance claim predicate, buildable via `PredicateBuilder.build()`. */
 export type PredicateConfig =
   | { type: "unconditional" }

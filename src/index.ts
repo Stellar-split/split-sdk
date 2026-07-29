@@ -414,8 +414,11 @@ export type { RpcClient } from "./rpcClient.js";
 export { negotiateVersion, SDK_CONTRACT_VERSION } from "./version.js";
 export type { VersionInfo } from "./types.js";
 
-export { checkPayerReadiness, checkInvoiceExpiry, checkSponsorReserve } from "./preflightChecker.js";
-export type { PayerReadinessResult, PayerReadinessReason, InvoiceExpiryResult, InvoiceExpiryReason, SponsorReserveCheck } from "./preflightChecker.js";
+export { checkPayerReadiness, checkInvoiceExpiry, checkSponsorReserve, checkRecipientFlags } from "./preflightChecker.js";
+export type { PayerReadinessResult, PayerReadinessReason, InvoiceExpiryResult, InvoiceExpiryReason, SponsorReserveCheck, RecipientFlagsCheck } from "./preflightChecker.js";
+
+export { inspectFlags, hasAnyRestrictiveFlag } from "./accountFlagsInspector.js";
+export type { AccountFlagSet } from "./types.js";
 
 export { getSuggestion } from "./errorSuggestions.js";
 
