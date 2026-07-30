@@ -1,4 +1,6 @@
 import { rpc as SorobanRpc, Horizon } from "@stellar/stellar-sdk";
+import { inspectFlags } from "./accountFlagsInspector.js";
+import type { AccountFlagSet } from "./types.js";
 
 export type PayerReadinessReason =
   | "account_not_found"
@@ -158,6 +160,36 @@ export async function checkSponsorReserve(
 }
 
 // ---------------------------------------------------------------------------
+// Recipient Flags Preflight Check
+// ---------------------------------------------------------------------------
+
+/** Result of checking a recipient's account flags against an intended operation. */
+export interface RecipientFlagsCheck {
+  /** `false` when the recipient's flags make `operation` impossible without prior authorization. */
+  compatible: boolean;
+  /** The recipient's decoded AUTH_* flags. */
+  flags: AccountFlagSet;
+}
+
+/**
+ * Preflight check: inspect a recipient's AUTH_* flags and flag when they are
+ * incompatible with the intended operation (e.g. AUTH_REQUIRED blocking a
+ * trustline creation or payment without prior issuer authorization).
+ *
+ * @param accountId  - Stellar address of the recipient to inspect.
+ * @param horizonUrl - Horizon API base URL used to load the account.
+ * @param operation  - The operation the caller intends to perform (e.g. "payment").
+ */
+export async function checkRecipientFlags(
+  accountId: string,
+  horizonUrl: string,
+  operation: string,
+): Promise<RecipientFlagsCheck> {
+  const flags = await inspectFlags(accountId, horizonUrl);
+  return { compatible: flags.isCompatibleWith(operation), flags };
+}
+
+// ---------------------------------------------------------------------------
 // Payer Readiness Check (existing)
 // ---------------------------------------------------------------------------
 
@@ -226,4 +258,50 @@ export async function checkPayerReadiness(
   }
 
   return { ready: true };
+}
+
+// ---------------------------------------------------------------------------
+// Account Freeze / Lock Preflight Check
+// ---------------------------------------------------------------------------
+
+/** Per-recipient lock state report, keyed by recipient address. */
+export interface RecipientLockCheckResult {
+  allUnlocked: boolean;
+  states: Record<string, AccountLockState>;
+}
+
+/**
+ * Pre-submission check: verify none of the payment recipients are frozen or
+ * permanently locked out of authorization for `asset`.
+ *
+ * Calls {@link detectLockState} for each recipient. Throws on the first
+ * frozen or locked account found so callers fail fast before building a
+ * transaction that would otherwise be rejected on-chain.
+ *
+ * @param server     - Horizon server instance.
+ * @param recipients - Recipient addresses to check.
+ * @param asset      - Asset being sent.
+ *
+ * @throws {AccountFrozenError} When a recipient's trustline has been frozen by the issuer.
+ * @throws {AccountLockedError} When a recipient can never be authorized again for the asset.
+ */
+export async function checkRecipientsUnlocked(
+  server: Horizon.Server,
+  recipients: string[],
+  asset: Asset,
+): Promise<RecipientLockCheckResult> {
+  const states: Record<string, AccountLockState> = {};
+
+  for (const recipient of recipients) {
+    const state = await detectLockState(server, recipient, asset);
+    states[recipient] = state;
+    if (state.isFrozen) {
+      throw new AccountFrozenError(recipient, asset.getCode());
+    }
+    if (state.isLocked) {
+      throw new AccountLockedError(recipient, asset.getCode());
+    }
+  }
+
+  return { allUnlocked: true, states };
 }

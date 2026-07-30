@@ -379,6 +379,51 @@ export class SimulationFailedError extends StellarSplitError {
   }
 }
 
+/**
+ * Thrown by {@link DeployPipeline} when a WASM upload or contract
+ * instantiation step keeps failing with `tx_bad_seq` after retrying with
+ * a freshly-fetched sequence number.
+ */
+export class DeploySequenceError extends StellarSplitError {
+  readonly step: string;
+  readonly attempts: number;
+
+  constructor(step: string, attempts: number) {
+    super(
+      `Deploy step "${step}" failed after ${attempts} sequence retries due to tx_bad_seq`,
+      "DEPLOY_SEQUENCE_ERROR",
+      { step, attempts }
+    );
+    this.name = "DeploySequenceError";
+    this.step = step;
+    this.attempts = attempts;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * Thrown by {@link WebhookAgent.deliver} when a webhook delivery has
+ * exhausted its configured retry budget without a successful response.
+ */
+export class WebhookExhaustedError extends StellarSplitError {
+  readonly url: string;
+  readonly attempts: number;
+  readonly lastError?: string;
+
+  constructor(url: string, attempts: number, lastError?: string) {
+    super(
+      `Webhook delivery to ${url} failed after ${attempts} attempts${lastError ? `: ${lastError}` : ""}`,
+      "WEBHOOK_EXHAUSTED",
+      { url, attempts, lastError }
+    );
+    this.name = "WebhookExhaustedError";
+    this.url = url;
+    this.attempts = attempts;
+    this.lastError = lastError;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Thrown when no return value is received from a contract call. */
 export class NoReturnValueError extends StellarSplitError {
   readonly method: string;
@@ -704,6 +749,38 @@ export class Sep41AdapterError extends StellarSplitError {
   constructor(message: string) {
     super(message, "SEP41_ADAPTER_ERROR", undefined, message);
     this.name = "Sep41AdapterError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a queued contract invocation exhausts its retry attempts. */
+export class ContractRetryExhaustedError extends StellarSplitError {
+  readonly attempts: number;
+
+  constructor(attempts: number, lastError: unknown) {
+    super(
+      `Contract invocation retry exhausted after ${attempts} attempts`,
+      "CONTRACT_RETRY_EXHAUSTED",
+      { attempts, lastError: lastError instanceof Error ? lastError.message : String(lastError) }
+    );
+    this.name = "ContractRetryExhaustedError";
+    this.attempts = attempts;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a line item's asset has no oracle price available for normalisation. */
+export class UnsupportedLineItemAssetError extends StellarSplitError {
+  readonly asset: string;
+
+  constructor(asset: string) {
+    super(
+      `No oracle price available for line item asset: ${asset}`,
+      "UNSUPPORTED_LINE_ITEM_ASSET",
+      { asset }
+    );
+    this.name = "UnsupportedLineItemAssetError";
+    this.asset = asset;
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
@@ -1085,6 +1162,14 @@ export function isUnknownNetworkError(err: unknown): err is UnknownNetworkError 
 
 export function isInsufficientSignaturesError(err: unknown): err is InsufficientSignaturesError {
   return err instanceof InsufficientSignaturesError;
+}
+
+export function isUnsupportedLineItemAssetError(err: unknown): err is UnsupportedLineItemAssetError {
+  return err instanceof UnsupportedLineItemAssetError;
+}
+
+export function isContractRetryExhaustedError(err: unknown): err is ContractRetryExhaustedError {
+  return err instanceof ContractRetryExhaustedError;
 }
 
 export function isCloneChainTooDeepError(err: unknown): err is CloneChainTooDeepError {
@@ -1701,43 +1786,24 @@ export function isClassifiedHorizonError(err: unknown): err is ClassifiedHorizon
 }
 
 // ---------------------------------------------------------------------------
-// Token-Gate Errors (#548)
+// Account Data Entry errors
 // ---------------------------------------------------------------------------
 
 /**
- * Thrown when a caller's token balance is below the minimum required by a
- * {@link TokenGatePolicy}.
+ * Thrown when an account data entry key/value exceeds the 64-byte Stellar
+ * protocol limit, or when adding a new key would exceed the 64-entry cap.
  */
-export class TokenGateAccessDeniedError extends StellarSplitError {
-  readonly callerAccountId: string;
-  readonly assetCode: string;
-  readonly required: string;
-  readonly actual: string;
+export class DataEntryValidationError extends StellarSplitError {
+  readonly reason: string;
 
-  constructor(
-    callerAccountId: string,
-    assetCode: string,
-    required: string,
-    actual: string,
-    raw?: string,
-  ) {
-    super(
-      `Token-gate access denied for ${callerAccountId}: requires ${required} ${assetCode}, has ${actual}`,
-      "TOKEN_GATE_ACCESS_DENIED",
-      { callerAccountId, assetCode, required, actual },
-      raw,
-    );
-    this.name = "TokenGateAccessDeniedError";
-    this.callerAccountId = callerAccountId;
-    this.assetCode = assetCode;
-    this.required = required;
-    this.actual = actual;
+  constructor(reason: string, context?: Record<string, unknown>) {
+    super(`Account data entry validation failed: ${reason}`, "DATA_ENTRY_VALIDATION_ERROR", context);
+    this.name = "DataEntryValidationError";
+    this.reason = reason;
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-export function isTokenGateAccessDeniedError(
-  err: unknown,
-): err is TokenGateAccessDeniedError {
-  return err instanceof TokenGateAccessDeniedError;
+export function isDataEntryValidationError(err: unknown): err is DataEntryValidationError {
+  return err instanceof DataEntryValidationError;
 }
