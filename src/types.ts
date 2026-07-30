@@ -2018,3 +2018,58 @@ export interface SplitAuditEntry {
   /** Unix timestamp (seconds) when the leg settled. */
   settledAt: number;
 }
+
+// ---------------------------------------------------------------------------
+// Split Rounding Auditor Types (Issue #590)
+// ---------------------------------------------------------------------------
+
+/**
+ * One input line in a split: a recipient and their ratio of the total.
+ *
+ * `ratio` is a floating-point proportion in the range (0, 1]. All ratios in
+ * a split should sum to 1.0, but the auditor tolerates small deviations and
+ * corrects them using the largest-remainder method.
+ */
+export interface SplitLine {
+  /** Unique identifier for this recipient (e.g. Stellar address). */
+  recipientId: string;
+  /**
+   * Fraction of the invoice total owed to this recipient (0 < ratio ≤ 1).
+   * The sum of all ratios in a split should be 1.0.
+   */
+  ratio: number;
+}
+
+/**
+ * A single stroop-level adjustment applied by the rounding auditor.
+ * Recorded for downstream audit logging via the per-split audit log.
+ */
+export interface RoundingAdjustment {
+  /** Recipient whose computed amount was adjusted. */
+  recipientId: string;
+  /**
+   * Signed stroop delta applied to the raw floor amount.
+   * Positive means one stroop was added; negative means one was removed.
+   */
+  delta: bigint;
+}
+
+/**
+ * Result returned by `auditSplitRounding`.
+ *
+ * Guarantees that `amounts` values sum exactly to the original `total`.
+ */
+export interface AuditedSplitResult {
+  /**
+   * Final per-recipient amounts in stroops, keyed by recipientId.
+   * These are guaranteed to sum exactly to `total`.
+   */
+  amounts: Record<string, bigint>;
+  /**
+   * Adjustments applied by the largest-remainder correction.
+   * Empty when the raw floor amounts already sum to `total`.
+   */
+  adjustments: RoundingAdjustment[];
+  /** The original invoice total, in stroops. */
+  total: bigint;
+}
