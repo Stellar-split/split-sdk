@@ -1,7 +1,7 @@
 import { createHash } from "crypto";
-import type { FinalityStatus, Invoice, Payment } from "./types.js";
-import type { FinalityChecker } from "./finalityChecker.js";
+import type { DecodedTransactionResult, Invoice, Payment } from "./types.js";
 import { PayerAddressRequiredError } from "./errors.js";
+import { decodeTransactionResult } from "./txResultDecoder.js";
 
 /** A verified payment receipt compiled from on-chain invoice data. */
 export interface PaymentReceipt {
@@ -19,10 +19,20 @@ export interface PaymentReceipt {
   generatedAt: number;
   /** Ledger timestamp or sequence used in the proof hash calculation. */
   ledgerTimestamp: number;
-  /** Finality status for the submitted payment transaction, when checked. */
-  finality?: FinalityStatus;
+  /** Decoded submission result, when a `resultXdr` was supplied during receipt generation. */
+  decodedResult?: DecodedTransactionResult;
   /** Convert receipt to a JSON-serializable object (with bigints represented as strings). */
   toJSON(): PaymentReceiptJSON;
+}
+
+/** Options controlling optional receipt enrichment. */
+export interface ReceiptConfig {
+  /** When true (and `server`/`txHash` are supplied), attach an effect summary to the receipt. */
+  includeEffects?: boolean;
+  /** Horizon server used to fetch effects when `includeEffects` is set. */
+  server?: Horizon.Server;
+  /** Hash of the transaction to aggregate effects for. */
+  txHash?: string;
 }
 
 /** JSON-serializable representation of a PaymentReceipt. */
@@ -40,7 +50,7 @@ export interface PaymentReceiptJSON {
   proofHash: string;
   generatedAt: number;
   ledgerTimestamp: number;
-  finality?: FinalityStatus;
+  decodedResult?: DecodedTransactionResult;
 }
 
 /** Interface for any client capable of fetching an invoice by ID. */
@@ -54,11 +64,15 @@ export interface InvoiceFetcher {
  *
  * @param invoice - The on-chain invoice object.
  * @param payerAddress - The Stellar address of the payer.
+ * @param resultXdr - Optional base64-encoded `TransactionResult` XDR from the
+ *                    payment submission; when provided, it is decoded and
+ *                    attached as `decodedResult`.
  * @returns A structured payment receipt with SHA-256 proof hash.
  */
 export function compilePaymentReceipt(
   invoice: Invoice,
-  payerAddress: string
+  payerAddress: string,
+  resultXdr?: string
 ): PaymentReceipt {
   const payerPayments = (invoice.payments || []).filter(
     (p) => p.payer === payerAddress
@@ -86,6 +100,15 @@ export function compilePaymentReceipt(
   const proofHash = createHash("sha256").update(payload).digest("hex");
   const generatedAt = Date.now();
 
+  let decodedResult: DecodedTransactionResult | undefined;
+  if (resultXdr) {
+    try {
+      decodedResult = decodeTransactionResult(resultXdr);
+    } catch {
+      // Best-effort: an unparseable resultXdr should not fail receipt generation.
+    }
+  }
+
   return _buildReceiptObject({
     invoiceId: invoice.id,
     payer: payerAddress,
@@ -94,6 +117,7 @@ export function compilePaymentReceipt(
     proofHash,
     generatedAt,
     ledgerTimestamp,
+    decodedResult,
   });
 }
 
@@ -104,22 +128,27 @@ export function compilePaymentReceipt(
  * @param source - Either a client with `getInvoice` or an `Invoice` object.
  * @param invoiceIdOrPayer - The invoice ID (if passing a client) or payer address (if passing an Invoice).
  * @param payerAddress - The payer address (if passing a client).
+ * @param resultXdr - Optional base64-encoded `TransactionResult` XDR from the
+ *                    payment submission; when provided, it is decoded and
+ *                    attached as `decodedResult`.
  * @returns Promise resolving to the PaymentReceipt.
  */
 export async function generatePaymentReceipt(
   source: InvoiceFetcher | Invoice,
   invoiceIdOrPayer: string,
-  payerAddress?: string
+  payerAddress?: string,
+  resultXdr?: string
 ): Promise<PaymentReceipt> {
+  let receipt: PaymentReceipt;
   if ("getInvoice" in source && typeof source.getInvoice === "function") {
     if (!payerAddress) {
       throw new PayerAddressRequiredError();
     }
     const invoice = await source.getInvoice(invoiceIdOrPayer);
-    return compilePaymentReceipt(invoice, payerAddress);
+    return compilePaymentReceipt(invoice, payerAddress, resultXdr);
   }
 
-  return compilePaymentReceipt(source as Invoice, invoiceIdOrPayer);
+  return compilePaymentReceipt(source as Invoice, invoiceIdOrPayer, resultXdr);
 }
 
 /**
@@ -156,6 +185,7 @@ export function deserializePaymentReceipt(json: string): PaymentReceipt {
     proofHash: data.proofHash,
     generatedAt: data.generatedAt,
     ledgerTimestamp: data.ledgerTimestamp,
+    decodedResult: data.decodedResult,
   });
 }
 
@@ -186,7 +216,7 @@ function _buildReceiptObject(data: {
   proofHash: string;
   generatedAt: number;
   ledgerTimestamp: number;
-  finality?: FinalityStatus;
+  decodedResult?: DecodedTransactionResult;
 }): PaymentReceipt {
   return {
     invoiceId: data.invoiceId,
@@ -196,7 +226,7 @@ function _buildReceiptObject(data: {
     proofHash: data.proofHash,
     generatedAt: data.generatedAt,
     ledgerTimestamp: data.ledgerTimestamp,
-    finality: data.finality,
+    decodedResult: data.decodedResult,
     toJSON(): PaymentReceiptJSON {
       return {
         invoiceId: this.invoiceId,
@@ -209,7 +239,7 @@ function _buildReceiptObject(data: {
         proofHash: this.proofHash,
         generatedAt: this.generatedAt,
         ledgerTimestamp: this.ledgerTimestamp,
-        finality: this.finality,
+        decodedResult: this.decodedResult,
       };
     },
   };

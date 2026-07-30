@@ -708,6 +708,38 @@ export class Sep41AdapterError extends StellarSplitError {
   }
 }
 
+/** Thrown when a queued contract invocation exhausts its retry attempts. */
+export class ContractRetryExhaustedError extends StellarSplitError {
+  readonly attempts: number;
+
+  constructor(attempts: number, lastError: unknown) {
+    super(
+      `Contract invocation retry exhausted after ${attempts} attempts`,
+      "CONTRACT_RETRY_EXHAUSTED",
+      { attempts, lastError: lastError instanceof Error ? lastError.message : String(lastError) }
+    );
+    this.name = "ContractRetryExhaustedError";
+    this.attempts = attempts;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a line item's asset has no oracle price available for normalisation. */
+export class UnsupportedLineItemAssetError extends StellarSplitError {
+  readonly asset: string;
+
+  constructor(asset: string) {
+    super(
+      `No oracle price available for line item asset: ${asset}`,
+      "UNSUPPORTED_LINE_ITEM_ASSET",
+      { asset }
+    );
+    this.name = "UnsupportedLineItemAssetError";
+    this.asset = asset;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Thrown when tranche status check fails. */
 export class TrancheProgressError extends StellarSplitError {
   constructor(message: string) {
@@ -1085,6 +1117,14 @@ export function isUnknownNetworkError(err: unknown): err is UnknownNetworkError 
 
 export function isInsufficientSignaturesError(err: unknown): err is InsufficientSignaturesError {
   return err instanceof InsufficientSignaturesError;
+}
+
+export function isUnsupportedLineItemAssetError(err: unknown): err is UnsupportedLineItemAssetError {
+  return err instanceof UnsupportedLineItemAssetError;
+}
+
+export function isContractRetryExhaustedError(err: unknown): err is ContractRetryExhaustedError {
+  return err instanceof ContractRetryExhaustedError;
 }
 
 export function isCloneChainTooDeepError(err: unknown): err is CloneChainTooDeepError {
@@ -1700,92 +1740,25 @@ export function isClassifiedHorizonError(err: unknown): err is ClassifiedHorizon
   return err instanceof ClassifiedHorizonError;
 }
 
-export class FinalityTimeoutError extends StellarSplitError {
-  constructor(txHash: string, maxWaitMs: number) {
-    super(
-      `Transaction ${txHash} did not reach finality within ${maxWaitMs}ms`,
-      "FINALITY_TIMEOUT",
-      { txHash, maxWaitMs },
-    );
-    this.name = "FinalityTimeoutError";
+// ---------------------------------------------------------------------------
+// Account Data Entry errors
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown when an account data entry key/value exceeds the 64-byte Stellar
+ * protocol limit, or when adding a new key would exceed the 64-entry cap.
+ */
+export class DataEntryValidationError extends StellarSplitError {
+  readonly reason: string;
+
+  constructor(reason: string, context?: Record<string, unknown>) {
+    super(`Account data entry validation failed: ${reason}`, "DATA_ENTRY_VALIDATION_ERROR", context);
+    this.name = "DataEntryValidationError";
+    this.reason = reason;
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-export function isFinalityTimeoutError(err: unknown): err is FinalityTimeoutError {
-  return err instanceof FinalityTimeoutError;
-}
-
-export class ApprovalTimeoutError extends StellarSplitError {
-  constructor(timeoutMs: number) {
-    super(
-      `Approval workflow did not complete within ${timeoutMs}ms`,
-      "APPROVAL_TIMEOUT",
-      { timeoutMs },
-    );
-    this.name = "ApprovalTimeoutError";
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-export function isApprovalTimeoutError(err: unknown): err is ApprovalTimeoutError {
-  return err instanceof ApprovalTimeoutError;
-}
-
-export class PaymentExpiredError extends StellarSplitError {
-  constructor(invoiceId: string, expiresAt: number) {
-    super(
-      `Payment for invoice ${invoiceId} expired at ${expiresAt}`,
-      "PAYMENT_EXPIRED",
-      { invoiceId, expiresAt },
-    );
-    this.name = "PaymentExpiredError";
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-export class InsufficientSponsorReserveError extends StellarSplitError {
-  constructor(
-    sponsorAddress: string,
-    availableStroops: bigint,
-    requiredStroops: bigint,
-    newEntryCount: number,
-  ) {
-    super(
-      `Sponsor ${sponsorAddress} has insufficient reserve for ${newEntryCount} entries`,
-      "INSUFFICIENT_SPONSOR_RESERVE",
-      {
-        sponsorAddress,
-        availableStroops: availableStroops.toString(),
-        requiredStroops: requiredStroops.toString(),
-        newEntryCount,
-      },
-    );
-    this.name = "InsufficientSponsorReserveError";
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-export class InvalidTransactionTypeError extends StellarSplitError {
-  constructor(typeName: string) {
-    super(
-      `Invalid transaction type: ${typeName}`,
-      "INVALID_TRANSACTION_TYPE",
-      { typeName },
-    );
-    this.name = "InvalidTransactionTypeError";
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-export class InvoiceIntegrityError extends StellarSplitError {
-  constructor(invoiceId: string, expectedHash?: string, computedHash?: string) {
-    super(
-      `Invoice integrity check failed: ${invoiceId}`,
-      "INVOICE_INTEGRITY",
-      { invoiceId, expectedHash, computedHash },
-    );
-    this.name = "InvoiceIntegrityError";
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
+export function isDataEntryValidationError(err: unknown): err is DataEntryValidationError {
+  return err instanceof DataEntryValidationError;
 }

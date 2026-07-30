@@ -1296,6 +1296,16 @@ export interface DecodedOperation {
   body: Record<string, unknown>;
 }
 
+/** A single decoded per-operation result within a DecodedTransactionResult. */
+export interface DecodedOperationResult {
+  /** OperationResultCode switch name (e.g. "opInner", "opBadAuth", "opNoAccount"). */
+  code: string;
+  /** Operation type name when `code === "opInner"` (e.g. "payment", "createClaimableBalance"). */
+  operationType?: string;
+  /** The operation-specific result code (e.g. "paymentSuccess", "paymentUnderfunded"). */
+  resultCode?: string;
+}
+
 /** Decoded TransactionResult as a structured JSON-safe object. */
 export interface DecodedTransactionResult {
   type: "TransactionResult";
@@ -1303,6 +1313,13 @@ export interface DecodedTransactionResult {
   result: {
     code: string;
     innerResult?: Record<string, unknown>;
+  };
+  /** Per-operation results, in the same order as the submitted transaction's operations. */
+  operationResults?: DecodedOperationResult[];
+  /** Present only for fee-bump transactions: the outer fee-bump result plus the nested inner transaction result. */
+  feeBump?: {
+    outer: { feeCharged: string; code: string };
+    inner: DecodedTransactionResult;
   };
 }
 
@@ -1333,6 +1350,28 @@ export interface DecodedLedgerEntry {
     [key: string]: unknown;
   };
 }
+
+/** Decoded AUTH_* flags for a Stellar account, with operation-compatibility checks. */
+export interface AccountFlagSet {
+  /** AUTH_REQUIRED — the issuer must approve an account before it can hold this asset. */
+  authRequired: boolean;
+  /** AUTH_REVOCABLE — the issuer can revoke an account's authorization to hold this asset. */
+  authRevocable: boolean;
+  /** AUTH_IMMUTABLE — this account's flags can never be changed again. */
+  authImmutable: boolean;
+  /** AUTH_CLAWBACK_ENABLED — the issuer can claw back this asset from holders. */
+  authClawbackEnabled: boolean;
+  /** Returns `false` when this account's flags make `operation` impossible without prior authorization. */
+  isCompatibleWith(operation: string): boolean;
+}
+
+/** Declarative description of a claimable-balance claim predicate, buildable via `PredicateBuilder.build()`. */
+export type PredicateConfig =
+  | { type: "unconditional" }
+  | { type: "absoluteWindow"; start: number; end: number }
+  | { type: "relativeWindow"; secondsFromNow: number }
+  | { type: "and"; predicates: [PredicateConfig, PredicateConfig] }
+  | { type: "or"; predicates: [PredicateConfig, PredicateConfig] };
 
 /** Union type of all decoded XDR variants. */
 export type DecodedXDR =
@@ -1408,6 +1447,72 @@ export interface InvoiceMetadata {
   lineItems: LineItem[];
   /** CIDs of attachment files (documents, images, etc.). */
   attachmentCIDs: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Multi-Asset Line Item Normalizer Types
+// ---------------------------------------------------------------------------
+
+/** A line item denominated in its own asset, prior to settlement normalisation. */
+export interface InvoiceLineItem {
+  /** Description of the item or service. */
+  description: string;
+  /** Quantity of items. */
+  quantity: number;
+  /** Unit price in stroops, denominated in `asset`. */
+  unitPrice: bigint;
+  /** Optional total override (defaults to quantity * unitPrice), denominated in `asset`. */
+  total?: bigint;
+  /** Asset identifier this line item is priced in: "native" or "CODE:ISSUER" or a contract address. */
+  asset: string;
+}
+
+/** A line item after conversion to the invoice's settlement asset. */
+export interface NormalizedLineItem {
+  /** Description of the item or service. */
+  description: string;
+  /** Original amount in stroops, denominated in `originalAsset`. */
+  originalAmount: bigint;
+  /** Asset identifier the line item was originally denominated in. */
+  originalAsset: string;
+  /** Amount in stroops after conversion to the settlement asset. */
+  convertedAmount: bigint;
+  /** Fixed-point rate (1e18 = 1.0) used for the conversion; 1e18 when no conversion was needed. */
+  conversionRate: bigint;
+}
+
+/** Aggregate result of normalising an invoice's line items to a single settlement asset. */
+export interface NormalizedInvoiceTotal {
+  /** Asset identifier all amounts were normalised to. */
+  settlementAsset: string;
+  /** Sum of all `convertedAmount` values, in stroops. */
+  total: bigint;
+  /** Per-item normalised amounts, in the same order as the input. */
+  items: NormalizedLineItem[];
+}
+
+// ---------------------------------------------------------------------------
+// Contract Retry Queue Types
+// ---------------------------------------------------------------------------
+
+/** A single Soroban contract invocation to be submitted (with retry on failure). */
+export interface ContractInvocation {
+  /** Contract address being invoked. */
+  contractId: string;
+  /** Contract method name. */
+  method: string;
+  /** Method arguments, in the order the contract expects them. */
+  args: unknown[];
+  /** Stellar address the invocation is submitted on behalf of. */
+  source: string;
+}
+
+/** Result of a successfully submitted contract invocation. */
+export interface ContractResult {
+  /** Hash of the submitted transaction. */
+  txHash: string;
+  /** Decoded return value from the contract call, if any. */
+  returnValue?: unknown;
 }
 
 /** Configuration for IPFS backend. */
@@ -1648,44 +1753,65 @@ export interface CursorStore {
   delete(key: string): Promise<void>;
 }
 
-export interface FinalityStatus {
-  finalized: boolean;
-  confirmations: number;
+// ---------------------------------------------------------------------------
+// Account Data Entry Types (Issue #528)
+// ---------------------------------------------------------------------------
+
+/** A single decoded key-value data entry stored on a Stellar account. */
+export interface AccountDataEntry {
+  /** Data entry key (max 64 bytes). */
+  key: string;
+  /** Decoded (UTF-8) value, or null when the entry has been cleared. */
+  value: string | null;
+}
+
+/** All data entries currently stored on an account, keyed by entry name. */
+export type AccountDataMap = Record<string, string>;
+
+// ---------------------------------------------------------------------------
+// Soroban Feature Detection Types (Issue #529)
+// ---------------------------------------------------------------------------
+
+/**
+ * Typed flags for protocol-version-gated Soroban features, plus the raw
+ * resource limits pulled from the network's `ConfigSettingEntry` ledger
+ * entries.
+ */
+export interface SorobanFeatureFlags {
+  /** Current Stellar protocol version integer. */
+  protocolVersion: number;
+  /** Whether the network supports the `ExtendFootprintTtl` operation (protocol >= 20). */
+  supportsExtendFootprint: boolean;
+  /** Whether the network supports archived-entry restoration (protocol >= 20). */
+  supportsRestoreFootprint: boolean;
+  /** Maximum Soroban instructions allowed per transaction. */
+  maxInstructionsPerTx: number;
+  /** Maximum Soroban instructions allowed per ledger. */
+  maxInstructionsPerLedger: number;
+  /** Unix timestamp (ms) when these flags were detected. */
+  detectedAt: number;
+}
+
+// ---------------------------------------------------------------------------
+// Per-Split Audit Log Types (Issue #531)
+// ---------------------------------------------------------------------------
+
+/** A granular audit record for a single settled leg of a multi-recipient split payment. */
+export interface SplitAuditEntry {
+  /** Invoice the split payment belongs to. */
+  invoiceId: string;
+  /** Zero-based index of this leg within the split. */
+  legIndex: number;
+  /** Stellar address of the recipient for this leg. */
+  recipientId: string;
+  /** Asset code paid out for this leg. */
+  assetCode: string;
+  /** Amount paid to this recipient, in stroops. */
+  amount: bigint;
+  /** Operation ID of the settlement operation. */
+  operationId: string;
+  /** Ledger sequence number at which the leg settled. */
   ledgerSequence: number;
+  /** Unix timestamp (seconds) when the leg settled. */
+  settledAt: number;
 }
-
-export interface FinalityCheckConfig {
-  minConfirmations?: number;
-  pollIntervalMs?: number;
-  maxWaitMs?: number;
-}
-
-export interface MultiSigPolicy {
-  threshold: number;
-  timeoutMs: number;
-  signers: Array<{
-    publicKey: string;
-    weight: number;
-  }>;
-}
-
-export interface ApprovalSessionResult {
-  complete: boolean;
-  weight: number;
-}
-
-export interface BatchPaymentResult {
-  succeeded: Array<{
-    chunkIndex: number;
-    txHash: string;
-  }>;
-  failed: {
-    chunkIndex: number;
-    error: Error;
-  } | null;
-}
-
-export type ChunkSubmitter<T> = (
-  operations: T[],
-  chunkIndex: number,
-) => Promise<{ txHash: string }>;
