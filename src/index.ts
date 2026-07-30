@@ -701,12 +701,14 @@ export type { FilterCriteria, CompiledFilter } from "./invoiceFilter.js";
 export { diffInvoices, hasDiff } from "./diff.js";
 export type { InvoiceDiff, InvoiceDiffEntry } from "./diff.js";
 
-export { diffSimulations } from "./simulationDiff.js";
+export { diffSimulations, compareSimulations, formatDiffSummary } from "./simulationDiff.js";
 export type {
   SimulationDiff,
   SimulationDiffSuccess,
   SimulationDiffNotComparable,
   ResourceDelta,
+  SimulationComparison,
+  SimulationComparisonNotComparable,
 } from "./simulationDiff.js";
 
 // Payment velocity tracking
