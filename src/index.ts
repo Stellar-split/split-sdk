@@ -29,6 +29,13 @@ export {
   deserializeInvoiceTemplate,
 } from "./invoiceTemplate.js";
 export {
+  validateBulkImport,
+} from "./bulkImportValidator.js";
+export type {
+  BulkImportRowError,
+  BulkImportValidationResult,
+} from "./bulkImportValidator.js";
+export {
   StellarSplitError,
   InvoiceNotFoundError,
   InvoiceNotPendingError,
