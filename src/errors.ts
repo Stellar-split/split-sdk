@@ -379,6 +379,51 @@ export class SimulationFailedError extends StellarSplitError {
   }
 }
 
+/**
+ * Thrown by {@link DeployPipeline} when a WASM upload or contract
+ * instantiation step keeps failing with `tx_bad_seq` after retrying with
+ * a freshly-fetched sequence number.
+ */
+export class DeploySequenceError extends StellarSplitError {
+  readonly step: string;
+  readonly attempts: number;
+
+  constructor(step: string, attempts: number) {
+    super(
+      `Deploy step "${step}" failed after ${attempts} sequence retries due to tx_bad_seq`,
+      "DEPLOY_SEQUENCE_ERROR",
+      { step, attempts }
+    );
+    this.name = "DeploySequenceError";
+    this.step = step;
+    this.attempts = attempts;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * Thrown by {@link WebhookAgent.deliver} when a webhook delivery has
+ * exhausted its configured retry budget without a successful response.
+ */
+export class WebhookExhaustedError extends StellarSplitError {
+  readonly url: string;
+  readonly attempts: number;
+  readonly lastError?: string;
+
+  constructor(url: string, attempts: number, lastError?: string) {
+    super(
+      `Webhook delivery to ${url} failed after ${attempts} attempts${lastError ? `: ${lastError}` : ""}`,
+      "WEBHOOK_EXHAUSTED",
+      { url, attempts, lastError }
+    );
+    this.name = "WebhookExhaustedError";
+    this.url = url;
+    this.attempts = attempts;
+    this.lastError = lastError;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Thrown when no return value is received from a contract call. */
 export class NoReturnValueError extends StellarSplitError {
   readonly method: string;
