@@ -1647,3 +1647,55 @@ export interface CursorStore {
   /** Delete a saved cursor. */
   delete(key: string): Promise<void>;
 }
+
+// ---------------------------------------------------------------------------
+// Escrow Vault Types (#549)
+// ---------------------------------------------------------------------------
+
+/** Lifecycle status of an escrow vault. */
+export type EscrowStatus = "holding" | "released" | "expired";
+
+/**
+ * Condition that must be satisfied before an escrow vault can be released.
+ */
+export interface EscrowReleaseCondition {
+  /** The type of condition. */
+  type: "time" | "delivery" | "manual";
+  /**
+   * For "time" conditions: the earliest Date the balance may be claimed.
+   */
+  holdUntil?: Date;
+  /**
+   * For "delivery" conditions: the invoice event that triggers release.
+   */
+  deliveryEvent?: string;
+}
+
+/**
+ * An escrow vault record representing a claimable balance held in escrow until
+ * a release condition is met.
+ */
+export interface EscrowVault {
+  /** Unique vault identifier. */
+  vaultId: string;
+  /** Invoice this vault is associated with. */
+  invoiceId: string;
+  /** Stellar claimable balance ID. */
+  balanceId: string;
+  /** Locked amount in stroops. */
+  amount: bigint;
+  /** Asset held in the vault ("CODE:ISSUER" or "native"). */
+  asset: string;
+  /** Time after which the recipient may claim. */
+  holdUntil: Date;
+  /** Current vault status. */
+  status: EscrowStatus;
+  /** When this vault was created. */
+  createdAt: Date;
+  /** When the vault was released (if applicable). */
+  releasedAt?: Date;
+  /** The recipient who received the funds (if released). */
+  recipientId?: string;
+  /** Optional release condition. */
+  releaseCondition?: EscrowReleaseCondition;
+}

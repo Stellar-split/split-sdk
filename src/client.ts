@@ -6500,6 +6500,49 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
 
     return { txHash };
   }
+
+  // ---------------------------------------------------------------------------
+  // Escrow Vault integration (#549)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Confirm delivery for an invoice, triggering escrow release when an
+   * {@link EscrowVaultManager} is provided via the config.
+   *
+   * This method updates the invoice status to "Released" and, if the client
+   * was constructed with an `escrowVaultManager` and the invoice has an
+   * associated `escrowVaultId`, also calls `EscrowVaultManager.release()` to
+   * claim the locked funds on behalf of the recipient.
+   *
+   * @param invoiceId         - The invoice to confirm delivery for.
+   * @param recipientId       - The recipient who should receive the escrowed funds.
+   * @param escrowVaultId     - The vault ID to release (optional).
+   * @param signerSecret      - Secret key for signing the claim transaction.
+   * @returns Object with `{ invoiceId, txHash? }`.
+   */
+  async confirmDelivery(
+    invoiceId: string,
+    recipientId: string,
+    escrowVaultId?: string,
+    signerSecret?: string,
+  ): Promise<{ invoiceId: string; txHash?: string }> {
+    // Update invoice status to Released
+    await this.updateInvoiceStatus(invoiceId, "Released");
+
+    let txHash: string | undefined;
+
+    // Release the escrow vault if provided
+    const escrowManager = (this.config as Record<string, unknown>)["escrowVaultManager"] as
+      | import("./escrowVaultManager.js").EscrowVaultManager
+      | undefined;
+
+    if (escrowManager && escrowVaultId && signerSecret) {
+      const result = await escrowManager.release(escrowVaultId, recipientId, signerSecret);
+      txHash = result.txHash;
+    }
+
+    return { invoiceId, txHash };
+  }
 }
 
 /** Coerce a native-decoded scalar (bigint | number | string) into a bigint, defaulting to 0n. */

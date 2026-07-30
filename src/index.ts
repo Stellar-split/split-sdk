@@ -1112,3 +1112,19 @@ export type {
   ScValPrimitive,
   ContractStorageExporterOptions,
 } from "./diagnostics/ContractStorageExporter.js";
+
+// ---------------------------------------------------------------------------
+// #549 — EscrowVaultManager: escrow vault payment lifecycle management
+// ---------------------------------------------------------------------------
+
+export { EscrowVaultManager } from "./escrowVaultManager.js";
+export type {
+  EscrowVaultManagerOptions,
+  EscrowEventMap,
+} from "./escrowVaultManager.js";
+
+export type {
+  EscrowVault,
+  EscrowStatus,
+  EscrowReleaseCondition,
+} from "./types.js";
