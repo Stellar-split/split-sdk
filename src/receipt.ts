@@ -25,6 +25,16 @@ export interface PaymentReceipt {
   toJSON(): PaymentReceiptJSON;
 }
 
+/** Options controlling optional receipt enrichment. */
+export interface ReceiptConfig {
+  /** When true (and `server`/`txHash` are supplied), attach an effect summary to the receipt. */
+  includeEffects?: boolean;
+  /** Horizon server used to fetch effects when `includeEffects` is set. */
+  server?: Horizon.Server;
+  /** Hash of the transaction to aggregate effects for. */
+  txHash?: string;
+}
+
 /** JSON-serializable representation of a PaymentReceipt. */
 export interface PaymentReceiptJSON {
   invoiceId: string;
@@ -129,6 +139,7 @@ export async function generatePaymentReceipt(
   payerAddress?: string,
   resultXdr?: string
 ): Promise<PaymentReceipt> {
+  let receipt: PaymentReceipt;
   if ("getInvoice" in source && typeof source.getInvoice === "function") {
     if (!payerAddress) {
       throw new PayerAddressRequiredError();

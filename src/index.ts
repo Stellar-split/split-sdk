@@ -585,7 +585,37 @@ export type {
   PaymentReceipt,
   PaymentReceiptJSON,
   InvoiceFetcher,
+  ReceiptConfig,
 } from "./receipt.js";
+
+// Transaction operation effect aggregator
+export { aggregateEffects } from "./effectAggregator.js";
+export type { AccountEffectSummary, AssetDelta } from "./types.js";
+
+// Multi-asset invoice line item normalizer
+export { normalizeLineItems } from "./lineItemNormalizer.js";
+export { ContractPriceOracle } from "./priceOracle.js";
+export type { PriceOracle } from "./priceOracle.js";
+export type {
+  InvoiceLineItem,
+  NormalizedLineItem,
+  NormalizedInvoiceTotal,
+} from "./types.js";
+export { UnsupportedLineItemAssetError, isUnsupportedLineItemAssetError } from "./errors.js";
+
+// Contract invocation retry queue
+export { ContractRetryQueue } from "./contractRetryQueue.js";
+export type { ContractInvocationExecutor, ContractRetryQueueConfig } from "./contractRetryQueue.js";
+export type { ContractInvocation, ContractResult } from "./types.js";
+export { ContractRetryExhaustedError, isContractRetryExhaustedError } from "./errors.js";
+
+// Invoice batch processor with concurrency limiter
+export { InvoiceBatchProcessor } from "./invoiceBatchProcessor.js";
+export type {
+  BatchInvoiceResult,
+  InvoiceBatchConfig,
+  InvoicePaymentSubmitter,
+} from "./invoiceBatchProcessor.js";
 
 // Merkle proof functionality
 export { generateMerkleProof, verifyMerkleProof } from "./merkle.js";

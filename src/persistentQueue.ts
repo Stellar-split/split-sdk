@@ -111,6 +111,13 @@ export class PersistentTxQueue {
     return this.memory.slice();
   }
 
+  /** Remove a single item from the queue by id, without processing it. */
+  async remove(id: string): Promise<void> {
+    this.memory = this.memory.filter((i) => i.id !== id);
+    const db = await this.getDb();
+    if (db) await idbDelete(db, id);
+  }
+
   /** Clear all items from memory and IndexedDB. */
   async clear(): Promise<void> {
     this.memory = [];

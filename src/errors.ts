@@ -708,6 +708,38 @@ export class Sep41AdapterError extends StellarSplitError {
   }
 }
 
+/** Thrown when a queued contract invocation exhausts its retry attempts. */
+export class ContractRetryExhaustedError extends StellarSplitError {
+  readonly attempts: number;
+
+  constructor(attempts: number, lastError: unknown) {
+    super(
+      `Contract invocation retry exhausted after ${attempts} attempts`,
+      "CONTRACT_RETRY_EXHAUSTED",
+      { attempts, lastError: lastError instanceof Error ? lastError.message : String(lastError) }
+    );
+    this.name = "ContractRetryExhaustedError";
+    this.attempts = attempts;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a line item's asset has no oracle price available for normalisation. */
+export class UnsupportedLineItemAssetError extends StellarSplitError {
+  readonly asset: string;
+
+  constructor(asset: string) {
+    super(
+      `No oracle price available for line item asset: ${asset}`,
+      "UNSUPPORTED_LINE_ITEM_ASSET",
+      { asset }
+    );
+    this.name = "UnsupportedLineItemAssetError";
+    this.asset = asset;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Thrown when tranche status check fails. */
 export class TrancheProgressError extends StellarSplitError {
   constructor(message: string) {
@@ -1085,6 +1117,14 @@ export function isUnknownNetworkError(err: unknown): err is UnknownNetworkError 
 
 export function isInsufficientSignaturesError(err: unknown): err is InsufficientSignaturesError {
   return err instanceof InsufficientSignaturesError;
+}
+
+export function isUnsupportedLineItemAssetError(err: unknown): err is UnsupportedLineItemAssetError {
+  return err instanceof UnsupportedLineItemAssetError;
+}
+
+export function isContractRetryExhaustedError(err: unknown): err is ContractRetryExhaustedError {
+  return err instanceof ContractRetryExhaustedError;
 }
 
 export function isCloneChainTooDeepError(err: unknown): err is CloneChainTooDeepError {
