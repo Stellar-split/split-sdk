@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import type { Invoice, Payment } from "./types.js";
+import type { Invoice, Payment, ReminderSchedule } from "./types.js";
 
 export interface InvoiceSnapshot {
   snapshotId: string;

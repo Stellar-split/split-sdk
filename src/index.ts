@@ -739,6 +739,15 @@ export type {
 export { ScheduledPaymentManager } from "./scheduler.js";
 export type { ScheduledPayment } from "./scheduler.js";
 
+export { InvoiceReminderScheduler, DEFAULT_GRACE_PERIOD_MS } from "./invoiceReminderScheduler.js";
+export type {
+  InvoiceReminderSchedulerEventMap,
+  InvoiceDueAtResolver,
+  InvoiceReminderSchedulerOptions,
+} from "./invoiceReminderScheduler.js";
+export { loadReminderSchedules, saveReminderSchedules } from "./snapshot.js";
+export type { ReminderSchedule, ReminderEvent, ReminderStatus } from "./types.js";
+
 export { compileFilter, applyFilter, FilterIndex } from "./invoiceFilter.js";
 export type { FilterCriteria, CompiledFilter } from "./invoiceFilter.js";
 
@@ -771,6 +780,21 @@ export type {
 } from "./trancheProgress.js";
 export { Sep41Adapter, createSep41Adapter } from "./sep41Adapter.js";
 export type { Sep41TokenCapabilities } from "./sep41Adapter.js";
+
+export { Sep31Initiator, resolveDirectPaymentServer } from "./sep/sep31Initiator.js";
+export type {
+  Sep31InitiatorEventMap,
+  Sep31Asset,
+  Sep31PartyInfo,
+  Sep31InitiateParams,
+} from "./sep/sep31Initiator.js";
+export type {
+  Sep31PaymentRecord,
+  Sep31Status,
+  Sep31StatusChangedEvent,
+  Sep31FieldSpec,
+  Sep31RequiredFields,
+} from "./types.js";
 
 export { HorizonFallbackReader } from "./horizonFallback.js";
 export type { NormalizedAccount, NormalizedBalance } from "./horizonFallback.js";

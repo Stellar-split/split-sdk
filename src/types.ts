@@ -1261,6 +1261,41 @@ export interface InvoiceRecord {
   status: InvoiceStatus;
   /** Total amount required. */
   totalOwed: bigint;
+  /** Unix timestamp (milliseconds) when payment is due. Used by {@link InvoiceReminderScheduler}. */
+  dueAt?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Invoice Reminder Scheduler Types
+// ---------------------------------------------------------------------------
+
+/** Lifecycle status of a single scheduled reminder. */
+export type ReminderStatus = "pending" | "fired" | "cancelled" | "expired";
+
+/** A single reminder scheduled to fire before an invoice's due date. */
+export interface ReminderSchedule {
+  /** Unique ID for this reminder entry. */
+  id: string;
+  /** Invoice this reminder is associated with. */
+  invoiceId: string;
+  /** Milliseconds before `dueAt` that this reminder should fire. */
+  offsetMs: number;
+  /** Unix timestamp (milliseconds) the invoice is due. */
+  dueAt: number;
+  /** Unix timestamp (milliseconds) this reminder is scheduled to fire (`dueAt - offsetMs`). */
+  fireAt: number;
+  /** Current lifecycle status of this reminder. */
+  status: ReminderStatus;
+}
+
+/** Payload emitted when a reminder fires. */
+export interface ReminderEvent {
+  /** Invoice the reminder is for. */
+  invoiceId: string;
+  /** Offset (ms before due date) that triggered this reminder. */
+  offsetMs: number;
+  /** Unix timestamp (milliseconds) the invoice is due. */
+  dueAt: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1716,6 +1751,104 @@ export interface Sep24StatusChangedEvent {
   transaction: Sep24TransactionRecord;
   /** The previous status before this change. */
   previousStatus: Sep24Status;
+}
+
+// ---------------------------------------------------------------------------
+// Auth-Required Trustline Handler Types
+// ---------------------------------------------------------------------------
+
+/** Lifecycle status of an auth-required trustline approval. */
+export type TrustlineAuthStatus = "required" | "not_required" | "granted";
+
+/** Stellar operation used to grant trustline authorization. */
+export type TrustlineAuthOperationType = "setTrustLineFlags" | "allowTrust";
+
+/** A request to authorize a recipient's trustline for an AUTH_REQUIRED asset. */
+export interface TrustlineAuthRequest {
+  /** Stellar address of the recipient whose trustline needs authorization. */
+  recipientId: string;
+  /** Asset code (e.g. "USDC"). */
+  assetCode: string;
+  /** Asset issuer's Stellar address. */
+  assetIssuer: string;
+  /** Whether the issuer account has the AUTH_REQUIRED flag set. */
+  authRequired: boolean;
+  /** Current status of this authorization request. */
+  status: TrustlineAuthStatus;
+  /** Unix timestamp (milliseconds) this request/grant was recorded. */
+  requestedAt: number;
+  /** Operation type used to grant authorization, set once `status` is "granted". */
+  operationType?: TrustlineAuthOperationType;
+  /** Submission transaction hash, set once `status` is "granted". */
+  txHash?: string;
+}
+
+// ---------------------------------------------------------------------------
+// SEP-31 Cross-Border Direct Payment Types
+// ---------------------------------------------------------------------------
+
+/** Lifecycle status of a SEP-31 direct payment, per the SEP-31 spec. */
+export type Sep31Status =
+  | "pending_sender"
+  | "pending_receiver"
+  | "pending_transaction_info_update"
+  | "pending_stellar"
+  | "pending_external"
+  | "completed"
+  | "error";
+
+/** Description of a single field required by the receiving anchor's /send endpoint. */
+export interface Sep31FieldSpec {
+  /** Human-readable description of the field. */
+  description: string;
+  /** Allowed values, when the field is an enum. */
+  choices?: string[];
+  /** Whether the field may be omitted. */
+  optional?: boolean;
+}
+
+/** Typed field schema returned by the receiving anchor's /info endpoint for one asset. */
+export interface Sep31RequiredFields {
+  /** Minimum payment amount the anchor will accept, if published. */
+  minAmount?: number;
+  /** Maximum payment amount the anchor will accept, if published. */
+  maxAmount?: number;
+  /** Additional transaction-level fields the anchor requires (e.g. routing_number). */
+  transactionFields: Record<string, Sep31FieldSpec>;
+}
+
+/** A record tracking a single SEP-31 cross-border direct payment. */
+export interface Sep31PaymentRecord {
+  /** Transaction ID returned by the receiving anchor. */
+  id: string;
+  /** Current lifecycle status. */
+  status: Sep31Status;
+  /** Asset code (e.g. "USDC"). */
+  assetCode: string;
+  /** Asset issuer's Stellar address. */
+  assetIssuer: string;
+  /** Payment amount as a decimal string. */
+  amount: string;
+  /** Home domain of the receiving anchor. */
+  anchorDomain: string;
+  /** Stellar transaction ID once the payment settles on-chain. */
+  stellarTxId: string | null;
+  /** Unix timestamp (milliseconds) the payment was initiated. */
+  startedAt: number;
+  /** Unix timestamp (milliseconds) of the last status update. */
+  updatedAt: number;
+  /** Anchor-supplied message describing what additional info is needed, if any. */
+  requiredInfoMessage: string | null;
+  /** Human-readable error message when status is "error". */
+  errorMessage: string | null;
+}
+
+/** Event emitted when a SEP-31 payment's status changes. */
+export interface Sep31StatusChangedEvent {
+  /** The payment record with updated status. */
+  payment: Sep31PaymentRecord;
+  /** The previous status before this change, or null for the initial creation. */
+  previousStatus: Sep31Status | null;
 }
 
 // ---------------------------------------------------------------------------
