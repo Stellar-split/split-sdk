@@ -189,6 +189,25 @@ export function deserializePaymentReceipt(json: string): PaymentReceipt {
   });
 }
 
+/** Run a finality check for a submitted payment transaction and attach it to the receipt. */
+export async function finalizePaymentReceipt(
+  receipt: PaymentReceipt,
+  txHash: string,
+  checker: FinalityChecker,
+): Promise<PaymentReceipt> {
+  const finality = await checker.check(txHash);
+  return _buildReceiptObject({
+    invoiceId: receipt.invoiceId,
+    payer: receipt.payer,
+    totalPaid: receipt.totalPaid,
+    payments: receipt.payments,
+    proofHash: receipt.proofHash,
+    generatedAt: receipt.generatedAt,
+    ledgerTimestamp: receipt.ledgerTimestamp,
+    finality,
+  });
+}
+
 function _buildReceiptObject(data: {
   invoiceId: string;
   payer: string;

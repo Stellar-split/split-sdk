@@ -199,6 +199,10 @@ export {
   ClassifiedHorizonError,
   isClassifiedHorizonError,
   HorizonErrorClassification,
+  FinalityTimeoutError,
+  isFinalityTimeoutError,
+  ApprovalTimeoutError,
+  isApprovalTimeoutError,
 } from "./errors.js";
 
 // ---------------------------------------------------------------------------
@@ -269,6 +273,14 @@ export { Deduplicator } from "./dedup.js";
 export { TxQueue } from "./queue.js";
 
 export { replayEvents } from "./events.js";
+export { sdkEvents } from "./events.js";
+export { FinalityChecker } from "./finalityChecker.js";
+export type { FinalityServerLike } from "./finalityChecker.js";
+export { ApprovalWorkflowSequencer, ApprovalSession } from "./approvalWorkflowSequencer.js";
+export type { ApprovalWorkflowOptions, NotificationAdapter, SignatureApplier } from "./approvalWorkflowSequencer.js";
+export { OperationChunker, MAX_OPERATIONS_PER_TRANSACTION } from "./operationChunker.js";
+export { StreamHealthProbe } from "./streamHealthProbe.js";
+export type { MonitoredStream, StreamHealthProbeOptions } from "./streamHealthProbe.js";
 export {
   EventChecksumChain,
   verifyChain,
@@ -394,6 +406,12 @@ export type {
   DecodedTransactionMeta,
   DecodedLedgerEntry,
   DecodedOperation,
+  FinalityStatus,
+  FinalityCheckConfig,
+  MultiSigPolicy,
+  ApprovalSessionResult,
+  BatchPaymentResult,
+  ChunkSubmitter,
 } from "./types.js";
 export { InvalidTransitionError } from "./types.js";
 
@@ -580,6 +598,7 @@ export {
   generatePaymentReceipt,
   serializePaymentReceipt,
   deserializePaymentReceipt,
+  finalizePaymentReceipt,
 } from "./receipt.js";
 export type {
   PaymentReceipt,
