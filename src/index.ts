@@ -197,7 +197,14 @@ export {
   isAccountFrozenError,
   AccountLockedError,
   isAccountLockedError,
+  // New: Invoice metadata schema validator
+  MetadataValidationError,
+  isMetadataValidationError,
 } from "./errors.js";
+
+// Invoice metadata JSON Schema validator (issue #533)
+export { InvoiceMetadataValidator } from "./validators/invoiceMetadataValidator.js";
+export type { MetadataValidationResult } from "./validators/invoiceMetadataValidator.js";
 
 // ---------------------------------------------------------------------------
 // Lifecycle management (graceful shutdown)

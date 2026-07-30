@@ -1747,3 +1747,24 @@ export class AccountLockedError extends StellarSplitError {
 export function isAccountLockedError(err: unknown): err is AccountLockedError {
   return err instanceof AccountLockedError;
 }
+
+// ---------------------------------------------------------------------------
+// Invoice metadata schema validation errors
+// ---------------------------------------------------------------------------
+
+/** Thrown when invoice metadata fails validation against the registered JSON Schema. */
+export class MetadataValidationError extends StellarSplitError {
+  readonly errors: import("ajv").ErrorObject[];
+
+  constructor(errors: import("ajv").ErrorObject[]) {
+    const summary = errors.map((e) => `${e.instancePath || "/"} ${e.message ?? ""}`.trim()).join("; ");
+    super(`Invoice metadata failed schema validation: ${summary}`, "METADATA_VALIDATION_ERROR", { errors });
+    this.name = "MetadataValidationError";
+    this.errors = errors;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isMetadataValidationError(err: unknown): err is MetadataValidationError {
+  return err instanceof MetadataValidationError;
+}

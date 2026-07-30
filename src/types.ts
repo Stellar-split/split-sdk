@@ -384,6 +384,11 @@ export interface CreateInvoiceParams {
   deadline: number;
   /** Optional memo / description. */
   memo?: string;
+  /**
+   * Optional integrator-defined metadata (PO numbers, project codes, tax IDs, etc).
+   * Validated against `StellarSplitClientConfig.metadataSchema` when configured.
+   */
+  metadata?: Record<string, unknown>;
 }
 
 /** Generic hardware/software wallet adapter interface. */
