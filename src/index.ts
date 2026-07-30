@@ -390,6 +390,7 @@ export type {
   DecodedXDR,
   DecodedTransactionEnvelope,
   DecodedTransactionResult,
+  DecodedOperationResult,
   DecodedTransactionMeta,
   DecodedLedgerEntry,
   DecodedOperation,
@@ -420,8 +421,11 @@ export type { RpcClient } from "./rpcClient.js";
 export { negotiateVersion, SDK_CONTRACT_VERSION } from "./version.js";
 export type { VersionInfo } from "./types.js";
 
-export { checkPayerReadiness, checkInvoiceExpiry, checkSponsorReserve } from "./preflightChecker.js";
-export type { PayerReadinessResult, PayerReadinessReason, InvoiceExpiryResult, InvoiceExpiryReason, SponsorReserveCheck } from "./preflightChecker.js";
+export { checkPayerReadiness, checkInvoiceExpiry, checkSponsorReserve, checkRecipientFlags } from "./preflightChecker.js";
+export type { PayerReadinessResult, PayerReadinessReason, InvoiceExpiryResult, InvoiceExpiryReason, SponsorReserveCheck, RecipientFlagsCheck } from "./preflightChecker.js";
+
+export { inspectFlags, hasAnyRestrictiveFlag } from "./accountFlagsInspector.js";
+export type { AccountFlagSet } from "./types.js";
 
 export { getSuggestion } from "./errorSuggestions.js";
 
@@ -430,6 +434,7 @@ export { getSuggestion } from "./errorSuggestions.js";
 // ---------------------------------------------------------------------------
 
 export { decodeXDR } from "./xdrDecoder.js";
+export { decodeTransactionResult } from "./txResultDecoder.js";
 
 // ---------------------------------------------------------------------------
 // SSE Cursor Tracker — persistent cursor for stream resumption
@@ -778,6 +783,13 @@ export type {
   ClaimableBalanceLifecycleConfig,
   ClaimableBalanceLifecycleEventMap,
 } from "./claimableBalanceFallback.js";
+
+export { PredicateBuilder } from "./predicateBuilder.js";
+export type { ClaimPredicate } from "./predicateBuilder.js";
+export type { PredicateConfig } from "./types.js";
+
+export { RateCache } from "./rateCache.js";
+export type { RateCacheEntry, RateOracleFn, RateCacheConfig } from "./rateCache.js";
 
 export { subscribeToInvoice } from "./sse.js";
 export type {

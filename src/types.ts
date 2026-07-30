@@ -1296,6 +1296,16 @@ export interface DecodedOperation {
   body: Record<string, unknown>;
 }
 
+/** A single decoded per-operation result within a DecodedTransactionResult. */
+export interface DecodedOperationResult {
+  /** OperationResultCode switch name (e.g. "opInner", "opBadAuth", "opNoAccount"). */
+  code: string;
+  /** Operation type name when `code === "opInner"` (e.g. "payment", "createClaimableBalance"). */
+  operationType?: string;
+  /** The operation-specific result code (e.g. "paymentSuccess", "paymentUnderfunded"). */
+  resultCode?: string;
+}
+
 /** Decoded TransactionResult as a structured JSON-safe object. */
 export interface DecodedTransactionResult {
   type: "TransactionResult";
@@ -1303,6 +1313,13 @@ export interface DecodedTransactionResult {
   result: {
     code: string;
     innerResult?: Record<string, unknown>;
+  };
+  /** Per-operation results, in the same order as the submitted transaction's operations. */
+  operationResults?: DecodedOperationResult[];
+  /** Present only for fee-bump transactions: the outer fee-bump result plus the nested inner transaction result. */
+  feeBump?: {
+    outer: { feeCharged: string; code: string };
+    inner: DecodedTransactionResult;
   };
 }
 
@@ -1333,6 +1350,28 @@ export interface DecodedLedgerEntry {
     [key: string]: unknown;
   };
 }
+
+/** Decoded AUTH_* flags for a Stellar account, with operation-compatibility checks. */
+export interface AccountFlagSet {
+  /** AUTH_REQUIRED — the issuer must approve an account before it can hold this asset. */
+  authRequired: boolean;
+  /** AUTH_REVOCABLE — the issuer can revoke an account's authorization to hold this asset. */
+  authRevocable: boolean;
+  /** AUTH_IMMUTABLE — this account's flags can never be changed again. */
+  authImmutable: boolean;
+  /** AUTH_CLAWBACK_ENABLED — the issuer can claw back this asset from holders. */
+  authClawbackEnabled: boolean;
+  /** Returns `false` when this account's flags make `operation` impossible without prior authorization. */
+  isCompatibleWith(operation: string): boolean;
+}
+
+/** Declarative description of a claimable-balance claim predicate, buildable via `PredicateBuilder.build()`. */
+export type PredicateConfig =
+  | { type: "unconditional" }
+  | { type: "absoluteWindow"; start: number; end: number }
+  | { type: "relativeWindow"; secondsFromNow: number }
+  | { type: "and"; predicates: [PredicateConfig, PredicateConfig] }
+  | { type: "or"; predicates: [PredicateConfig, PredicateConfig] };
 
 /** Union type of all decoded XDR variants. */
 export type DecodedXDR =

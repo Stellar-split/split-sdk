@@ -1,4 +1,6 @@
 import { rpc as SorobanRpc, Horizon } from "@stellar/stellar-sdk";
+import { inspectFlags } from "./accountFlagsInspector.js";
+import type { AccountFlagSet } from "./types.js";
 
 export type PayerReadinessReason =
   | "account_not_found"
@@ -155,6 +157,36 @@ export async function checkSponsorReserve(
     requiredStroops,
     shortfallStroops: sufficient ? 0n : requiredStroops - availableStroops,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Recipient Flags Preflight Check
+// ---------------------------------------------------------------------------
+
+/** Result of checking a recipient's account flags against an intended operation. */
+export interface RecipientFlagsCheck {
+  /** `false` when the recipient's flags make `operation` impossible without prior authorization. */
+  compatible: boolean;
+  /** The recipient's decoded AUTH_* flags. */
+  flags: AccountFlagSet;
+}
+
+/**
+ * Preflight check: inspect a recipient's AUTH_* flags and flag when they are
+ * incompatible with the intended operation (e.g. AUTH_REQUIRED blocking a
+ * trustline creation or payment without prior issuer authorization).
+ *
+ * @param accountId  - Stellar address of the recipient to inspect.
+ * @param horizonUrl - Horizon API base URL used to load the account.
+ * @param operation  - The operation the caller intends to perform (e.g. "payment").
+ */
+export async function checkRecipientFlags(
+  accountId: string,
+  horizonUrl: string,
+  operation: string,
+): Promise<RecipientFlagsCheck> {
+  const flags = await inspectFlags(accountId, horizonUrl);
+  return { compatible: flags.isCompatibleWith(operation), flags };
 }
 
 // ---------------------------------------------------------------------------
