@@ -1653,6 +1653,30 @@ export interface CursorStore {
   delete(key: string): Promise<void>;
 }
 
+/** A single discrepancy found by {@link ReconciliationEngine.reconcile} between internal and on-chain records. */
+export interface ReconciliationFinding {
+  accountId: string;
+  assetCode: string;
+  /** Amount (stroops) recorded internally. */
+  expectedDelta: bigint;
+  /** Amount (stroops) found on-chain. */
+  actualDelta: bigint;
+  /** expectedDelta − actualDelta, in stroops. */
+  discrepancy: bigint;
+  severity: "info" | "warning" | "critical";
+  reason?: string;
+}
+
+/** Report returned by {@link ReconciliationEngine.reconcile}. */
+export interface ReconciliationReport {
+  accountId: string;
+  assetCode: string;
+  dateRange: { from: number; to: number };
+  findings: ReconciliationFinding[];
+  /** True only when every finding has zero discrepancy. */
+  isBalanced: boolean;
+}
+
 /** Result of {@link detectLockState} — an account's freeze/lock report for a given asset. */
 export interface AccountLockState {
   /** True when the trustline has been frozen by the issuer (authorization revoked). */

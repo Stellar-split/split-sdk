@@ -432,6 +432,11 @@ export type { PayerReadinessResult, PayerReadinessReason, InvoiceExpiryResult, I
 export { detectLockState, assertAccountUnlocked } from "./accountStateDetector.js";
 export type { AccountLockState } from "./types.js";
 
+// Asset balance reconciliation engine (issue #535)
+export { ReconciliationEngine } from "./reconciliationEngine.js";
+export type { ReconciliationDateRange, ReconciliationEngineOptions } from "./reconciliationEngine.js";
+export type { ReconciliationFinding, ReconciliationReport } from "./types.js";
+
 export { getSuggestion } from "./errorSuggestions.js";
 
 // ---------------------------------------------------------------------------
