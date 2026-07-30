@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { createHash } from "crypto";
 import {
   compilePaymentReceipt,
@@ -6,7 +6,7 @@ import {
   serializePaymentReceipt,
   deserializePaymentReceipt,
 } from "../src/receipt.js";
-import type { Invoice } from "../src/types.js";
+import type { Invoice, CollectionPage } from "../src/types.js";
 
 const mockInvoice: Invoice = {
   id: "inv_99",
@@ -106,5 +106,34 @@ describe("generatePaymentReceipt", () => {
     expect(deserialized.proofHash).toBe(receipt.proofHash);
     expect(deserialized.payments).toHaveLength(2);
     expect(deserialized.payments[0]!.amount).toBe(40000000n);
+  });
+
+  it("attaches an effect summary when includeEffects is set with server/txHash", async () => {
+    const page: CollectionPage<unknown> = {
+      records: [
+        { type: "account_debited", account: "GPAYER_A", asset_type: "native", amount: "40.0000000" },
+        { type: "account_credited", account: "GRECIPIENT123", asset_type: "native", amount: "40.0000000" },
+      ],
+      next: vi.fn().mockResolvedValue(null),
+    };
+    const server = {
+      effects: () => ({ forTransaction: () => ({ call: () => Promise.resolve(page) }) }),
+    } as any;
+
+    const receipt = await generatePaymentReceipt(mockInvoice, "GPAYER_A", undefined, {
+      includeEffects: true,
+      server,
+      txHash: "txhash",
+    });
+
+    expect(receipt.effectSummary).toEqual([
+      { accountId: "GPAYER_A", assetDeltas: [{ asset: "native", delta: -400_000_000n }] },
+      { accountId: "GRECIPIENT123", assetDeltas: [{ asset: "native", delta: 400_000_000n }] },
+    ]);
+  });
+
+  it("omits effectSummary when includeEffects is not set", () => {
+    const receipt = compilePaymentReceipt(mockInvoice, "GPAYER_A");
+    expect(receipt.effectSummary).toBeUndefined();
   });
 });

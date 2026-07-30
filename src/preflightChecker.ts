@@ -1,5 +1,6 @@
 import { rpc as SorobanRpc, Horizon } from "@stellar/stellar-sdk";
-import { inspectAccountFlags } from "./accountFlagsInspector.js";
+import { inspectFlags } from "./accountFlagsInspector.js";
+import type { AccountFlagSet } from "./types.js";
 
 export type PayerReadinessReason =
   | "account_not_found"
@@ -159,34 +160,33 @@ export async function checkSponsorReserve(
 }
 
 // ---------------------------------------------------------------------------
-// Auth-Required Trustline Preflight Check
+// Recipient Flags Preflight Check
 // ---------------------------------------------------------------------------
 
-/** Result of checking whether an asset issuer requires trustline authorization. */
-export interface TrustlineAuthPreflightResult {
-  /** Whether the issuer has the AUTH_REQUIRED flag set. */
-  authRequired: boolean;
-  /** The asset issuer that was inspected. */
-  issuer: string;
+/** Result of checking a recipient's account flags against an intended operation. */
+export interface RecipientFlagsCheck {
+  /** `false` when the recipient's flags make `operation` impossible without prior authorization. */
+  compatible: boolean;
+  /** The recipient's decoded AUTH_* flags. */
+  flags: AccountFlagSet;
 }
 
 /**
- * Preflight check: determine whether an asset's issuer requires explicit
- * trustline authorization (AUTH_REQUIRED) before a recipient can hold it.
+ * Preflight check: inspect a recipient's AUTH_* flags and flag when they are
+ * incompatible with the intended operation (e.g. AUTH_REQUIRED blocking a
+ * trustline creation or payment without prior issuer authorization).
  *
- * Used by {@link ./trustlineAuthHandler.js} to detect when an approval flow
- * is needed before a payment can reach a recipient.
- *
- * @param server      - Horizon server instance.
- * @param assetIssuer - Stellar address of the asset issuer.
- * @returns Whether the issuer requires trustline authorization.
+ * @param accountId  - Stellar address of the recipient to inspect.
+ * @param horizonUrl - Horizon API base URL used to load the account.
+ * @param operation  - The operation the caller intends to perform (e.g. "payment").
  */
-export async function checkTrustlineAuthRequirement(
-  server: Horizon.Server,
-  assetIssuer: string,
-): Promise<TrustlineAuthPreflightResult> {
-  const flags = await inspectAccountFlags(server, assetIssuer);
-  return { authRequired: flags.authRequired, issuer: assetIssuer };
+export async function checkRecipientFlags(
+  accountId: string,
+  horizonUrl: string,
+  operation: string,
+): Promise<RecipientFlagsCheck> {
+  const flags = await inspectFlags(accountId, horizonUrl);
+  return { compatible: flags.isCompatibleWith(operation), flags };
 }
 
 // ---------------------------------------------------------------------------
