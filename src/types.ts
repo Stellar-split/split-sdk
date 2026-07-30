@@ -425,6 +425,18 @@ export interface CreateInvoiceParams {
   deadline: number;
   /** Optional memo / description. */
   memo?: string;
+  /**
+   * When `true`, skip the `RecipientBalancePreCheck` that normally runs
+   * before the invoice is submitted. Use only for advanced flows where you
+   * have already validated recipients independently.
+   * @default false
+   */
+  skipPreCheck?: boolean;
+  /**
+   * Horizon API URL used by the pre-check to load recipient accounts.
+   * Falls back to "https://horizon.stellar.org" when omitted.
+   */
+  horizonUrl?: string;
 }
 
 /** Generic hardware/software wallet adapter interface. */
@@ -702,6 +714,18 @@ export interface CloneOverrides {
   newAmounts?: bigint[];
   newRecipients?: string[];
   newOverflowBehavior?: OverflowBehavior;
+  /**
+   * When `true`, skip the `InvoiceCloneabilityValidator` that normally runs
+   * before the clone is submitted. For advanced users who have already
+   * validated the source invoice independently.
+   * @default false
+   */
+  skipValidation?: boolean;
+  /**
+   * Horizon URL passed through to `InvoiceCloneabilityValidator` for
+   * recipient account lookups.
+   */
+  horizonUrl?: string;
 }
 
 /** Field names supported by read methods that can return partial objects. */

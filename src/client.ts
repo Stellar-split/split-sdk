@@ -1352,6 +1352,36 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
     return null;
   }
 
+  /**
+   * Internal startup validation. Throws PassphraseMismatchError if
+   * the configured passphrase doesn't match the RPC node.
+   */
+  private async _validateStartupConfig(): Promise<void> {
+    const { NetworkPassphraseValidator } = await import("./network/NetworkPassphraseValidator.js");
+    const { PassphraseMismatchError } = await import("./errors.js");
+    const primaryUrl = Array.isArray(this.config.rpcUrl)
+      ? this.config.rpcUrl[0]!
+      : this.config.rpcUrl;
+    const result = await NetworkPassphraseValidator.validate(
+      this.config.networkPassphrase,
+      primaryUrl,
+    );
+    if (result.mismatch) {
+      throw new PassphraseMismatchError(result.configured, result.reported);
+    }
+  }
+
+  /**
+   * Live network switcher. Migrates state and re-subscribes.
+   * @param network - 'mainnet' | 'testnet' | 'futurenet'
+   */
+  public async switchTo(
+    network: "mainnet" | "testnet" | "futurenet",
+  ): Promise<void> {
+    const { NetworkSwitcher } = await import("./network/NetworkSwitcher.js");
+    return NetworkSwitcher.switchTo(network, this);
+  }
+
   private _logAudit(
     method: string,
     params: Record<string, unknown>,
@@ -1899,6 +1929,23 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
   ): Promise<string> {
     const startTime = Date.now();
     const sourceInvoice = await this.getInvoice(sourceId);
+
+    // -------------------------------------------------------------------
+    // Cloneability pre-flight validation (#486)
+    // -------------------------------------------------------------------
+    if (!overrides.skipValidation) {
+      const rpcUrl = Array.isArray(this.config.rpcUrl)
+        ? this.config.rpcUrl[0]
+        : this.config.rpcUrl;
+      const validator = new InvoiceCloneabilityValidator({
+        horizonUrl: overrides.horizonUrl ?? this.config.horizonUrl,
+        rpcUrl,
+      });
+      const report = await validator.validate(sourceInvoice);
+      if (!report.cloneable) {
+        throw new InvoiceNotCloneableError(report);
+      }
+    }
 
     const mapEntries: xdr.ScMapEntry[] = [];
 
