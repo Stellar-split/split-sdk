@@ -7,11 +7,17 @@
  *
  * Integrates with {@link SimpleCache} to avoid redundant Horizon calls for
  * identical source/destination pairs within the cache TTL window.
+ *
+ * Since Issue #543: calls {@link OrderBookSampler.sample} before selecting a
+ * DEX path and emits a `highSlippageWarning` event when the estimated
+ * slippage exceeds `slippageTolerancePercent`.
  */
 
 import { Asset, Horizon, Operation } from "@stellar/stellar-sdk";
 import { SimpleCache } from "./cache.js";
 import { PathNotFoundError, PathRouterError } from "./errors.js";
+import { OrderBookSampler } from "./orderBookSampler.js";
+import type { FillEstimate } from "./orderBookSampler.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,12 +55,36 @@ export interface PathRequest {
   destinationAsset: Asset;
 }
 
+/** Payload emitted with a `highSlippageWarning` event. */
+export interface HighSlippageWarning {
+  /** The asset pair being traded. */
+  baseAsset: string;
+  counterAsset: string;
+  /** Computed slippage percentage. */
+  slippagePercent: number;
+  /** Configured tolerance that was exceeded. */
+  slippageTolerancePercent: number;
+  /** The full fill estimate that triggered the warning. */
+  fillEstimate: FillEstimate;
+}
+
 /** Configuration for {@link PathRouter}. */
 export interface PathRouterConfig {
   /** Cache TTL in milliseconds. Default: 15_000 (15s). */
   ttlMs?: number;
   /** Maximum number of cached paths. Default: 5_000. */
   maxEntries?: number;
+  /**
+   * Slippage tolerance percentage. When the order-book sampler reports a
+   * slippage above this value a `highSlippageWarning` callback is invoked.
+   * Default: 1 (%).
+   */
+  slippageTolerancePercent?: number;
+  /**
+   * Optional callback invoked when estimated slippage exceeds the tolerance.
+   * Wire this up to the application's event bus or logger as needed.
+   */
+  onHighSlippage?: (warning: HighSlippageWarning) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -67,10 +97,16 @@ export interface PathRouterConfig {
  *
  * Results are cached per (sourceAsset, destAsset, sourceAmount) triple to
  * avoid redundant Horizon queries within the TTL window.
+ *
+ * Since Issue #543: calls {@link OrderBookSampler.sample} before selecting a
+ * DEX path and fires `onHighSlippage` when slippage exceeds the tolerance.
  */
 export class PathRouter {
   private readonly server: Horizon.Server;
   private readonly cache: SimpleCache<PathResult>;
+  private readonly sampler: OrderBookSampler;
+  private readonly slippageTolerancePercent: number;
+  private readonly onHighSlippage?: (warning: HighSlippageWarning) => void;
 
   /**
    * @param horizonUrl - Horizon server URL.
@@ -82,6 +118,12 @@ export class PathRouter {
       enabled: true,
       ttlMs: config.ttlMs ?? 15_000,
       maxEntries: config.maxEntries ?? 5_000,
+    });
+    this.slippageTolerancePercent = config.slippageTolerancePercent ?? 1;
+    this.onHighSlippage = config.onHighSlippage;
+    this.sampler = new OrderBookSampler({
+      horizonUrl,
+      slippageTolerancePercent: this.slippageTolerancePercent,
     });
   }
 
@@ -95,8 +137,14 @@ export class PathRouter {
    *
    * Uses `strictSendPaths` under the hood — the source amount is fixed and
    * the destination amount is estimated.
+   *
+   * Before selecting the path, samples the order book for liquidity depth and
+   * emits a `highSlippageWarning` when slippage exceeds the configured tolerance.
    */
   async findStrictSendPath(req: PathRequest): Promise<PathResult> {
+    // Sample order book depth first — fire warning if slippage is too high
+    await this.checkSlippage(req.sourceAsset, req.destinationAsset, "buy", req.sourceAmount);
+
     const cacheKey = this.cacheKey("send", req);
     const cached = this.cache.get(cacheKey);
     if (cached) return cached;
@@ -259,10 +307,56 @@ export class PathRouter {
   }
 
   /**
+   * Expose the underlying {@link OrderBookSampler} for direct depth queries.
+   */
+  getOrderBookSampler(): OrderBookSampler {
+    return this.sampler;
+  }
+
+  /**
    * Clear all cached paths.
    */
   clearCache(): void {
     this.cache.clear();
+  }
+
+  // -------------------------------------------------------------------------
+  // Internal helpers
+  // -------------------------------------------------------------------------
+
+  /**
+   * Sample the order book and fire `onHighSlippage` when slippage exceeds the
+   * configured tolerance.  Errors from the sampler are caught and silently
+   * ignored so that path routing continues even when the order-book query
+   * fails (e.g. network partition).
+   */
+  private async checkSlippage(
+    baseAsset: Asset,
+    counterAsset: Asset,
+    side: "buy" | "sell",
+    amount: bigint,
+  ): Promise<void> {
+    if (!this.onHighSlippage) return;
+    try {
+      const estimate = await this.sampler.sample(baseAsset, counterAsset, side, amount);
+      if (estimate.slippagePercent > this.slippageTolerancePercent) {
+        const baseStr = baseAsset.isNative()
+          ? "native"
+          : `${baseAsset.getCode()}:${baseAsset.getIssuer()}`;
+        const counterStr = counterAsset.isNative()
+          ? "native"
+          : `${counterAsset.getCode()}:${counterAsset.getIssuer()}`;
+        this.onHighSlippage({
+          baseAsset: baseStr,
+          counterAsset: counterStr,
+          slippagePercent: estimate.slippagePercent,
+          slippageTolerancePercent: this.slippageTolerancePercent,
+          fillEstimate: estimate,
+        });
+      }
+    } catch {
+      // Sampler errors are non-fatal; routing continues without a warning
+    }
   }
 
   // -------------------------------------------------------------------------
