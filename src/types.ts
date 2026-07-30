@@ -126,6 +126,47 @@ export interface Recipient {
 import { StellarSplitError } from "./errors.js";
 
 // ---------------------------------------------------------------------------
+// Split Rollback Coordinator Types
+// ---------------------------------------------------------------------------
+
+/** Lifecycle state of a single leg tracked by the rollback coordinator. */
+export type SplitLegState = "pending" | "succeeded" | "failed";
+
+/** A single recipient leg within a multi-recipient split payment. */
+export interface SplitLeg {
+  /** Stellar address of this leg's recipient. */
+  recipient: string;
+  /** Amount owed to this recipient, in stroops. */
+  amount: bigint;
+  /** Current reconciliation state of this leg. */
+  state: SplitLegState;
+}
+
+/** Result of submitting a multi-recipient split payment. */
+export interface SplitResult {
+  /** Identifier grouping the legs of this split (typically the tx hash). */
+  splitId: string;
+  /** Invoice this split payment was submitted for. */
+  invoiceId: string;
+  /** Transaction hash of the on-chain submission. */
+  txHash: string;
+  /** Per-recipient legs included in the split. */
+  legs: SplitLeg[];
+}
+
+/** A persistent checkpoint recording the intended legs of a split payment. */
+export interface SplitRollbackCheckpoint {
+  /** Identifier grouping the legs of this split. */
+  splitId: string;
+  /** Invoice this split payment was submitted for. */
+  invoiceId: string;
+  /** Unix epoch ms when the checkpoint was created. */
+  createdAt: number;
+  /** Per-recipient legs, in submission order. */
+  legs: SplitLeg[];
+}
+
+// ---------------------------------------------------------------------------
 // AMM Calculator Types
 // ---------------------------------------------------------------------------
 
@@ -1261,6 +1302,41 @@ export interface InvoiceRecord {
   status: InvoiceStatus;
   /** Total amount required. */
   totalOwed: bigint;
+  /** Unix timestamp (milliseconds) when payment is due. Used by {@link InvoiceReminderScheduler}. */
+  dueAt?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Invoice Reminder Scheduler Types
+// ---------------------------------------------------------------------------
+
+/** Lifecycle status of a single scheduled reminder. */
+export type ReminderStatus = "pending" | "fired" | "cancelled" | "expired";
+
+/** A single reminder scheduled to fire before an invoice's due date. */
+export interface ReminderSchedule {
+  /** Unique ID for this reminder entry. */
+  id: string;
+  /** Invoice this reminder is associated with. */
+  invoiceId: string;
+  /** Milliseconds before `dueAt` that this reminder should fire. */
+  offsetMs: number;
+  /** Unix timestamp (milliseconds) the invoice is due. */
+  dueAt: number;
+  /** Unix timestamp (milliseconds) this reminder is scheduled to fire (`dueAt - offsetMs`). */
+  fireAt: number;
+  /** Current lifecycle status of this reminder. */
+  status: ReminderStatus;
+}
+
+/** Payload emitted when a reminder fires. */
+export interface ReminderEvent {
+  /** Invoice the reminder is for. */
+  invoiceId: string;
+  /** Offset (ms before due date) that triggered this reminder. */
+  offsetMs: number;
+  /** Unix timestamp (milliseconds) the invoice is due. */
+  dueAt: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1296,6 +1372,16 @@ export interface DecodedOperation {
   body: Record<string, unknown>;
 }
 
+/** A single decoded per-operation result within a DecodedTransactionResult. */
+export interface DecodedOperationResult {
+  /** OperationResultCode switch name (e.g. "opInner", "opBadAuth", "opNoAccount"). */
+  code: string;
+  /** Operation type name when `code === "opInner"` (e.g. "payment", "createClaimableBalance"). */
+  operationType?: string;
+  /** The operation-specific result code (e.g. "paymentSuccess", "paymentUnderfunded"). */
+  resultCode?: string;
+}
+
 /** Decoded TransactionResult as a structured JSON-safe object. */
 export interface DecodedTransactionResult {
   type: "TransactionResult";
@@ -1303,6 +1389,13 @@ export interface DecodedTransactionResult {
   result: {
     code: string;
     innerResult?: Record<string, unknown>;
+  };
+  /** Per-operation results, in the same order as the submitted transaction's operations. */
+  operationResults?: DecodedOperationResult[];
+  /** Present only for fee-bump transactions: the outer fee-bump result plus the nested inner transaction result. */
+  feeBump?: {
+    outer: { feeCharged: string; code: string };
+    inner: DecodedTransactionResult;
   };
 }
 
@@ -1333,6 +1426,28 @@ export interface DecodedLedgerEntry {
     [key: string]: unknown;
   };
 }
+
+/** Decoded AUTH_* flags for a Stellar account, with operation-compatibility checks. */
+export interface AccountFlagSet {
+  /** AUTH_REQUIRED — the issuer must approve an account before it can hold this asset. */
+  authRequired: boolean;
+  /** AUTH_REVOCABLE — the issuer can revoke an account's authorization to hold this asset. */
+  authRevocable: boolean;
+  /** AUTH_IMMUTABLE — this account's flags can never be changed again. */
+  authImmutable: boolean;
+  /** AUTH_CLAWBACK_ENABLED — the issuer can claw back this asset from holders. */
+  authClawbackEnabled: boolean;
+  /** Returns `false` when this account's flags make `operation` impossible without prior authorization. */
+  isCompatibleWith(operation: string): boolean;
+}
+
+/** Declarative description of a claimable-balance claim predicate, buildable via `PredicateBuilder.build()`. */
+export type PredicateConfig =
+  | { type: "unconditional" }
+  | { type: "absoluteWindow"; start: number; end: number }
+  | { type: "relativeWindow"; secondsFromNow: number }
+  | { type: "and"; predicates: [PredicateConfig, PredicateConfig] }
+  | { type: "or"; predicates: [PredicateConfig, PredicateConfig] };
 
 /** Union type of all decoded XDR variants. */
 export type DecodedXDR =
@@ -1408,6 +1523,72 @@ export interface InvoiceMetadata {
   lineItems: LineItem[];
   /** CIDs of attachment files (documents, images, etc.). */
   attachmentCIDs: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Multi-Asset Line Item Normalizer Types
+// ---------------------------------------------------------------------------
+
+/** A line item denominated in its own asset, prior to settlement normalisation. */
+export interface InvoiceLineItem {
+  /** Description of the item or service. */
+  description: string;
+  /** Quantity of items. */
+  quantity: number;
+  /** Unit price in stroops, denominated in `asset`. */
+  unitPrice: bigint;
+  /** Optional total override (defaults to quantity * unitPrice), denominated in `asset`. */
+  total?: bigint;
+  /** Asset identifier this line item is priced in: "native" or "CODE:ISSUER" or a contract address. */
+  asset: string;
+}
+
+/** A line item after conversion to the invoice's settlement asset. */
+export interface NormalizedLineItem {
+  /** Description of the item or service. */
+  description: string;
+  /** Original amount in stroops, denominated in `originalAsset`. */
+  originalAmount: bigint;
+  /** Asset identifier the line item was originally denominated in. */
+  originalAsset: string;
+  /** Amount in stroops after conversion to the settlement asset. */
+  convertedAmount: bigint;
+  /** Fixed-point rate (1e18 = 1.0) used for the conversion; 1e18 when no conversion was needed. */
+  conversionRate: bigint;
+}
+
+/** Aggregate result of normalising an invoice's line items to a single settlement asset. */
+export interface NormalizedInvoiceTotal {
+  /** Asset identifier all amounts were normalised to. */
+  settlementAsset: string;
+  /** Sum of all `convertedAmount` values, in stroops. */
+  total: bigint;
+  /** Per-item normalised amounts, in the same order as the input. */
+  items: NormalizedLineItem[];
+}
+
+// ---------------------------------------------------------------------------
+// Contract Retry Queue Types
+// ---------------------------------------------------------------------------
+
+/** A single Soroban contract invocation to be submitted (with retry on failure). */
+export interface ContractInvocation {
+  /** Contract address being invoked. */
+  contractId: string;
+  /** Contract method name. */
+  method: string;
+  /** Method arguments, in the order the contract expects them. */
+  args: unknown[];
+  /** Stellar address the invocation is submitted on behalf of. */
+  source: string;
+}
+
+/** Result of a successfully submitted contract invocation. */
+export interface ContractResult {
+  /** Hash of the submitted transaction. */
+  txHash: string;
+  /** Decoded return value from the contract call, if any. */
+  returnValue?: unknown;
 }
 
 /** Configuration for IPFS backend. */
@@ -1614,6 +1795,104 @@ export interface Sep24StatusChangedEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Auth-Required Trustline Handler Types
+// ---------------------------------------------------------------------------
+
+/** Lifecycle status of an auth-required trustline approval. */
+export type TrustlineAuthStatus = "required" | "not_required" | "granted";
+
+/** Stellar operation used to grant trustline authorization. */
+export type TrustlineAuthOperationType = "setTrustLineFlags" | "allowTrust";
+
+/** A request to authorize a recipient's trustline for an AUTH_REQUIRED asset. */
+export interface TrustlineAuthRequest {
+  /** Stellar address of the recipient whose trustline needs authorization. */
+  recipientId: string;
+  /** Asset code (e.g. "USDC"). */
+  assetCode: string;
+  /** Asset issuer's Stellar address. */
+  assetIssuer: string;
+  /** Whether the issuer account has the AUTH_REQUIRED flag set. */
+  authRequired: boolean;
+  /** Current status of this authorization request. */
+  status: TrustlineAuthStatus;
+  /** Unix timestamp (milliseconds) this request/grant was recorded. */
+  requestedAt: number;
+  /** Operation type used to grant authorization, set once `status` is "granted". */
+  operationType?: TrustlineAuthOperationType;
+  /** Submission transaction hash, set once `status` is "granted". */
+  txHash?: string;
+}
+
+// ---------------------------------------------------------------------------
+// SEP-31 Cross-Border Direct Payment Types
+// ---------------------------------------------------------------------------
+
+/** Lifecycle status of a SEP-31 direct payment, per the SEP-31 spec. */
+export type Sep31Status =
+  | "pending_sender"
+  | "pending_receiver"
+  | "pending_transaction_info_update"
+  | "pending_stellar"
+  | "pending_external"
+  | "completed"
+  | "error";
+
+/** Description of a single field required by the receiving anchor's /send endpoint. */
+export interface Sep31FieldSpec {
+  /** Human-readable description of the field. */
+  description: string;
+  /** Allowed values, when the field is an enum. */
+  choices?: string[];
+  /** Whether the field may be omitted. */
+  optional?: boolean;
+}
+
+/** Typed field schema returned by the receiving anchor's /info endpoint for one asset. */
+export interface Sep31RequiredFields {
+  /** Minimum payment amount the anchor will accept, if published. */
+  minAmount?: number;
+  /** Maximum payment amount the anchor will accept, if published. */
+  maxAmount?: number;
+  /** Additional transaction-level fields the anchor requires (e.g. routing_number). */
+  transactionFields: Record<string, Sep31FieldSpec>;
+}
+
+/** A record tracking a single SEP-31 cross-border direct payment. */
+export interface Sep31PaymentRecord {
+  /** Transaction ID returned by the receiving anchor. */
+  id: string;
+  /** Current lifecycle status. */
+  status: Sep31Status;
+  /** Asset code (e.g. "USDC"). */
+  assetCode: string;
+  /** Asset issuer's Stellar address. */
+  assetIssuer: string;
+  /** Payment amount as a decimal string. */
+  amount: string;
+  /** Home domain of the receiving anchor. */
+  anchorDomain: string;
+  /** Stellar transaction ID once the payment settles on-chain. */
+  stellarTxId: string | null;
+  /** Unix timestamp (milliseconds) the payment was initiated. */
+  startedAt: number;
+  /** Unix timestamp (milliseconds) of the last status update. */
+  updatedAt: number;
+  /** Anchor-supplied message describing what additional info is needed, if any. */
+  requiredInfoMessage: string | null;
+  /** Human-readable error message when status is "error". */
+  errorMessage: string | null;
+}
+
+/** Event emitted when a SEP-31 payment's status changes. */
+export interface Sep31StatusChangedEvent {
+  /** The payment record with updated status. */
+  payment: Sep31PaymentRecord;
+  /** The previous status before this change, or null for the initial creation. */
+  previousStatus: Sep31Status | null;
+}
+
+// ---------------------------------------------------------------------------
 // Horizon Paginator Types
 // ---------------------------------------------------------------------------
 
@@ -1649,99 +1928,64 @@ export interface CursorStore {
 }
 
 // ---------------------------------------------------------------------------
-// #582 — Soroban DeployPipeline: WASM upload + contract instantiation
+// Account Data Entry Types (Issue #528)
 // ---------------------------------------------------------------------------
 
-/** Inputs for a full upload-then-instantiate deployment via {@link DeployPipeline}. */
-export interface DeployOptions {
-  /** Raw Soroban contract WASM bytecode to upload. */
-  wasmBytes: Buffer;
-  /**
-   * 32-byte salt used to derive the deterministic contract address.
-   * A random salt is generated when omitted.
-   */
-  salt?: Buffer;
+/** A single decoded key-value data entry stored on a Stellar account. */
+export interface AccountDataEntry {
+  /** Data entry key (max 64 bytes). */
+  key: string;
+  /** Decoded (UTF-8) value, or null when the entry has been cleared. */
+  value: string | null;
 }
 
-/** Result of a completed {@link DeployPipeline} deployment. */
-export interface DeployResult {
-  /** Hex-encoded hash of the uploaded WASM bytecode. */
-  wasmHash: string;
-  /** Address (C...) of the instantiated contract. */
-  contractId: string;
-}
+/** All data entries currently stored on an account, keyed by entry name. */
+export type AccountDataMap = Record<string, string>;
 
 // ---------------------------------------------------------------------------
-// #583 — WebhookAgent: JWT/HMAC-signed webhook delivery
+// Soroban Feature Detection Types (Issue #529)
 // ---------------------------------------------------------------------------
 
-/** Structured envelope delivered to webhook consumers. */
-export interface WebhookPayload<T = unknown> {
-  /** Unique identifier (UUID v4) for this delivery, for consumer-side dedup. */
-  event_id: string;
-  /** Machine-readable event type, e.g. "invoice.payment.completed". */
-  event_type: string;
-  /** ISO-8601 timestamp of when the payload was generated. */
-  timestamp: string;
-  /** Event-specific data. */
-  data: T;
-}
-
-// ---------------------------------------------------------------------------
-// #584 — FeeTrendAnalyzer: rolling Horizon fee_stats percentile tracker
-// ---------------------------------------------------------------------------
-
-/** Configuration for {@link FeeTrendAnalyzer}. */
-export interface FeeTrendOptions {
-  /** Horizon server base URL, e.g. "https://horizon.stellar.org". */
-  horizonUrl: string;
-  /** Rolling window capacity (min 5, max 100). Default: 20. */
-  windowSize?: number;
-  /** Sample time-to-live in milliseconds before eviction. Default: 5 minutes. */
-  ttlMs?: number;
+/**
+ * Typed flags for protocol-version-gated Soroban features, plus the raw
+ * resource limits pulled from the network's `ConfigSettingEntry` ledger
+ * entries.
+ */
+export interface SorobanFeatureFlags {
+  /** Current Stellar protocol version integer. */
+  protocolVersion: number;
+  /** Whether the network supports the `ExtendFootprintTtl` operation (protocol >= 20). */
+  supportsExtendFootprint: boolean;
+  /** Whether the network supports archived-entry restoration (protocol >= 20). */
+  supportsRestoreFootprint: boolean;
+  /** Maximum Soroban instructions allowed per transaction. */
+  maxInstructionsPerTx: number;
+  /** Maximum Soroban instructions allowed per ledger. */
+  maxInstructionsPerLedger: number;
+  /** Unix timestamp (ms) when these flags were detected. */
+  detectedAt: number;
 }
 
 // ---------------------------------------------------------------------------
-// #585 — Sep12Client: SEP-12 KYC field submission
+// Per-Split Audit Log Types (Issue #531)
 // ---------------------------------------------------------------------------
 
-/** Text KYC fields submitted via SEP-12 `PUT /customer`. */
-export type KycFields = Record<string, string>;
-
-/** A single binary KYC document attachment (e.g. photo ID). */
-export interface KycDocument {
-  /** SEP-9 field name, e.g. "photo_id_front". */
-  field: string;
-  /** Raw file bytes. */
-  content: Buffer | Blob;
-  /** File name sent in the multipart part. */
-  filename: string;
-  /** MIME type, e.g. "image/jpeg". */
-  contentType: string;
-}
-
-/** Discriminated union of SEP-12 customer statuses. */
-export type KycStatus =
-  | { status: "ACCEPTED"; id: string }
-  | { status: "PROCESSING"; id: string; message?: string }
-  | { status: "NEEDS_INFO"; id: string; missingFields: string[]; message?: string }
-  | { status: "REJECTED"; id: string; message?: string };
-
-/** Thrown when an anchor reports SEP-12 status `NEEDS_INFO` or `REJECTED`. */
-export class KycNeedsInfoError extends StellarSplitError {
-  readonly status: KycStatus;
-  readonly missingFields: string[];
-
-  constructor(status: KycStatus) {
-    const missingFields = status.status === "NEEDS_INFO" ? status.missingFields : [];
-    super(
-      `SEP-12 customer status "${status.status}" requires attention`,
-      "KYC_NEEDS_INFO",
-      { status, missingFields }
-    );
-    this.name = "KycNeedsInfoError";
-    this.status = status;
-    this.missingFields = missingFields;
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
+/** A granular audit record for a single settled leg of a multi-recipient split payment. */
+export interface SplitAuditEntry {
+  /** Invoice the split payment belongs to. */
+  invoiceId: string;
+  /** Zero-based index of this leg within the split. */
+  legIndex: number;
+  /** Stellar address of the recipient for this leg. */
+  recipientId: string;
+  /** Asset code paid out for this leg. */
+  assetCode: string;
+  /** Amount paid to this recipient, in stroops. */
+  amount: bigint;
+  /** Operation ID of the settlement operation. */
+  operationId: string;
+  /** Ledger sequence number at which the leg settled. */
+  ledgerSequence: number;
+  /** Unix timestamp (seconds) when the leg settled. */
+  settledAt: number;
 }

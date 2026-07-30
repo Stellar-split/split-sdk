@@ -3,6 +3,7 @@
  */
 
 import { getCursor, setCursor } from "./cursorTracker.js";
+import type { StreamDeduplicator } from "./streamDeduplicator.js";
 
 /** The three event types emitted by the invoice SSE stream. */
 export type SSEInvoiceEventType =
@@ -33,6 +34,12 @@ export interface SubscribeToInvoiceOptions {
   maxBackoffMs?: number;
   /** Factory for EventSource (injectable for testing). Default: global EventSource. */
   eventSourceFactory?: (url: string) => EventSourceLike;
+  /**
+   * Optional deduplicator applied before dispatching to `handler`. When the
+   * incoming message includes a `paging_token` field and it has already been
+   * seen, the event is discarded instead of delivered.
+   */
+  dedup?: StreamDeduplicator;
 }
 
 /** Minimal EventSource interface (subset of the browser API). */
@@ -71,6 +78,7 @@ export function subscribeToInvoice(
     initialBackoffMs = 1000,
     maxBackoffMs = 30_000,
     eventSourceFactory,
+    dedup,
   } = options;
 
   // Build URL with persisted cursor for resume-on-restart.
@@ -99,6 +107,7 @@ export function subscribeToInvoice(
           type?: unknown;
           invoiceId?: unknown;
           data?: unknown;
+          paging_token?: unknown;
         };
 
         if (
@@ -107,6 +116,11 @@ export function subscribeToInvoice(
           typeof raw.invoiceId !== "string"
         ) {
           return;
+        }
+
+        if (dedup && typeof raw.paging_token === "string") {
+          const isNew = dedup.filter({ paging_token: raw.paging_token });
+          if (!isNew) return;
         }
 
         backoff = initialBackoffMs; // reset on successful message

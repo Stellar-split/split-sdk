@@ -11,6 +11,26 @@ All notable changes to this project will be documented in this file.
 ### Features
 
 
+- **Add invoice due-date reminder scheduler (closes #542)**
+  - `InvoiceReminderScheduler.schedule(invoiceId, offsets: number[])` registers reminders at each offset (ms) before an invoice's due date
+  - Schedules persist via `saveReminderSchedules`/`loadReminderSchedules` (`src/snapshot.ts`), keyed by invoice, so reminders survive process restarts
+  - On construction, past-due reminders within `gracePeriodMs` (default 60 000 ms) fire automatically; older ones are marked `expired`
+  - Emits `invoiceReminderDue` with `{ invoiceId, offsetMs, dueAt }` via the existing `TypedEventEmitter`
+  - `InvoiceReminderScheduler.cancel(invoiceId)` removes all pending reminders for an invoice
+  - New types: `ReminderSchedule`, `ReminderEvent`, `ReminderStatus`; `InvoiceRecord.dueAt` added
+- **Add auth-required trustline request handler (closes #541)**
+  - `TrustlineAuthHandler.checkAndRequest(recipientId, asset)` detects `AUTH_REQUIRED` issuers and emits `trustlineAuthRequired` with the issuer's public key
+  - `TrustlineAuthHandler.grantAuth(recipientId, asset, issuerKeypair)` builds, signs, and submits the approval operation
+  - Prefers `SetTrustLineFlags` (protocol >= 18) and falls back to legacy `AllowTrust` on older networks, detected via new `src/sorobanFeatureDetector.ts`
+  - Issuer account flags read via new `src/accountFlagsInspector.ts`; integrated into `src/preflightChecker.ts` as `checkTrustlineAuthRequirement`
+  - Emits `trustlineAuthGranted` after successful submission
+- **Add SEP-31 cross-border payment initiator (closes #540)**
+  - `Sep31Initiator.initiate(...)` completes the anchor `/send` call and stores the returned transaction record
+  - `Sep31Initiator.getRequiredFields(anchorDomain, asset)` reads the anchor `/info` endpoint and returns a typed field schema
+  - `Sep31Initiator.pollStatus(transactionId, anchorDomain)` is an async generator yielding status updates until a terminal state (`completed`/`error`)
+  - Resolves the receiving anchor's `DIRECT_PAYMENT_SERVER` from its stellar.toml via `StellarToml.Resolver`
+  - SEP-10 JWT passed to `initiate()` is reused automatically for subsequent `pollStatus` calls
+  - New types: `Sep31PaymentRecord`, `Sep31Status`, `Sep31StatusChangedEvent`, `Sep31RequiredFields`, `Sep31FieldSpec`
 - **Build invoice diff utility — compare two invoice states (closes #363)**
   - `diffInvoices(a: Invoice, b: Invoice)` returns structured diff of two invoice objects
   - Returns `InvoiceDiff` as `{ field: string, before: unknown, after: unknown }[]` — only changed fields listed

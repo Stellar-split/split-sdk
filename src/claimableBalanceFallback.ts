@@ -25,6 +25,7 @@ import type { StellarSplitClientConfig } from "./client.js";
 import { ValidationError, ClaimableBalanceLifecycleError } from "./errors.js";
 import { TypedEventEmitter, type Unsubscribe } from "./events/TypedEventEmitter.js";
 import type { ClaimableBalanceRecord, ClaimableBalanceStatus } from "./types.js";
+import { PredicateBuilder, type ClaimPredicate } from "./predicateBuilder.js";
 
 // ---------------------------------------------------------------------------
 // Error-pattern detection
@@ -97,7 +98,9 @@ export interface ClaimableRefundEntry {
  * Build and submit a `createClaimableBalance` operation so that `payer` can
  * claim the refund once their account / trustline is ready.
  *
- * The claimable balance is unconditional — the payer may claim it at any time.
+ * The claimable balance is unconditional by default — the payer may claim it
+ * at any time. Pass `predicate` (see {@link PredicateBuilder}) to restrict
+ * when the balance can be claimed.
  *
  * Requires `config.horizonUrl` to be set.
  *
@@ -107,6 +110,7 @@ export interface ClaimableRefundEntry {
  * @param sourceAddress - Stellar address funding / submitting the transaction.
  *                        This account must hold sufficient `asset` balance.
  * @param config        - StellarSplit client config.  `horizonUrl` must be set.
+ * @param predicate     - Optional claim predicate. Defaults to unconditional.
  *
  * @throws If `config.horizonUrl` is not configured.
  */
@@ -115,7 +119,8 @@ export async function createClaimableRefund(
   amount: bigint,
   asset: Asset,
   sourceAddress: string,
-  config: StellarSplitClientConfig
+  config: StellarSplitClientConfig,
+  predicate: ClaimPredicate = PredicateBuilder.unconditional()
 ): Promise<ClaimableRefundResult> {
   if (!config.horizonUrl) {
     throw new ValidationError(
@@ -143,7 +148,7 @@ export async function createClaimableRefund(
       Operation.createClaimableBalance({
         asset,
         amount: amountStr,
-        claimants: [new Claimant(payer, Claimant.predicateUnconditional())],
+        claimants: [new Claimant(payer, predicate)],
       })
     )
     .setTimeout(30)
