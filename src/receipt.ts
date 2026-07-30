@@ -20,6 +20,10 @@ export interface PaymentReceipt {
   ledgerTimestamp: number;
   /** Convert receipt to a JSON-serializable object (with bigints represented as strings). */
   toJSON(): PaymentReceiptJSON;
+  /** Payment status (optional). */
+  status?: "pending" | "finalized";
+  /** Balance deltas for recipients (optional). */
+  effectSummary?: Record<string, bigint>;
 }
 
 /** JSON-serializable representation of a PaymentReceipt. */
@@ -37,6 +41,8 @@ export interface PaymentReceiptJSON {
   proofHash: string;
   generatedAt: number;
   ledgerTimestamp: number;
+  status?: "pending" | "finalized";
+  effectSummary?: Record<string, string>;
 }
 
 /** Interface for any client capable of fetching an invoice by ID. */
@@ -152,6 +158,12 @@ export function deserializePaymentReceipt(json: string): PaymentReceipt {
     proofHash: data.proofHash,
     generatedAt: data.generatedAt,
     ledgerTimestamp: data.ledgerTimestamp,
+    status: data.status,
+    effectSummary: data.effectSummary
+      ? Object.fromEntries(
+          Object.entries(data.effectSummary).map(([k, v]) => [k, BigInt(v)])
+        )
+      : undefined,
   });
 }
 
@@ -163,6 +175,8 @@ function _buildReceiptObject(data: {
   proofHash: string;
   generatedAt: number;
   ledgerTimestamp: number;
+  status?: "pending" | "finalized";
+  effectSummary?: Record<string, bigint>;
 }): PaymentReceipt {
   return {
     invoiceId: data.invoiceId,
@@ -172,8 +186,10 @@ function _buildReceiptObject(data: {
     proofHash: data.proofHash,
     generatedAt: data.generatedAt,
     ledgerTimestamp: data.ledgerTimestamp,
+    status: data.status,
+    effectSummary: data.effectSummary,
     toJSON(): PaymentReceiptJSON {
-      return {
+      const json: PaymentReceiptJSON = {
         invoiceId: this.invoiceId,
         payer: this.payer,
         totalPaid: this.totalPaid.toString(),
@@ -185,6 +201,15 @@ function _buildReceiptObject(data: {
         generatedAt: this.generatedAt,
         ledgerTimestamp: this.ledgerTimestamp,
       };
+      if (this.status) {
+        json.status = this.status;
+      }
+      if (this.effectSummary) {
+        json.effectSummary = Object.fromEntries(
+          Object.entries(this.effectSummary).map(([k, v]) => [k, v.toString()])
+        );
+      }
+      return json;
     },
   };
 }
