@@ -708,6 +708,38 @@ export class Sep41AdapterError extends StellarSplitError {
   }
 }
 
+/** Thrown when a queued contract invocation exhausts its retry attempts. */
+export class ContractRetryExhaustedError extends StellarSplitError {
+  readonly attempts: number;
+
+  constructor(attempts: number, lastError: unknown) {
+    super(
+      `Contract invocation retry exhausted after ${attempts} attempts`,
+      "CONTRACT_RETRY_EXHAUSTED",
+      { attempts, lastError: lastError instanceof Error ? lastError.message : String(lastError) }
+    );
+    this.name = "ContractRetryExhaustedError";
+    this.attempts = attempts;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a line item's asset has no oracle price available for normalisation. */
+export class UnsupportedLineItemAssetError extends StellarSplitError {
+  readonly asset: string;
+
+  constructor(asset: string) {
+    super(
+      `No oracle price available for line item asset: ${asset}`,
+      "UNSUPPORTED_LINE_ITEM_ASSET",
+      { asset }
+    );
+    this.name = "UnsupportedLineItemAssetError";
+    this.asset = asset;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Thrown when tranche status check fails. */
 export class TrancheProgressError extends StellarSplitError {
   constructor(message: string) {
@@ -1085,6 +1117,14 @@ export function isUnknownNetworkError(err: unknown): err is UnknownNetworkError 
 
 export function isInsufficientSignaturesError(err: unknown): err is InsufficientSignaturesError {
   return err instanceof InsufficientSignaturesError;
+}
+
+export function isUnsupportedLineItemAssetError(err: unknown): err is UnsupportedLineItemAssetError {
+  return err instanceof UnsupportedLineItemAssetError;
+}
+
+export function isContractRetryExhaustedError(err: unknown): err is ContractRetryExhaustedError {
+  return err instanceof ContractRetryExhaustedError;
 }
 
 export function isCloneChainTooDeepError(err: unknown): err is CloneChainTooDeepError {
@@ -1701,69 +1741,24 @@ export function isClassifiedHorizonError(err: unknown): err is ClassifiedHorizon
 }
 
 // ---------------------------------------------------------------------------
-// Split rollback coordinator errors
+// Account Data Entry errors
 // ---------------------------------------------------------------------------
 
-/** Thrown when a rollback coordinator operation references an unknown split checkpoint or leg. */
-export class UnknownSplitError extends StellarSplitError {
-  constructor(splitId: string) {
-    super(`No rollback checkpoint found for split: ${splitId}`, "UNKNOWN_SPLIT", { splitId });
-    this.name = "UnknownSplitError";
+/**
+ * Thrown when an account data entry key/value exceeds the 64-byte Stellar
+ * protocol limit, or when adding a new key would exceed the 64-entry cap.
+ */
+export class DataEntryValidationError extends StellarSplitError {
+  readonly reason: string;
+
+  constructor(reason: string, context?: Record<string, unknown>) {
+    super(`Account data entry validation failed: ${reason}`, "DATA_ENTRY_VALIDATION_ERROR", context);
+    this.name = "DataEntryValidationError";
+    this.reason = reason;
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-export function isUnknownSplitError(err: unknown): err is UnknownSplitError {
-  return err instanceof UnknownSplitError;
-}
-
-// ---------------------------------------------------------------------------
-// Price oracle adapter errors
-// ---------------------------------------------------------------------------
-
-/** Thrown when a price oracle request is rate-limited by the upstream provider. */
-export class RateLimitError extends StellarSplitError {
-  /** Seconds the caller should wait before retrying, if known. */
-  readonly retryAfterSeconds?: number;
-
-  constructor(message: string, retryAfterSeconds?: number) {
-    super(message, "RATE_LIMITED", { retryAfterSeconds });
-    this.name = "RateLimitError";
-    this.retryAfterSeconds = retryAfterSeconds;
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-export function isRateLimitError(err: unknown): err is RateLimitError {
-  return err instanceof RateLimitError;
-}
-
-/** Thrown when a price oracle request fails for a reason other than rate limiting. */
-export class PriceOracleFetchError extends StellarSplitError {
-  constructor(message: string) {
-    super(message, "PRICE_ORACLE_FETCH_FAILED", undefined, message);
-    this.name = "PriceOracleFetchError";
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-export function isPriceOracleFetchError(err: unknown): err is PriceOracleFetchError {
-  return err instanceof PriceOracleFetchError;
-}
-
-// ---------------------------------------------------------------------------
-// Path query builder errors
-// ---------------------------------------------------------------------------
-
-/** Thrown when a PathQueryBuilder query is missing required parameters or fails validation. */
-export class InvalidPathQueryError extends StellarSplitError {
-  constructor(message: string, context?: Record<string, unknown>) {
-    super(message, "INVALID_PATH_QUERY", context);
-    this.name = "InvalidPathQueryError";
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-export function isInvalidPathQueryError(err: unknown): err is InvalidPathQueryError {
-  return err instanceof InvalidPathQueryError;
+export function isDataEntryValidationError(err: unknown): err is DataEntryValidationError {
+  return err instanceof DataEntryValidationError;
 }

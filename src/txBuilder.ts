@@ -87,6 +87,16 @@ export class StellarSplitTxBuilder {
   }
 
   /**
+   * Add a ManageData operation for setting or clearing an account data entry.
+   * Pass `value: null` to clear the entry.
+   */
+  addManageData(key: string, value: string | null): this {
+    const op = Operation.manageData({ name: key, value });
+    this.operations.push(op);
+    return this;
+  }
+
+  /**
    * Add a PathPaymentStrictSend operation for cross-asset DEX-routed payments.
    */
   addPathPaymentStrictSend(

@@ -1,51 +1,118 @@
 /**
- * Minimal TTL cache for price oracle rates, keyed by base/quote pair.
+ * Exchange Rate Cache — a time-to-live cache for exchange rates fetched from
+ * external oracles, so that repeated conversions within a single rendering
+ * session don't re-fetch a rate that hasn't gone stale yet.
  *
- * Used by PriceOracleAdapter implementations (see priceOracle.ts) to avoid
- * redundant upstream requests within the configured TTL window.
+ * Supports background refresh: entries are pre-warmed at `ttlMs * 0.8` so a
+ * cache read never pays cold-fetch latency right after expiry.
  */
 
+/** A single cached rate entry. */
+export interface RateCacheEntry<TRate> {
+  rate: TRate;
+  fetchedAt: number;
+}
+
+/** A function that fetches the current exchange rate for a `from -> to` asset pair. */
+export type RateOracleFn<TRate> = (from: string, to: string) => Promise<TRate>;
+
+/** Configuration for {@link RateCache}. */
 export interface RateCacheConfig {
-  /** Time-to-live for cached rates, in milliseconds. Default: 30_000 (30s). */
+  /** Time-to-live for a cached rate, in milliseconds. Default: 60_000 (60s). */
   ttlMs?: number;
 }
 
-interface RateEntry {
-  rate: number;
-  expiresAt: number;
+const DEFAULT_TTL_MS = 60_000;
+
+function cacheKey(from: string, to: string): string {
+  return `${from}:${to}`;
 }
 
-export class RateCache {
-  private readonly store = new Map<string, RateEntry>();
+/**
+ * TTL-based cache for exchange rates, keyed by `"${fromAsset}:${toAsset}"`.
+ *
+ * ```ts
+ * const cache = new RateCache((from, to) => oracle.getPrice(from, to));
+ * const rate = await cache.getRate("USDC", "USD");
+ * cache.start(); // pre-warm entries in the background before they expire
+ * ```
+ */
+export class RateCache<TRate = number> {
+  private readonly store = new Map<string, RateCacheEntry<TRate>>();
+  private readonly oracle: RateOracleFn<TRate>;
   private readonly ttlMs: number;
+  private refreshTimer: ReturnType<typeof setInterval> | null = null;
+  private _running = false;
 
-  constructor(config: RateCacheConfig = {}) {
-    this.ttlMs = config.ttlMs ?? 30_000;
+  constructor(oracle: RateOracleFn<TRate>, config: RateCacheConfig = {}) {
+    this.oracle = oracle;
+    this.ttlMs = config.ttlMs ?? DEFAULT_TTL_MS;
   }
 
-  /** The cached rate for `base`/`quote`, or undefined if absent or expired. */
-  get(base: string, quote: string): number | undefined {
-    const key = this.key(base, quote);
+  /** Whether background refresh is currently running. */
+  get running(): boolean {
+    return this._running;
+  }
+
+  /**
+   * Get the exchange rate for `from -> to`, serving from cache when the
+   * entry is younger than `ttlMs`. On a cache miss (or expired entry), calls
+   * the configured oracle function and stores the result with a timestamp.
+   */
+  async getRate(from: string, to: string): Promise<TRate> {
+    const key = cacheKey(from, to);
     const entry = this.store.get(key);
-    if (!entry) return undefined;
-    if (Date.now() > entry.expiresAt) {
-      this.store.delete(key);
-      return undefined;
+    if (entry && Date.now() - entry.fetchedAt < this.ttlMs) {
+      return entry.rate;
     }
-    return entry.rate;
+
+    const rate = await this.oracle(from, to);
+    this.store.set(key, { rate, fetchedAt: Date.now() });
+    return rate;
   }
 
-  /** Cache `rate` for `base`/`quote`, expiring after this cache's TTL. */
-  set(base: string, quote: string, rate: number): void {
-    this.store.set(this.key(base, quote), { rate, expiresAt: Date.now() + this.ttlMs });
+  /** Remove a single `from -> to` pair from the cache. */
+  invalidate(from: string, to: string): void {
+    this.store.delete(cacheKey(from, to));
   }
 
-  /** Remove all cached rates. */
-  clear(): void {
+  /** Clear the entire cache. */
+  invalidateAll(): void {
     this.store.clear();
   }
 
-  private key(base: string, quote: string): string {
-    return `${base.toUpperCase()}:${quote.toUpperCase()}`;
+  /**
+   * Start background refresh. Every `ttlMs * 0.8`, every currently cached
+   * pair is re-fetched from the oracle and its entry updated, so a read
+   * never has to pay cold-fetch latency right after expiry.
+   */
+  start(): void {
+    if (this._running) return;
+    this._running = true;
+    this.refreshTimer = setInterval(() => {
+      void this.refreshAll();
+    }, this.ttlMs * 0.8);
+  }
+
+  /** Stop background refresh. Cached entries are preserved. */
+  stop(): void {
+    this._running = false;
+    if (this.refreshTimer !== null) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = null;
+    }
+  }
+
+  private async refreshAll(): Promise<void> {
+    for (const key of Array.from(this.store.keys())) {
+      const [from, to] = key.split(":");
+      if (from === undefined || to === undefined) continue;
+      try {
+        const rate = await this.oracle(from, to);
+        this.store.set(key, { rate, fetchedAt: Date.now() });
+      } catch {
+        // Best-effort background refresh; keep the stale entry until the next attempt.
+      }
+    }
   }
 }

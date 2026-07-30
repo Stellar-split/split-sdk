@@ -14,7 +14,7 @@ import {
   scValToNative,
 } from "@stellar/stellar-sdk";
 import { OraclePriceError, NoReturnValueError } from "./errors.js";
-import type { PriceOracleAdapter } from "./types.js";
+import { RateCache } from "./rateCache.js";
 
 export interface ConvertedAmount {
   original: bigint;
@@ -24,21 +24,34 @@ export interface ConvertedAmount {
   toDisplayCurrency: string;
 }
 
-interface CacheEntry {
-  rate: bigint;
-  fetchedAt: number;
-}
-
-const priceCache = new Map<string, CacheEntry>();
-
 const DEFAULT_CACHE_TTL_MS = 10_000;
 
-function cacheKey(fromToken: string, toDisplayCurrency: string, oracleAddress: string): string {
-  return `${fromToken}:${toDisplayCurrency}:${oracleAddress}`;
+/** One `RateCache<bigint>` per oracle address, so entries survive across calls. */
+const rateCachesByOracle = new Map<string, RateCache<bigint>>();
+
+function getRateCache(
+  oracleAddress: string,
+  server: SorobanRpc.Server,
+  networkPassphrase: string,
+  ttlMs: number,
+): RateCache<bigint> {
+  let cache = rateCachesByOracle.get(oracleAddress);
+  if (!cache) {
+    cache = new RateCache<bigint>(
+      (from, to) => fetchOraclePrice(from, to, oracleAddress, server, networkPassphrase),
+      { ttlMs },
+    );
+    rateCachesByOracle.set(oracleAddress, cache);
+  }
+  return cache;
 }
 
 export function clearPriceCache(): void {
-  priceCache.clear();
+  for (const cache of rateCachesByOracle.values()) {
+    cache.stop();
+    cache.invalidateAll();
+  }
+  rateCachesByOracle.clear();
 }
 
 async function fetchOraclePrice(
@@ -89,17 +102,8 @@ export async function convertAmount(
   networkPassphrase: string,
   priceCacheTtlMs: number = DEFAULT_CACHE_TTL_MS,
 ): Promise<ConvertedAmount> {
-  const key = cacheKey(fromToken, toDisplayCurrency, oracleAddress);
-  const now = Date.now();
-  const cached = priceCache.get(key);
-
-  let rate: bigint;
-  if (cached && now - cached.fetchedAt < priceCacheTtlMs) {
-    rate = cached.rate;
-  } else {
-    rate = await fetchOraclePrice(fromToken, toDisplayCurrency, oracleAddress, server, networkPassphrase);
-    priceCache.set(key, { rate, fetchedAt: now });
-  }
+  const cache = getRateCache(oracleAddress, server, networkPassphrase, priceCacheTtlMs);
+  const rate = await cache.getRate(fromToken, toDisplayCurrency);
 
   // rate is assumed to be in fixed-point with 18 decimals (1e18 = 1.0)
   const converted = (amount * rate) / 1_000_000_000_000_000_000n;

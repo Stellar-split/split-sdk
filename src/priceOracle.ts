@@ -1,78 +1,72 @@
 /**
- * Default PriceOracleAdapter implementation backed by CoinGecko's public
- * `/simple/price` REST endpoint. Callers needing a different provider can
- * supply their own PriceOracleAdapter (see types.ts) instead.
+ * Cross-asset price oracle for settlement calculations (invoice normalisation,
+ * multi-asset line items). Unlike `currencyConverter.ts` (display-only, never
+ * feeds into real amounts), rates returned here are used to compute amounts
+ * that settle on-chain, so callers should treat failures as fatal rather than
+ * falling back to a stale/cached display value.
  */
 
-import { PriceOracleFetchError, RateLimitError } from "./errors.js";
-import { RateCache } from "./rateCache.js";
-import type { PriceOracleAdapter } from "./types.js";
+import {
+  Contract,
+  rpc as SorobanRpc,
+  TransactionBuilder,
+  BASE_FEE,
+  nativeToScVal,
+  scValToNative,
+} from "@stellar/stellar-sdk";
+import { OraclePriceError, NoReturnValueError } from "./errors.js";
 
-/** Default asset-code -> CoinGecko coin-id mapping for common Stellar assets. */
-const DEFAULT_COIN_IDS: Record<string, string> = {
-  XLM: "stellar",
-  USDC: "usd-coin",
-};
-
-export interface CoinGeckoPriceOracleOptions {
-  /** Override the CoinGecko API base URL (e.g. for a proxy). Default: the public API. */
-  apiBaseUrl?: string;
-  /** Additional or overriding asset-code -> CoinGecko coin-id mappings. */
-  coinIds?: Record<string, string>;
-  /** Cache used to avoid redundant requests. Defaults to a private RateCache. */
-  cache?: RateCache;
+/** Resolves a conversion rate between two on-chain assets. */
+export interface PriceOracle {
+  /**
+   * Fixed-point rate (1e18 = 1.0) to convert 1 unit of `fromAsset` into
+   * `toAsset`, or `undefined` when no price is available for that pair.
+   */
+  getRate(fromAsset: string, toAsset: string): Promise<bigint | undefined>;
 }
 
-/**
- * Fetches fiat/asset conversion rates from CoinGecko's public price API,
- * caching results via {@link RateCache}.
- */
-export class CoinGeckoPriceOracle implements PriceOracleAdapter {
-  private readonly apiBaseUrl: string;
-  private readonly coinIds: Record<string, string>;
-  private readonly cache: RateCache;
+/** Soroban contract-backed price oracle. */
+export class ContractPriceOracle implements PriceOracle {
+  constructor(
+    private readonly server: SorobanRpc.Server,
+    private readonly oracleAddress: string,
+    private readonly networkPassphrase: string
+  ) {}
 
-  constructor(options: CoinGeckoPriceOracleOptions = {}) {
-    this.apiBaseUrl = options.apiBaseUrl ?? "https://api.coingecko.com/api/v3";
-    this.coinIds = { ...DEFAULT_COIN_IDS, ...options.coinIds };
-    this.cache = options.cache ?? new RateCache();
-  }
+  async getRate(fromAsset: string, toAsset: string): Promise<bigint | undefined> {
+    const contract = new Contract(this.oracleAddress);
+    const operation = contract.call(
+      "get_price",
+      nativeToScVal(fromAsset, { type: "symbol" }),
+      nativeToScVal(toAsset, { type: "symbol" })
+    );
 
-  /**
-   * Resolve the price of one unit of `base` denominated in `quote`.
-   * `base` may be any key in `coinIds` (defaults include "XLM", "USDC") or a
-   * raw CoinGecko coin id; `quote` is a CoinGecko vs_currency code (e.g. "USD").
-   */
-  async getPrice(base: string, quote: string): Promise<number> {
-    const cached = this.cache.get(base, quote);
-    if (cached !== undefined) return cached;
+    const sourceAccount = {
+      accountId: () => this.oracleAddress,
+      sequenceNumber: () => "0",
+      incrementSequenceNumber: () => {},
+    } as any;
 
-    const coinId = this.coinIds[base.toUpperCase()] ?? base.toLowerCase();
-    const vsCurrency = quote.toLowerCase();
-    const url = `${this.apiBaseUrl}/simple/price?ids=${encodeURIComponent(coinId)}&vs_currencies=${encodeURIComponent(vsCurrency)}`;
+    const tx = new TransactionBuilder(sourceAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(operation)
+      .setTimeout(30)
+      .build();
 
-    const response = await fetch(url);
-
-    if (response.status === 429) {
-      const retryAfterHeader = response.headers.get("retry-after");
-      throw new RateLimitError(
-        `CoinGecko rate limit exceeded fetching ${base}/${quote}`,
-        retryAfterHeader ? Number(retryAfterHeader) : undefined,
-      );
-    }
-    if (!response.ok) {
-      throw new PriceOracleFetchError(
-        `CoinGecko request failed with status ${response.status} fetching ${base}/${quote}`,
-      );
+    const simResult = await this.server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(simResult)) {
+      if (/no price|not found|unsupported/i.test(simResult.error)) {
+        return undefined;
+      }
+      throw new OraclePriceError(`Oracle simulation failed: ${simResult.error}`);
     }
 
-    const payload = (await response.json()) as Record<string, Record<string, number>>;
-    const rate = payload?.[coinId]?.[vsCurrency];
-    if (typeof rate !== "number") {
-      throw new PriceOracleFetchError(`CoinGecko response missing rate for ${base}/${quote}`);
-    }
+    const returnVal = (simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result
+      ?.retval;
+    if (!returnVal) throw new NoReturnValueError("oracle get_price");
 
-    this.cache.set(base, quote, rate);
-    return rate;
+    return BigInt(scValToNative(returnVal));
   }
 }
