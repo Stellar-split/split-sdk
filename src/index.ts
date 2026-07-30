@@ -29,6 +29,13 @@ export {
   deserializeInvoiceTemplate,
 } from "./invoiceTemplate.js";
 export {
+  validateBulkImport,
+} from "./bulkImportValidator.js";
+export type {
+  BulkImportRowError,
+  BulkImportValidationResult,
+} from "./bulkImportValidator.js";
+export {
   StellarSplitError,
   InvoiceNotFoundError,
   InvoiceNotPendingError,
@@ -383,6 +390,7 @@ export type {
   DecodedXDR,
   DecodedTransactionEnvelope,
   DecodedTransactionResult,
+  DecodedOperationResult,
   DecodedTransactionMeta,
   DecodedLedgerEntry,
   DecodedOperation,
@@ -413,8 +421,11 @@ export type { RpcClient } from "./rpcClient.js";
 export { negotiateVersion, SDK_CONTRACT_VERSION } from "./version.js";
 export type { VersionInfo } from "./types.js";
 
-export { checkPayerReadiness, checkInvoiceExpiry, checkSponsorReserve } from "./preflightChecker.js";
-export type { PayerReadinessResult, PayerReadinessReason, InvoiceExpiryResult, InvoiceExpiryReason, SponsorReserveCheck } from "./preflightChecker.js";
+export { checkPayerReadiness, checkInvoiceExpiry, checkSponsorReserve, checkRecipientFlags } from "./preflightChecker.js";
+export type { PayerReadinessResult, PayerReadinessReason, InvoiceExpiryResult, InvoiceExpiryReason, SponsorReserveCheck, RecipientFlagsCheck } from "./preflightChecker.js";
+
+export { inspectFlags, hasAnyRestrictiveFlag } from "./accountFlagsInspector.js";
+export type { AccountFlagSet } from "./types.js";
 
 export { getSuggestion } from "./errorSuggestions.js";
 
@@ -423,6 +434,7 @@ export { getSuggestion } from "./errorSuggestions.js";
 // ---------------------------------------------------------------------------
 
 export { decodeXDR } from "./xdrDecoder.js";
+export { decodeTransactionResult } from "./txResultDecoder.js";
 
 // ---------------------------------------------------------------------------
 // SSE Cursor Tracker — persistent cursor for stream resumption
@@ -802,6 +814,13 @@ export type {
   ClaimableBalanceLifecycleEventMap,
 } from "./claimableBalanceFallback.js";
 
+export { PredicateBuilder } from "./predicateBuilder.js";
+export type { ClaimPredicate } from "./predicateBuilder.js";
+export type { PredicateConfig } from "./types.js";
+
+export { RateCache } from "./rateCache.js";
+export type { RateCacheEntry, RateOracleFn, RateCacheConfig } from "./rateCache.js";
+
 export { subscribeToInvoice } from "./sse.js";
 export type {
   SSEInvoiceEventType,
@@ -1142,3 +1161,58 @@ export type {
   ScValPrimitive,
   ContractStorageExporterOptions,
 } from "./diagnostics/ContractStorageExporter.js";
+
+// ---------------------------------------------------------------------------
+// #528 — AccountDataManager: typed CRUD for account data entries
+// ---------------------------------------------------------------------------
+
+export { AccountDataManager } from "./accountDataManager.js";
+export type {
+  AccountDataManagerConfig,
+  TransactionResult as AccountDataTransactionResult,
+} from "./accountDataManager.js";
+export type { AccountDataEntry, AccountDataMap } from "./types.js";
+export {
+  DataEntryValidationError,
+  isDataEntryValidationError,
+} from "./errors.js";
+
+// ---------------------------------------------------------------------------
+// #529 — SorobanFeatureDetector: protocol upgrade / feature flag detection
+// ---------------------------------------------------------------------------
+
+export { SorobanFeatureDetector } from "./sorobanFeatureDetector.js";
+export type {
+  SorobanFeatureDetectorConfig,
+  SorobanFeatureDetectorEventMap,
+} from "./sorobanFeatureDetector.js";
+export type { SorobanFeatureFlags } from "./types.js";
+
+// ---------------------------------------------------------------------------
+// #530 — StreamDeduplicator: paging-token-based stream event dedup
+// ---------------------------------------------------------------------------
+
+export { StreamDeduplicator } from "./streamDeduplicator.js";
+export type {
+  StreamDeduplicatorOptions,
+  StreamDeduplicatorEventMap,
+} from "./streamDeduplicator.js";
+export {
+  InMemoryDedupTokenStore,
+  setDefaultDedupTokenStore,
+  saveDedupTokens,
+  loadDedupTokens,
+} from "./snapshot.js";
+export type { DedupTokenStore } from "./snapshot.js";
+
+// ---------------------------------------------------------------------------
+// #531 — Per-Split Audit Log Emitter
+// ---------------------------------------------------------------------------
+
+export { AuditLogger } from "./auditLogger.js";
+export type { AuditEntry } from "./auditLogger.js";
+export type { SplitAuditEntry } from "./types.js";
+export {
+  exportSplitAuditTrail,
+  SPLIT_AUDIT_CSV_COLUMNS,
+} from "./complianceExporter.js";

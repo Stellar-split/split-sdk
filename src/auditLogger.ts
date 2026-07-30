@@ -1,6 +1,6 @@
 import { truncateAddress } from "./utils.js";
 import { decodeXDR } from "./xdrDecoder.js";
-import type { XDRType, DecodedXDR } from "./types.js";
+import type { XDRType, DecodedXDR, SplitAuditEntry } from "./types.js";
 
 export interface AuditEntry {
   timestamp: number;
@@ -22,6 +22,7 @@ const MIN_XDR_LENGTH = 40;
 
 export class AuditLogger {
   private readonly sink: (entry: AuditEntry) => void;
+  private readonly splitAuditTrails = new Map<string, SplitAuditEntry[]>();
 
   constructor(sink: (entry: AuditEntry) => void) {
     this.sink = sink;
@@ -100,5 +101,41 @@ export class AuditLogger {
     }
 
     this.log(entry);
+  }
+
+  /**
+   * Record a `SplitAuditEntry` for a single settled leg of a multi-recipient
+   * split payment. Writes immediately to the configured sink (as an
+   * `AuditEntry`) and to the in-memory per-invoice trail returned by
+   * {@link exportSplitAuditTrail}.
+   */
+  recordSplitLeg(entry: SplitAuditEntry): void {
+    const trail = this.splitAuditTrails.get(entry.invoiceId) ?? [];
+    trail.push(entry);
+    this.splitAuditTrails.set(entry.invoiceId, trail);
+
+    this.log({
+      timestamp: entry.settledAt,
+      method: "split_leg_settled",
+      params: this.sanitize({
+        invoiceId: entry.invoiceId,
+        legIndex: entry.legIndex,
+        recipientId: entry.recipientId,
+        assetCode: entry.assetCode,
+        amount: entry.amount.toString(),
+        operationId: entry.operationId,
+        ledgerSequence: entry.ledgerSequence,
+      }),
+      success: true,
+      durationMs: 0,
+    });
+  }
+
+  /**
+   * Return all recorded `SplitAuditEntry` records for `invoiceId`, in the
+   * order they were settled.
+   */
+  async exportSplitAuditTrail(invoiceId: string): Promise<SplitAuditEntry[]> {
+    return [...(this.splitAuditTrails.get(invoiceId) ?? [])];
   }
 }
