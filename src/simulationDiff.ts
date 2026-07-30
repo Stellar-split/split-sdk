@@ -102,3 +102,124 @@ export function diffSimulations(
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// compareSimulations — structured baseline-vs-revised comparator
+// ---------------------------------------------------------------------------
+
+/**
+ * Structured comparison between a baseline and a revised simulation run.
+ * Positive deltas mean the revised simulation uses more resources.
+ */
+export interface SimulationComparison {
+  comparable: true;
+  /** Difference in CPU instructions (revised − baseline). */
+  cpuDelta: bigint;
+  /** Difference in combined read+write bytes (revised − baseline). */
+  memDelta: bigint;
+  /** Difference in minResourceFee, in stroops (revised − baseline). */
+  feeDelta: bigint;
+  /** LedgerKey XDR (base64) present in the revised footprint but not the baseline. */
+  footprintAdded: string[];
+  /** LedgerKey XDR (base64) present in the baseline footprint but not the revised. */
+  footprintRemoved: string[];
+  /** True when the set of Soroban authorization entries differs between runs. */
+  authChanged: boolean;
+}
+
+/** Returned when either simulation cannot be compared (error or restore response). */
+export interface SimulationComparisonNotComparable {
+  comparable: false;
+  reason: string;
+}
+
+function footprintKeys(response: SorobanRpc.Api.SimulateTransactionSuccessResponse): {
+  readOnly: string[];
+  readWrite: string[];
+} {
+  try {
+    return {
+      readOnly: response.transactionData.getReadOnly().map((key) => key.toXDR("base64")),
+      readWrite: response.transactionData.getReadWrite().map((key) => key.toXDR("base64")),
+    };
+  } catch {
+    return { readOnly: [], readWrite: [] };
+  }
+}
+
+function authFingerprint(response: SorobanRpc.Api.SimulateTransactionSuccessResponse): string[] {
+  const entries = response.result?.auth ?? [];
+  return entries.map((entry) => entry.toXDR("base64")).sort();
+}
+
+/**
+ * Compare two simulation runs (e.g. a baseline vs. a modified transaction)
+ * and report exactly what changed in resource consumption, footprint, and
+ * authorization entries.
+ *
+ * If either response is an error or a restore response, returns
+ * `{ comparable: false }` instead of throwing.
+ */
+export function compareSimulations(
+  baseline: SorobanRpc.Api.SimulateTransactionResponse,
+  revised: SorobanRpc.Api.SimulateTransactionResponse,
+): SimulationComparison | SimulationComparisonNotComparable {
+  if (SorobanRpc.Api.isSimulationError(baseline)) {
+    return { comparable: false, reason: "baseline simulation returned an error" };
+  }
+  if (SorobanRpc.Api.isSimulationError(revised)) {
+    return { comparable: false, reason: "revised simulation returned an error" };
+  }
+  if (SorobanRpc.Api.isSimulationRestore(baseline)) {
+    return { comparable: false, reason: "baseline simulation requires state restore" };
+  }
+  if (SorobanRpc.Api.isSimulationRestore(revised)) {
+    return { comparable: false, reason: "revised simulation requires state restore" };
+  }
+
+  const baselineRes = resourceStats(baseline);
+  const revisedRes = resourceStats(revised);
+
+  const baselineFootprint = footprintKeys(baseline);
+  const revisedFootprint = footprintKeys(revised);
+  const baselineKeys = new Set([...baselineFootprint.readOnly, ...baselineFootprint.readWrite]);
+  const revisedKeys = new Set([...revisedFootprint.readOnly, ...revisedFootprint.readWrite]);
+
+  const footprintAdded = [...revisedKeys].filter((key) => !baselineKeys.has(key));
+  const footprintRemoved = [...baselineKeys].filter((key) => !revisedKeys.has(key));
+
+  const baselineAuth = authFingerprint(baseline);
+  const revisedAuth = authFingerprint(revised);
+  const authChanged = JSON.stringify(baselineAuth) !== JSON.stringify(revisedAuth);
+
+  return {
+    comparable: true,
+    cpuDelta: revisedRes.cpuInstructions - baselineRes.cpuInstructions,
+    memDelta:
+      revisedRes.readBytes + revisedRes.writeBytes - (baselineRes.readBytes + baselineRes.writeBytes),
+    feeDelta: bigintFee(revised) - bigintFee(baseline),
+    footprintAdded,
+    footprintRemoved,
+    authChanged,
+  };
+}
+
+/**
+ * Produce a human-readable, multi-line summary of a {@link SimulationComparison}
+ * suitable for logging.
+ */
+export function formatDiffSummary(diff: SimulationComparison | SimulationComparisonNotComparable): string {
+  if (!diff.comparable) {
+    return `Simulations not comparable: ${diff.reason}`;
+  }
+
+  const lines = [
+    `CPU instructions: ${diff.cpuDelta >= 0n ? "+" : ""}${diff.cpuDelta}`,
+    `Memory (read+write bytes): ${diff.memDelta >= 0n ? "+" : ""}${diff.memDelta}`,
+    `Resource fee: ${diff.feeDelta >= 0n ? "+" : ""}${diff.feeDelta} stroops`,
+    `Footprint added: ${diff.footprintAdded.length}`,
+    `Footprint removed: ${diff.footprintRemoved.length}`,
+    `Auth entries changed: ${diff.authChanged}`,
+  ];
+  return lines.join("\n");
+}

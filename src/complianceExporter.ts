@@ -1,4 +1,4 @@
-import type { Invoice } from "./types.js";
+import type { Invoice, SplitAuditEntry } from "./types.js";
 
 /** A single row in the compliance audit export. */
 export interface ComplianceExportRecord {
@@ -141,4 +141,41 @@ function csvEscape(value: string): string {
     return `"${value.replace(/"/g, '""')}"`;
   }
   return value;
+}
+
+// ---------------------------------------------------------------------------
+// Per-split audit trail export (Issue #531)
+// ---------------------------------------------------------------------------
+
+/** Stable, ordered list of CSV column names for the split audit trail export. */
+export const SPLIT_AUDIT_CSV_COLUMNS = [
+  "invoiceId",
+  "legIndex",
+  "recipientId",
+  "assetCode",
+  "amount",
+  "operationId",
+  "ledgerSequence",
+  "settledAt",
+] as const;
+
+/**
+ * Produces a CSV export of per-split-leg audit entries (as recorded by
+ * `AuditLogger.recordSplitLeg`), suitable for inclusion in compliance reports.
+ */
+export function exportSplitAuditTrail(entries: SplitAuditEntry[]): string {
+  const header = SPLIT_AUDIT_CSV_COLUMNS.join(",");
+  const rows = entries.map((e) =>
+    [
+      e.invoiceId,
+      String(e.legIndex),
+      e.recipientId,
+      e.assetCode,
+      String(e.amount),
+      e.operationId,
+      String(e.ledgerSequence),
+      String(e.settledAt),
+    ].join(","),
+  );
+  return [header, ...rows].join("\n");
 }
