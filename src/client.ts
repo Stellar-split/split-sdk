@@ -2497,6 +2497,51 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
     return updated;
   }
 
+  // ---------------------------------------------------------------------------
+  // Invoice Version History integration (#550)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Update an invoice with new field values and record a version snapshot
+   * via {@link InvoiceVersionTracker} before overwriting the stored state.
+   *
+   * If no `versionTracker` is provided in the config, the method still applies
+   * the update — versioning is opt-in via config.
+   *
+   * @param invoiceId   - The invoice to update.
+   * @param updates     - Partial invoice fields to apply (merged over the current state).
+   * @param changedBy   - The Stellar address responsible for the change.
+   * @returns The updated invoice after all mutations are applied.
+   */
+  async updateInvoice(
+    invoiceId: string,
+    updates: Partial<Invoice>,
+    changedBy: string,
+  ): Promise<Invoice> {
+    const current = await this.getInvoice(invoiceId);
+
+    // Record current state as a version BEFORE overwriting
+    const tracker = (this.config as Record<string, unknown>)["versionTracker"] as
+      | import("./invoiceVersionTracker.js").InvoiceVersionTracker
+      | undefined;
+
+    if (tracker) {
+      await tracker.record(invoiceId, current, changedBy);
+    }
+
+    const updated: Invoice = { ...current, ...updates };
+
+    // Write the updated invoice back into the optimistic cache so subsequent
+    // getInvoice() calls see the new state immediately.
+    if (this._optimisticCache) {
+      this._optimisticCache.applyOptimistic(invoiceId, updated, current).commit();
+    } else if (this._cache) {
+      this._cache.invalidate("getInvoice", [invoiceId]);
+    }
+
+    return updated;
+  }
+
   /**
    * Subscribe to typed InvoiceEvent payloads for a single invoice via the
    * shared SubscriptionManager, instead of polling fetch methods. The first
