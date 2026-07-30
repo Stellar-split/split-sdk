@@ -1,5 +1,6 @@
 import { TelemetryCollector } from "./telemetryCollector.js";
 import { CircuitOpenError } from "./errors.js";
+import { classifyHorizonError } from "./horizonErrorClassifier.js";
 
 export interface RetryStrategy {
   maxAttempts: number;
@@ -25,6 +26,15 @@ type ErrorClass = "transient" | "rateLimit" | "contract";
 function classifyError(error: unknown): ErrorClass {
   if (!(error instanceof Error)) return "transient";
   const msg = error.message;
+
+  // Use horizonErrorClassifier when result codes are available on the error
+  const errorObj = error as Record<string, unknown>;
+  if (errorObj.resultCodes) {
+    const classification = classifyHorizonError(errorObj.resultCodes as string | string[]);
+    if (classification.isRetryable) return "transient";
+    return "contract";
+  }
+
   if (/Error\(Contract,\s*#\d+\)/i.test(msg)) return "contract";
   if (/429|rate.?limit|too many requests/i.test(msg)) return "rateLimit";
   return "transient";

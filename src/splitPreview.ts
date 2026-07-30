@@ -1,4 +1,5 @@
 import type { Invoice, SplitRule, SplitPreviewEntry } from "./types.js";
+import { deduplicateRecipients } from "./validators/recipientDeduplicator.js";
 
 /**
  * Apply a single {@link SplitRule} against a funded amount.
@@ -44,9 +45,10 @@ function proportionalFallback(
   invoice: Invoice,
   funded: bigint
 ): SplitPreviewEntry[] {
-  const totalOwed = invoice.recipients.reduce((sum, r) => sum + r.amount, 0n);
+  const deduped = deduplicateRecipients(invoice.recipients, "merge");
+  const totalOwed = deduped.reduce((sum, r) => sum + r.amount, 0n);
   const denominator = totalOwed === 0n ? 1n : totalOwed;
-  return invoice.recipients.map((r) => ({
+  return deduped.map((r) => ({
     recipient: r.address,
     amount: (funded * r.amount) / denominator,
   }));

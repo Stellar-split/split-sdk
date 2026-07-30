@@ -1,7 +1,13 @@
+export { detectFeeSurge, clearFeeSurgeCache } from "./feeSurgeDetector.js";
+export type { FeeSurgeConfig, FeeRecommendation, CongestionLevel } from "./feeSurgeDetector.js";
+
 /**
  * Fee estimator for operations using RPC simulation.
  *
  * Estimates operation costs without submitting transactions.
+ *
+ * For surge-aware fee estimation, use {@link detectFeeSurge} from
+ * `./feeSurgeDetector.js`.
  */
 
 import {

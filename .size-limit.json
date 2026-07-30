@@ -13,5 +13,10 @@
       "@stellar/freighter-api",
       "@walletconnect/sign-client"
     ]
+  },
+  {
+    "path": "dist/index.js",
+    "import": "{ TypedEventEmitter }",
+    "limit": "500 B"
   }
 ]

@@ -1,5 +1,6 @@
-import type { Invoice } from "./types.js";
+import type { Invoice, RecipientShare } from "./types.js";
 import { isExpired } from "./utils.js";
+import { deduplicateRecipients } from "./validators/recipientDeduplicator.js";
 
 export interface PaymentValidation {
   valid: boolean;
@@ -23,7 +24,9 @@ export function computePaymentValidation(
     errors.push("Invoice is not pending");
   }
 
-  const totalDue = invoice.recipients.reduce((sum, recipient) => sum + recipient.amount, 0n);
+  // Deduplicate recipients before ratio-sum validation
+  const dedupedRecipients = deduplicateRecipients(invoice.recipients, "merge");
+  const totalDue = dedupedRecipients.reduce((sum, recipient) => sum + recipient.amount, 0n);
   if (invoice.funded + amount > totalDue) {
     errors.push("Payment amount exceeds invoice remaining balance");
   }

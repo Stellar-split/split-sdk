@@ -91,6 +91,7 @@ export class SubscriptionManager {
    * prior outage are replayed. Returns a function that unregisters just
    * this handler.
    */
+  
   subscribe(invoiceId: string, handler: InvoiceEventHandler, opts?: Pick<SubscriptionOptions, "storage" | "storageKind">): () => void {
     let state = this.subscriptions.get(invoiceId);
     if (!state) {
@@ -290,6 +291,19 @@ export function getSubscriptionManager(
     singletonContractId = contractId;
   }
   return singleton;
+}
+
+/**
+ * Destroy the shared SubscriptionManager when it exists for `contractId`.
+ * Returns true when a live singleton was found and torn down.
+ */
+export function destroySubscriptionManager(contractId?: string): boolean {
+  if (!singleton) return false;
+  if (contractId && singletonContractId !== contractId) return false;
+  singleton.destroy();
+  singleton = null;
+  singletonContractId = null;
+  return true;
 }
 
 /** Test-only: reset the module-level singleton between test cases. */

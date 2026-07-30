@@ -1,17 +1,9 @@
 import type { InvoiceStatus } from "./types.js";
-import { InvalidTransitionError } from "./types.js";
+import { InvoiceStateMachine } from "./state/InvoiceStateMachine.js";
 
-const TRANSITIONS: Record<InvoiceStatus, InvoiceStatus[]> = {
-  Pending: ["Released", "Refunded", "Cancelled"],
-  Released: [],
-  Refunded: [],
-  Cancelled: [],
-};
+const defaultStateMachine = new InvoiceStateMachine();
 
+/** @deprecated Use InvoiceStateMachine (src/state/InvoiceStateMachine.ts) directly. */
 export function validateTransition(from: InvoiceStatus, to: InvoiceStatus): boolean {
-  const allowed = TRANSITIONS[from];
-  if (!allowed || !allowed.includes(to)) {
-    throw new InvalidTransitionError(from, to);
-  }
-  return true;
+  return defaultStateMachine.validate(from, to);
 }

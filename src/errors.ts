@@ -379,6 +379,51 @@ export class SimulationFailedError extends StellarSplitError {
   }
 }
 
+/**
+ * Thrown by {@link DeployPipeline} when a WASM upload or contract
+ * instantiation step keeps failing with `tx_bad_seq` after retrying with
+ * a freshly-fetched sequence number.
+ */
+export class DeploySequenceError extends StellarSplitError {
+  readonly step: string;
+  readonly attempts: number;
+
+  constructor(step: string, attempts: number) {
+    super(
+      `Deploy step "${step}" failed after ${attempts} sequence retries due to tx_bad_seq`,
+      "DEPLOY_SEQUENCE_ERROR",
+      { step, attempts }
+    );
+    this.name = "DeploySequenceError";
+    this.step = step;
+    this.attempts = attempts;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * Thrown by {@link WebhookAgent.deliver} when a webhook delivery has
+ * exhausted its configured retry budget without a successful response.
+ */
+export class WebhookExhaustedError extends StellarSplitError {
+  readonly url: string;
+  readonly attempts: number;
+  readonly lastError?: string;
+
+  constructor(url: string, attempts: number, lastError?: string) {
+    super(
+      `Webhook delivery to ${url} failed after ${attempts} attempts${lastError ? `: ${lastError}` : ""}`,
+      "WEBHOOK_EXHAUSTED",
+      { url, attempts, lastError }
+    );
+    this.name = "WebhookExhaustedError";
+    this.url = url;
+    this.attempts = attempts;
+    this.lastError = lastError;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Thrown when no return value is received from a contract call. */
 export class NoReturnValueError extends StellarSplitError {
   readonly method: string;
@@ -708,6 +753,38 @@ export class Sep41AdapterError extends StellarSplitError {
   }
 }
 
+/** Thrown when a queued contract invocation exhausts its retry attempts. */
+export class ContractRetryExhaustedError extends StellarSplitError {
+  readonly attempts: number;
+
+  constructor(attempts: number, lastError: unknown) {
+    super(
+      `Contract invocation retry exhausted after ${attempts} attempts`,
+      "CONTRACT_RETRY_EXHAUSTED",
+      { attempts, lastError: lastError instanceof Error ? lastError.message : String(lastError) }
+    );
+    this.name = "ContractRetryExhaustedError";
+    this.attempts = attempts;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a line item's asset has no oracle price available for normalisation. */
+export class UnsupportedLineItemAssetError extends StellarSplitError {
+  readonly asset: string;
+
+  constructor(asset: string) {
+    super(
+      `No oracle price available for line item asset: ${asset}`,
+      "UNSUPPORTED_LINE_ITEM_ASSET",
+      { asset }
+    );
+    this.name = "UnsupportedLineItemAssetError";
+    this.asset = asset;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Thrown when tranche status check fails. */
 export class TrancheProgressError extends StellarSplitError {
   constructor(message: string) {
@@ -749,6 +826,158 @@ export class WaterfallInsufficientFundsError extends StellarSplitError {
 
 export function isWaterfallInsufficientFundsError(err: unknown): err is WaterfallInsufficientFundsError {
   return err instanceof WaterfallInsufficientFundsError;
+}
+
+// ---------------------------------------------------------------------------
+// #476 OperationBuilder errors
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown when an operation envelope exceeds the maximum number of operations
+ * (100) or the maximum base fee (10_000_000 stroops).
+ */
+export class EnvelopeLimitError extends StellarSplitError {
+  readonly operationCount: number;
+  readonly limit: number;
+
+  constructor(operationCount: number, limit: number, raw?: string) {
+    super(
+      `Envelope exceeds limit: ${operationCount} operations (max ${limit})`,
+      "ENVELOPE_LIMIT",
+      { operationCount, limit },
+      raw,
+    );
+    this.name = "EnvelopeLimitError";
+    this.operationCount = operationCount;
+    this.limit = limit;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isEnvelopeLimitError(err: unknown): err is EnvelopeLimitError {
+  return err instanceof EnvelopeLimitError;
+}
+
+/**
+ * Thrown when `.submit()` is called but the prior `.dryRun()` simulation
+ * returned an error field from the RPC.
+ */
+export class DryRunFailedError extends StellarSplitError {
+  readonly simulationError: string;
+
+  constructor(simulationError: string, raw?: string) {
+    super(
+      `Dry-run simulation failed: ${simulationError}`,
+      "DRY_RUN_FAILED",
+      { simulationError },
+      raw,
+    );
+    this.name = "DryRunFailedError";
+    this.simulationError = simulationError;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isDryRunFailedError(err: unknown): err is DryRunFailedError {
+  return err instanceof DryRunFailedError;
+}
+
+// ---------------------------------------------------------------------------
+// #477 AccountSignerWeightCalculator errors
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown when the provided signing keys do not meet the required threshold
+ * weight for a Stellar multi-sig account.
+ */
+export class InsufficientSignerWeightError extends StellarSplitError {
+  readonly provided: string[];
+  readonly totalWeight: number;
+  readonly required: number;
+
+  constructor(
+    provided: string[],
+    totalWeight: number,
+    required: number,
+    raw?: string,
+  ) {
+    super(
+      `Insufficient signer weight: ${totalWeight} < ${required} (required)`,
+      "INSUFFICIENT_SIGNER_WEIGHT",
+      { provided, totalWeight, required },
+      raw,
+    );
+    this.name = "InsufficientSignerWeightError";
+    this.provided = provided;
+    this.totalWeight = totalWeight;
+    this.required = required;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isInsufficientSignerWeightError(err: unknown): err is InsufficientSignerWeightError {
+  return err instanceof InsufficientSignerWeightError;
+}
+
+// ---------------------------------------------------------------------------
+// #478 PaymentDeduplicationFingerprinter errors
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown when a payment fingerprint matches a recently submitted payment
+ * within the configured deduplication window.
+ */
+export class DuplicatePaymentError extends StellarSplitError {
+  readonly fingerprint: string;
+  readonly existingTxHash: string;
+  readonly submittedAt: number;
+
+  constructor(fingerprint: string, existingTxHash: string, submittedAt: number, raw?: string) {
+    super(
+      `Duplicate payment detected (fingerprint: ${fingerprint}, existing tx: ${existingTxHash})`,
+      "DUPLICATE_PAYMENT",
+      { fingerprint, existingTxHash, submittedAt },
+      raw,
+    );
+    this.name = "DuplicatePaymentError";
+    this.fingerprint = fingerprint;
+    this.existingTxHash = existingTxHash;
+    this.submittedAt = submittedAt;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isDuplicatePaymentError(err: unknown): err is DuplicatePaymentError {
+  return err instanceof DuplicatePaymentError;
+}
+
+// ---------------------------------------------------------------------------
+// #479 LazyInitializer errors
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown when the lazy RPC connection factory fails to connect.
+ * All pending method calls awaiting initialization receive this error.
+ * A retry after failure will re-attempt initialization.
+ */
+export class RpcConnectionError extends StellarSplitError {
+  readonly url: string;
+
+  constructor(url: string, cause?: string, raw?: string) {
+    super(
+      `RPC connection failed for ${url}${cause ? `: ${cause}` : ""}`,
+      "RPC_CONNECTION_ERROR",
+      { url, cause },
+      raw,
+    );
+    this.name = "RpcConnectionError";
+    this.url = url;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isRpcConnectionError(err: unknown): err is RpcConnectionError {
+  return err instanceof RpcConnectionError;
 }
 
 /** Thrown when channel reconciliation fails. */
@@ -935,6 +1164,14 @@ export function isInsufficientSignaturesError(err: unknown): err is Insufficient
   return err instanceof InsufficientSignaturesError;
 }
 
+export function isUnsupportedLineItemAssetError(err: unknown): err is UnsupportedLineItemAssetError {
+  return err instanceof UnsupportedLineItemAssetError;
+}
+
+export function isContractRetryExhaustedError(err: unknown): err is ContractRetryExhaustedError {
+  return err instanceof ContractRetryExhaustedError;
+}
+
 export function isCloneChainTooDeepError(err: unknown): err is CloneChainTooDeepError {
   return err instanceof CloneChainTooDeepError;
 }
@@ -1071,6 +1308,53 @@ export class RequestTimeoutError extends StellarSplitError {
 
 export function isRequestTimeoutError(err: unknown): err is RequestTimeoutError {
   return err instanceof RequestTimeoutError;
+}
+
+/** Thrown when a new write request is attempted during graceful shutdown. */
+export class ShutdownInProgressError extends StellarSplitError {
+  constructor(message: string = "SDK shutdown is in progress; new transaction submissions are disabled") {
+    super(message, "SHUTDOWN_IN_PROGRESS");
+    this.name = "ShutdownInProgressError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isShutdownInProgressError(err: unknown): err is ShutdownInProgressError {
+  return err instanceof ShutdownInProgressError;
+}
+
+/** Thrown when graceful shutdown times out while requests are still pending. */
+export class GracefulShutdownTimeoutError extends StellarSplitError {
+  readonly signal: string;
+  readonly timeoutMs: number;
+  readonly pendingRequests: Array<{ id: string; method: string; startedAt: number }>;
+
+  constructor(
+    signal: string,
+    timeoutMs: number,
+    pendingRequests: Array<{ id: string; method: string; startedAt: number }>,
+  ) {
+    super(
+      `Graceful shutdown timed out after ${timeoutMs}ms while handling ${signal}`,
+      "GRACEFUL_SHUTDOWN_TIMEOUT",
+      {
+        signal,
+        timeoutMs,
+        pendingRequests,
+      },
+    );
+    this.name = "GracefulShutdownTimeoutError";
+    this.signal = signal;
+    this.timeoutMs = timeoutMs;
+    this.pendingRequests = pendingRequests;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isGracefulShutdownTimeoutError(
+  err: unknown,
+): err is GracefulShutdownTimeoutError {
+  return err instanceof GracefulShutdownTimeoutError;
 }
 
 /** Thrown when too many concurrent invoice subscriptions are created. */
@@ -1257,167 +1541,269 @@ export class PassphraseMismatchError extends StellarSplitError {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Sequence cache errors
+// ---------------------------------------------------------------------------
+
+/** Thrown when the sequence cache fails to fetch an account from Horizon. */
+export class SequenceCacheError extends StellarSplitError {
+  readonly accountId: string;
+
+  constructor(message: string, accountId: string) {
+    super(message, "SEQUENCE_CACHE_ERROR", { accountId }, message);
+    this.name = "SequenceCacheError";
+    this.accountId = accountId;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isSequenceCacheError(err: unknown): err is SequenceCacheError {
+  return err instanceof SequenceCacheError;
+}
+
+/** Thrown when a SEQUENCE_NUMBER_TOO_OLD error is detected at submission time. */
+export class SequenceNumberTooOldError extends StellarSplitError {
+  readonly accountId: string;
+  readonly cachedSequence: bigint;
+
+  constructor(accountId: string, cachedSequence: bigint) {
+    super(
+      `Sequence number too old for ${accountId} (cached: ${cachedSequence})`,
+      "SEQUENCE_NUMBER_TOO_OLD",
+      { accountId, cachedSequence: cachedSequence.toString() },
+    );
+    this.name = "SequenceNumberTooOldError";
+    this.accountId = accountId;
+    this.cachedSequence = cachedSequence;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isSequenceNumberTooOldError(err: unknown): err is SequenceNumberTooOldError {
+  return err instanceof SequenceNumberTooOldError;
+}
+
+// ---------------------------------------------------------------------------
+// Path router errors
+// ---------------------------------------------------------------------------
+
+/** Thrown when no DEX path could be found between two assets. */
+export class PathNotFoundError extends StellarSplitError {
+  readonly sourceAsset: string;
+  readonly destAsset: string;
+  readonly amount: bigint;
+
+  constructor(sourceAsset: string, destAsset: string, amount: bigint) {
+    super(
+      `No DEX path found from ${sourceAsset} to ${destAsset} for amount ${amount}`,
+      "PATH_NOT_FOUND",
+      { sourceAsset, destAsset, amount: amount.toString() },
+    );
+    this.name = "PathNotFoundError";
+    this.sourceAsset = sourceAsset;
+    this.destAsset = destAsset;
+    this.amount = amount;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isPathNotFoundError(err: unknown): err is PathNotFoundError {
+  return err instanceof PathNotFoundError;
+}
+
+/** Thrown when the path router encounters an unexpected error. */
+export class PathRouterError extends StellarSplitError {
+  constructor(message: string) {
+    super(message, "PATH_ROUTER_ERROR", undefined, message);
+    this.name = "PathRouterError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isPathRouterError(err: unknown): err is PathRouterError {
+  return err instanceof PathRouterError;
+}
+
+// ---------------------------------------------------------------------------
+// Offer tracker errors
+// ---------------------------------------------------------------------------
+
+/** Thrown when offer tracking or cancellation fails. */
+export class OfferTrackingError extends StellarSplitError {
+  constructor(message: string) {
+    super(message, "OFFER_TRACKING_ERROR", undefined, message);
+    this.name = "OfferTrackingError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isOfferTrackingError(err: unknown): err is OfferTrackingError {
+  return err instanceof OfferTrackingError;
+}
+
+// ---------------------------------------------------------------------------
+// Claimable balance lifecycle errors
+// ---------------------------------------------------------------------------
+
+/** Thrown when claimable balance lifecycle operations fail. */
+export class ClaimableBalanceLifecycleError extends StellarSplitError {
+  readonly balanceId: string;
+
+  constructor(message: string, balanceId: string) {
+    super(message, "CLAIMABLE_BALANCE_LIFECYCLE_ERROR", { balanceId }, message);
+    this.name = "ClaimableBalanceLifecycleError";
+    this.balanceId = balanceId;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isClaimableBalanceLifecycleError(err: unknown): err is ClaimableBalanceLifecycleError {
+  return err instanceof ClaimableBalanceLifecycleError;
+}
+
 export function isIPFSConfigError(err: unknown): err is IPFSConfigError {
   return err instanceof IPFSConfigError;
 }
 
 // ---------------------------------------------------------------------------
-// #484 — Recipient Balance Pre-Check Errors
-// ---------------------------------------------------------------------------
-
-import type { PreCheckResult } from "./preflight/RecipientBalancePreCheck.js";
-
-/**
- * Thrown by `createInvoice` when one or more recipients fail the
- * `RecipientBalancePreCheck` (missing account, missing trustline, or
- * insufficient reserve).
- */
-export class RecipientPreCheckFailedError extends StellarSplitError {
-  /** The full pre-check results for every failing recipient. */
-  readonly failingResults: PreCheckResult[];
-
-  constructor(failingResults: PreCheckResult[]) {
-    const summary = failingResults
-      .map(
-        (r) =>
-          `${r.recipient}: [${r.checks
-            .filter((c) => !c.passed)
-            .map((c) => c.name)
-            .join(", ")}]`,
-      )
-      .join("; ");
-    super(
-      `Recipient pre-check failed for ${failingResults.length} recipient(s): ${summary}`,
-      "RECIPIENT_PRE_CHECK_FAILED",
-      { count: failingResults.length },
-    );
-    this.name = "RecipientPreCheckFailedError";
-    this.failingResults = failingResults;
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-export function isRecipientPreCheckFailedError(
-  err: unknown,
-): err is RecipientPreCheckFailedError {
-  return err instanceof RecipientPreCheckFailedError;
-}
-
-// ---------------------------------------------------------------------------
-// #485 — Channel Account Manager Errors
+// AMM Calculator errors
 // ---------------------------------------------------------------------------
 
 /**
- * Thrown when `ChannelAccountManager.acquire()` times out because all
- * channel accounts are in use and none is released within `acquireTimeoutMs`.
+ * Thrown when swap input exceeds a configurable ratio of pool reserves,
+ * or when pool reserves are zero / insufficient.
  */
-export class ChannelExhaustedError extends StellarSplitError {
-  /** Number of channel accounts in the pool. */
-  readonly poolSize: number;
-  /** Timeout duration that elapsed, in milliseconds. */
-  readonly timeoutMs: number;
+export class InsufficientLiquidityError extends StellarSplitError {
+  readonly reserveAmount: string;
+  readonly inputAmount: string;
 
-  constructor(poolSize: number, timeoutMs: number) {
-    super(
-      `All ${poolSize} channel account(s) are in use. No channel was released within ${timeoutMs}ms.`,
-      "CHANNEL_EXHAUSTED",
-      { poolSize, timeoutMs },
-    );
-    this.name = "ChannelExhaustedError";
-    this.poolSize = poolSize;
-    this.timeoutMs = timeoutMs;
+  constructor(message: string, reserveAmount: string, inputAmount: string) {
+    super(message, "INSUFFICIENT_LIQUIDITY", { reserveAmount, inputAmount }, message);
+    this.name = "InsufficientLiquidityError";
+    this.reserveAmount = reserveAmount;
+    this.inputAmount = inputAmount;
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-export function isChannelExhaustedError(
-  err: unknown,
-): err is ChannelExhaustedError {
-  return err instanceof ChannelExhaustedError;
+export function isInsufficientLiquidityError(err: unknown): err is InsufficientLiquidityError {
+  return err instanceof InsufficientLiquidityError;
 }
 
 // ---------------------------------------------------------------------------
-// #486 — Invoice Cloneability Validator Errors
+// Timeout Escalation errors
 // ---------------------------------------------------------------------------
-
-import type { CloneabilityReport } from "./preflight/InvoiceCloneabilityValidator.js";
 
 /**
- * Thrown by `cloneInvoice` when the source invoice fails the
- * `InvoiceCloneabilityValidator` pre-flight check.
+ * Thrown when the `abort` escalation step fires, cancelling the payment.
  */
-export class InvoiceNotCloneableError extends StellarSplitError {
-  /** The full cloneability report produced by the validator. */
-  readonly details: CloneabilityReport;
+export class PaymentEscalationAbortError extends StellarSplitError {
+  readonly invoiceId: string;
+  readonly remainingMs: number;
 
-  constructor(report: CloneabilityReport) {
-    const failing = report.fieldReports
-      .filter((f) => !f.valid)
-      .map((f) => f.field)
-      .join(", ");
+  constructor(invoiceId: string, remainingMs: number) {
     super(
-      `Invoice ${report.invoiceId} cannot be cloned. Failing fields: ${failing}`,
-      "INVOICE_NOT_CLONEABLE",
-      { invoiceId: report.invoiceId },
+      `Payment escalation aborted for invoice ${invoiceId} with ${remainingMs}ms remaining`,
+      "PAYMENT_ESCALATION_ABORT",
+      { invoiceId, remainingMs }
     );
-    this.name = "InvoiceNotCloneableError";
-    this.details = report;
+    this.name = "PaymentEscalationAbortError";
+    this.invoiceId = invoiceId;
+    this.remainingMs = remainingMs;
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-export function isInvoiceNotCloneableError(
-  err: unknown,
-): err is InvoiceNotCloneableError {
-  return err instanceof InvoiceNotCloneableError;
+export function isPaymentEscalationAbortError(err: unknown): err is PaymentEscalationAbortError {
+  return err instanceof PaymentEscalationAbortError;
 }
 
 // ---------------------------------------------------------------------------
-// #487 — Anchor / TOML Errors
+// Recipient Deduplicator errors
 // ---------------------------------------------------------------------------
 
-/** Thrown when fetching or parsing a stellar.toml file fails. */
-export class StellarTomlFetchError extends StellarSplitError {
-  readonly domain: string;
+/**
+ * Thrown when duplicate recipient account IDs are detected in `reject` mode.
+ */
+export class DuplicateRecipientError extends StellarSplitError {
+  readonly duplicateAddresses: string[];
 
-  constructor(domain: string, message: string) {
+  constructor(duplicateAddresses: string[]) {
     super(
-      `Failed to fetch stellar.toml for domain "${domain}": ${message}`,
-      "STELLAR_TOML_FETCH_ERROR",
-      { domain },
-      message,
+      `Duplicate recipient addresses detected: ${duplicateAddresses.join(", ")}`,
+      "DUPLICATE_RECIPIENT",
+      { duplicateAddresses }
     );
-    this.name = "StellarTomlFetchError";
-    this.domain = domain;
+    this.name = "DuplicateRecipientError";
+    this.duplicateAddresses = duplicateAddresses;
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-export function isStellarTomlFetchError(
-  err: unknown,
-): err is StellarTomlFetchError {
-  return err instanceof StellarTomlFetchError;
+export function isDuplicateRecipientError(err: unknown): err is DuplicateRecipientError {
+  return err instanceof DuplicateRecipientError;
 }
 
-/** Thrown when anchor verification cannot be completed. */
-export class AnchorVerificationError extends StellarSplitError {
-  readonly issuer: string;
+// ---------------------------------------------------------------------------
+// Horizon Error Classification Types
+// ---------------------------------------------------------------------------
 
-  constructor(issuer: string, message: string) {
-    super(
-      `Anchor verification failed for issuer "${issuer}": ${message}`,
-      "ANCHOR_VERIFICATION_ERROR",
-      { issuer },
-      message,
-    );
-    this.name = "AnchorVerificationError";
-    this.issuer = issuer;
+/** Structured classification of a Horizon transaction/operation result code. */
+export interface HorizonErrorClassification {
+  /** The primary result code string. */
+  code: string;
+  /** Whether the error is safe to retry. */
+  isRetryable: boolean;
+  /** Severity level of the error. */
+  severity: "low" | "medium" | "high" | "critical" | "unknown";
+  /** Human-readable description of what went wrong. */
+  description: string;
+  /** Recommended action for the caller to take. */
+  suggestedAction: string;
+  /** The specific operation result code, if available. */
+  operationCode?: string;
+}
+
+/**
+ * Wraps a classified Horizon error with the structured classification.
+ */
+export class ClassifiedHorizonError extends StellarSplitError {
+  readonly classification: HorizonErrorClassification;
+
+  constructor(
+    message: string,
+    classification: HorizonErrorClassification
+  ) {
+    super(message, "CLASSIFIED_HORIZON_ERROR", { classification });
+    this.name = "ClassifiedHorizonError";
+    this.classification = classification;
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-export function isAnchorVerificationError(
-  err: unknown,
-): err is AnchorVerificationError {
-  return err instanceof AnchorVerificationError;
+export function isClassifiedHorizonError(err: unknown): err is ClassifiedHorizonError {
+  return err instanceof ClassifiedHorizonError;
+}
+
+// ---------------------------------------------------------------------------
+// Account Data Entry errors
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown when an account data entry key/value exceeds the 64-byte Stellar
+ * protocol limit, or when adding a new key would exceed the 64-entry cap.
+ */
+export class DataEntryValidationError extends StellarSplitError {
+  readonly reason: string;
+
+  constructor(reason: string, context?: Record<string, unknown>) {
+    super(`Account data entry validation failed: ${reason}`, "DATA_ENTRY_VALIDATION_ERROR", context);
+    this.name = "DataEntryValidationError";
+    this.reason = reason;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isDataEntryValidationError(err: unknown): err is DataEntryValidationError {
+  return err instanceof DataEntryValidationError;
 }

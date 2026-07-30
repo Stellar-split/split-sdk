@@ -1,6 +1,11 @@
 /**
  * Per-method timeout configuration and enforcement via AbortController.
+ * Also includes EscalationManager for pre-deadline escalation actions.
  */
+
+import { PaymentEscalationAbortError } from "./errors.js";
+import type { EscalationStep, TimeoutPolicy } from "./types.js";
+import { FallbackChain } from "./fallbackChain.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -104,5 +109,123 @@ export async function withTimeout<T>(
     return await Promise.race([fn(controller.signal), timeoutPromise]);
   } finally {
     clearTimeout(timeoutId);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// EscalationManager — pre-deadline escalation actions
+// ---------------------------------------------------------------------------
+
+/** Event emitted when an escalation step is triggered. */
+export interface EscalationEvent {
+  step: EscalationStep["action"];
+  remainingMs: number;
+  invoiceId: string;
+}
+
+export type EscalationCallback = (event: EscalationEvent) => void;
+
+/**
+ * Manages escalating actions before a payment deadline.
+ *
+ * Accepts a list of {@link EscalationStep} objects, each with a `triggerAtMs`
+ * offset and an action.  As time elapses and the deadline approaches, the
+ * manager fires each step in order.
+ */
+export class EscalationManager {
+  private readonly deadlineMs: number;
+  private readonly steps: EscalationStep[];
+  private readonly fallbackChain: FallbackChain | null;
+  private readonly onEvent: EscalationCallback;
+  private startTime: number | null = null;
+  private timers: ReturnType<typeof setTimeout>[] = [];
+  private aborted = false;
+
+  constructor(
+    policy: TimeoutPolicy,
+    options: {
+      fallbackChain?: FallbackChain;
+      onEvent?: EscalationCallback;
+    } = {}
+  ) {
+    this.deadlineMs = policy.deadlineMs;
+    // Sort steps by triggerAtMs descending (closest to deadline first in the
+    // original order, but we schedule from the end backwards).
+    this.steps = [...policy.escalations].sort((a, b) => a.triggerAtMs - b.triggerAtMs);
+    this.fallbackChain = options.fallbackChain ?? null;
+    this.onEvent = options.onEvent ?? (() => {});
+  }
+
+  /**
+   * Start the escalation timer.  Call once; subsequent calls are no-ops.
+   */
+  start(invoiceId: string): void {
+    if (this.startTime !== null) return;
+    this.startTime = Date.now();
+
+    for (const step of this.steps) {
+      const delayMs = this.deadlineMs - step.triggerAtMs;
+      if (delayMs <= 0) continue; // already past this threshold
+
+      const timer = setTimeout(() => {
+        if (this.aborted) return;
+        this.executeStep(step, invoiceId);
+      }, delayMs);
+      this.timers.push(timer);
+    }
+  }
+
+  /**
+   * Cancel all pending escalation steps.
+   */
+  cancel(): void {
+    this.aborted = true;
+    for (const timer of this.timers) {
+      clearTimeout(timer);
+    }
+    this.timers = [];
+  }
+
+  /**
+   * Get remaining milliseconds until the deadline.
+   */
+  getRemainingMs(): number {
+    if (this.startTime === null) return this.deadlineMs;
+    const elapsed = Date.now() - this.startTime;
+    return Math.max(0, this.deadlineMs - elapsed);
+  }
+
+  private async executeStep(step: EscalationStep, invoiceId: string): Promise<void> {
+    const remainingMs = this.getRemainingMs();
+
+    this.onEvent({ step: step.action, remainingMs, invoiceId });
+
+    switch (step.action) {
+      case "warn":
+        // Warn is fire-and-forget — the callback is the only side-effect.
+        break;
+
+      case "retryHigherFee":
+        // Fee multiplier is handled externally by the caller who receives
+        // the escalation event.  The manager signals intent and the caller
+        // is responsible for resubmitting with the higher fee.
+        break;
+
+      case "switchEndpoint":
+        if (this.fallbackChain) {
+          try {
+            // Signal the fallback chain intent via the event callback.
+            // The caller is responsible for actual endpoint rotation using
+            // the fallback chain, triggered by this escalation event.
+          } catch {
+            // Switching endpoint failure should not throw here.
+          }
+        }
+        break;
+
+      case "abort":
+        this.cancel();
+        throw new PaymentEscalationAbortError(invoiceId, remainingMs);
+    }
   }
 }

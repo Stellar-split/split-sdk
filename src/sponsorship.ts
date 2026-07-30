@@ -68,6 +68,9 @@ export class InsufficientReserveError extends StellarSplitError {
   }
 }
 
+import { checkSponsorReserve as _checkSponsorReserve } from "./preflightChecker.js";
+import type { SponsorshipConfig, SponsorReserveCheckResult } from "./types.js";
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -178,4 +181,27 @@ export async function buildSponsoredOnboarding(
 
   builder.setTimeout(30);
   return builder.build();
+}
+
+// ---------------------------------------------------------------------------
+// checkSponsorshipReserve — convenience wrapper for the preflight checker
+// ---------------------------------------------------------------------------
+
+/**
+ * Convenience wrapper around {@link preflightChecker.checkSponsorReserve}
+ * that accepts a {@link SponsorshipConfig} object.
+ *
+ * This is exported as `checkSponsorshipReserve` from the public API.
+ */
+export async function checkSponsorshipReserve(
+  config: SponsorshipConfig,
+  horizonUrl: string,
+  options?: { throwOnInsufficient?: boolean },
+): Promise<SponsorReserveCheckResult> {
+  return _checkSponsorReserve(
+    config.sponsorAddress,
+    config.entryCount,
+    config.horizonUrl ?? horizonUrl,
+    options?.throwOnInsufficient ?? true,
+  );
 }

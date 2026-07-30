@@ -16,7 +16,28 @@ import {
   xdr,
   Keypair,
 } from "@stellar/stellar-sdk";
-import { EventEmitter } from "events";
+import { TypedEventEmitter } from "./events/TypedEventEmitter.js";
+import type { CircuitStateChangeLogEvent } from "./resilience/CircuitBreaker.js";
+import { InvoiceStateMachine } from "./state/InvoiceStateMachine.js";
+import type { StateMachineConfig } from "./types/state.js";
+import { RpcLoadBalancer } from "./rpc/RpcLoadBalancer.js";
+import type { EndpointConfig, RpcLoadBalancerOptions } from "./rpc/RpcLoadBalancer.js";
+
+/** Events emitted by {@link StellarSplitClient}. */
+export type SplitClientEventMap = {
+  /** The advanced circuit breaker (src/resilience/CircuitBreaker.ts) tripped open. */
+  "circuit:open": undefined;
+  /** The advanced circuit breaker closed after a successful probe. */
+  "circuit:close": undefined;
+  /** The advanced circuit breaker entered half-open (probing) state. */
+  "circuit:half-open": undefined;
+  /** Fired on every advanced circuit breaker state transition. */
+  circuit_state_change: CircuitStateChangeLogEvent;
+  /** An RpcLoadBalancer endpoint (from `rpcEndpoints`) was quarantined. */
+  "endpoint:demoted": { url: string; reason: "consecutive_errors" | "failed_health_check" };
+  /** A previously quarantined RpcLoadBalancer endpoint passed its health check and rejoined rotation. */
+  "endpoint:reinstated": { url: string };
+};
 import { signTransaction } from "./wallet.js";
 import { telemetry } from "./telemetry.js";
 import { TelemetryHookManager } from "./telemetryHooks.js";
@@ -34,6 +55,8 @@ import { PluginRegistry } from "./plugin.js";
 import type { SdkPlugin } from "./plugin.js";
 import { checkRPCHealth } from "./health.js";
 import { Deduplicator } from "./dedup.js";
+import { SorobanFeatureDetector } from "./sorobanFeatureDetector.js";
+import type { SorobanFeatureFlags } from "./types.js";
 import { verifyBatchPayments } from "./batchVerifier.js";
 import { type HealthCheckResult, HealthCheckTimeoutError } from "./types.js";
 import type {
@@ -55,10 +78,13 @@ import {
 import type { CompressionConfig } from "./compression.js";
 import { calculateFee } from "./fee.js";
 import { resolveToken } from "./token.js";
+import { generatePaymentReceipt } from "./receipt.js";
 import type { PaymentReceipt } from "./receipt.js";
+import { checkInvoiceExpiry, checkPayerReadiness } from "./preflightChecker.js";
 import { createInvoiceSubscription } from "./subscription.js";
 import type { Subscription, InvoiceEvent, SubscriptionOptions } from "./types.js";
 import { getSubscriptionManager } from "./streaming/SubscriptionManager.js";
+import { destroySubscriptionManager } from "./streaming/SubscriptionManager.js";
 import type { SubscriptionOptions as SubscriptionManagerOptions } from "./types/events.js";
 import { CircuitBreaker as AdvancedCircuitBreaker } from "./resilience/CircuitBreaker.js";
 import type {
@@ -166,12 +192,19 @@ import {
   RpcUnavailableError,
   UnknownEndpointError,
   QueueFailedError,
+  ShutdownInProgressError,
   SignerFailedError,
   NoSignerProvidedError,
   ValidationError,
   StellarSplitError,
   AdminOperationError,
+  PassphraseMismatchError,
+  InvoiceIntegrityError,
+  InvalidTransactionTypeError,
 } from "./errors.js";
+import { hashInvoice, verifyInvoiceHash } from "./invoiceHashVerifier.js";
+import { buildFeeBump } from "./feeBumpBuilder.js";
+import type { FeeBumpConfig } from "./feeBumpBuilder.js";
 import { replayEvents } from "./events.js";
 import { subscribeToInvoice as _subscribeToInvoice } from "./stream.js";
 import { subscribeToInvoice as _subscribeToInvoiceSSE } from "./sse.js";
@@ -202,7 +235,14 @@ import { PriorityQueue } from "./priorityQueue.js";
 import type { RequestPriority } from "./priorityQueue.js";
 import { IdempotencyManager } from "./idempotency.js";
 import type { IdempotencyConfig } from "./idempotency.js";
+import { RollbackCoordinator } from "./splitRollbackCoordinator.js";
 import { validateInvoicePayload } from "./payloadGuard.js";
+import { validateSplitRatiosOrThrow } from "./validators/splitRatioValidator.js";
+import type { SplitConfig } from "./types.js";
+import { checkTrustlines } from "./trustlineChecker.js";
+import type { TrustlineCheckResult } from "./trustlineChecker.js";
+import { parseEnvelope } from "./xdrParser.js";
+import type { ParsedEnvelope } from "./xdrParser.js";
 import type { PayloadGuardConfig } from "./payloadGuard.js";
 import { HorizonFallbackReader } from "./horizonFallback.js";
 import type {
@@ -232,10 +272,9 @@ import type {
   RetryConfig as ResilientRetryConfig,
   CircuitBreakerConfig,
 } from "./resilientRpc.js";
-import { RecipientBalancePreCheck } from "./preflight/RecipientBalancePreCheck.js";
-import { RecipientPreCheckFailedError } from "./errors.js";
-import { InvoiceCloneabilityValidator } from "./preflight/InvoiceCloneabilityValidator.js";
-import { InvoiceNotCloneableError } from "./errors.js";
+import { NetworkPassphraseValidator } from "./network/NetworkPassphraseValidator.js";
+import type { OtelHandle, TelemetryOptions } from "./telemetry/OtelExporter.js";
+import { createOtelHandle, noopOtelHandle, OtelExporter } from "./telemetry/OtelExporter.js";
 
 /** A plugin that extends StellarSplitClient with new methods and lifecycle hooks. */
 export interface StellarSplitPlugin {
@@ -265,6 +304,10 @@ export interface StellarSplitClientConfig {
   networkPassphrase: string;
   /** Deployed StellarSplit contract ID. */
   contractId: string;
+  /** Whether to validate the passphrase against the RPC node on startup. Defaults to true. */
+  validatePassphrase?: boolean;
+  /** Map of available networks for the live switcher. */
+  networks?: Record<string, NetworkConfig>;
   /** Maximum retry attempts for transient pay() failures. Defaults to 3. */
   maxRetries?: number;
   /** Optional telemetry configuration. */
@@ -421,6 +464,40 @@ export interface StellarSplitClientConfig {
   validatePassphrase?: boolean;
   /** Map of available networks for the live switcher. */
   networks?: Record<string, NetworkConfig>;
+  /**
+   * Optional override for the allowed invoice status transition graph used
+   * by InvoiceStateMachine. When omitted, the default graph is used
+   * (Pending -> Released | Refunded | Cancelled; the rest are terminal).
+   */
+  stateMachine?: StateMachineConfig;
+  /**
+   * Optional list of Soroban RPC endpoints to distribute calls across via
+   * health-weighted round-robin ({@link RpcLoadBalancer}). When provided,
+   * this takes priority over `rpcUrl` for selecting the primary server;
+   * endpoints that error repeatedly or exceed their latency budget are
+   * quarantined and automatically reinstated after a passing health check.
+   * When omitted, the existing single/array `rpcUrl` behavior is unchanged.
+   */
+  rpcEndpoints?: EndpointConfig[];
+  /** Optional tuning for the {@link RpcLoadBalancer} created from `rpcEndpoints`. */
+  rpcLoadBalancer?: RpcLoadBalancerOptions;
+  /**
+   * Optional fee surge detector configuration for surge-aware fee adjustment.
+   * When enabled, fees are adjusted dynamically during network congestion
+   * based on live Horizon fee statistics.
+   */
+  feeSurgeConfig?: import("./feeSurgeDetector.js").FeeSurgeConfig;
+  /**
+   * When true, enables debug helpers such as {@link StellarSplitClient.parseXdrEnvelope}
+   * for inspecting in-flight transaction envelopes. Defaults to false.
+   */
+  debug?: boolean;
+  /**
+   * Optional fiat-to-asset price oracle adapter (see `PriceOracleAdapter` in
+   * types.ts). Used by `convertFiatToAsset` in currencyConverter.ts to
+   * resolve display conversions. Defaults to no oracle configured.
+   */
+  priceOracle?: import("./types.js").PriceOracleAdapter;
 }
 
 /** Network configuration. */
@@ -435,6 +512,12 @@ export interface NetworkConfig {
 
 export interface TxResult {
   txHash: string;
+}
+
+export interface InFlightRequestInfo {
+  id: string;
+  method: string;
+  startedAt: number;
 }
 
 /** TTL for cached NFT gate status results (30 seconds). */
@@ -528,8 +611,7 @@ export function verifyCompletionProof(proof: CompletionProof): {
   }
   return { valid: true };
 }
-
-export class StellarSplitClient extends EventEmitter {
+export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
   private _mainServer!: SorobanRpc.Server;
   private _standby: WarmStandby | null = null;
   private _queue = new PriorityQueue();
@@ -549,6 +631,7 @@ export class StellarSplitClient extends EventEmitter {
   private _retryOptions: RetryOptions | null = null;
   private _horizonReader: HorizonFallbackReader | null = null;
   private _idempotency: IdempotencyManager | null = null;
+  private _rollbackCoordinator: RollbackCoordinator | null = null;
   private _pool: ConnectionPool | null = null;
   /**
    * Effective pool size chosen at construction (or 0 when pooling is off).
@@ -570,6 +653,8 @@ export class StellarSplitClient extends EventEmitter {
   private _adminKeypair: Keypair | null = null;
   /** Resilient RPC wrapper providing retry + circuit breaker for all RPC calls. */
   private _resilientRpc: ResilientRpcClient | null = null;
+  /** Health-weighted multi-endpoint balancer, present only when `config.rpcEndpoints` is set. */
+  private _rpcLoadBalancer: RpcLoadBalancer | null = null;
   /**
    * Optional secondary circuit breaker (src/resilience/CircuitBreaker.ts)
    * guarding the transaction-submission path (`_submitTx`). Distinct from
@@ -579,6 +664,23 @@ export class StellarSplitClient extends EventEmitter {
   private _advancedCircuitBreaker: AdvancedCircuitBreaker | null = null;
   /** Optimistic UI cache for Invoice reads during a pending pay() call. */
   private _optimisticCache: OptimisticCache<Invoice> | null = null;
+  private _sorobanFeatureDetector: SorobanFeatureDetector;
+  private _shutdownInProgress = false;
+  private _pluginsDestroyed = false;
+  private _runtimeShutdownPromise: Promise<void> | null = null;
+  private _requestSeq = 0;
+  private readonly _inFlightRequests = new Map<string, InFlightRequestInfo>();
+  private readonly _inFlightRequestPromises = new Map<string, Promise<unknown>>();
+  private readonly _managedHorizonStreams = new Set<{ stop(): void }>();
+  private readonly _stateMachine: InvoiceStateMachine;
+  /**
+   * OpenTelemetry handle. Stays {@link noopOtelHandle} (zero overhead, no
+   * span objects created) unless `config.otel.enabled` is true, in which
+   * case it's swapped for a real handle once {@link _otelInitPromise}
+   * resolves (see the constructor).
+   */
+  private _otel: OtelHandle = noopOtelHandle;
+  private _otelInitPromise: Promise<void> | null = null;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private get server(): any {
@@ -680,9 +782,17 @@ export class StellarSplitClient extends EventEmitter {
     if (config.timeout !== undefined) {
       this._timeoutManager = new TimeoutManager(config.timeout);
     }
-    this._mainServer = new SorobanRpc.Server(primaryUrl, {
-      allowHttp: primaryUrl.startsWith("http://"),
-    });
+    if (config.rpcEndpoints && config.rpcEndpoints.length > 0) {
+      this._rpcLoadBalancer = new RpcLoadBalancer(config.rpcEndpoints, config.rpcLoadBalancer);
+      this._rpcLoadBalancer.on("endpoint:demoted", (event) => this.emit("endpoint:demoted", event));
+      this._rpcLoadBalancer.on("endpoint:reinstated", (event) => this.emit("endpoint:reinstated", event));
+      this._rpcLoadBalancer.start();
+      this._mainServer = this._rpcLoadBalancer.selectEndpoint().server as SorobanRpc.Server;
+    } else {
+      this._mainServer = new SorobanRpc.Server(primaryUrl, {
+        allowHttp: primaryUrl.startsWith("http://"),
+      });
+    }
 
     // Circuit breaker + retry resilience layer (Issue #419)
     if (config.circuitBreaker) {
@@ -692,9 +802,9 @@ export class StellarSplitClient extends EventEmitter {
         config.circuitBreaker.retry,
         config.circuitBreaker.breaker,
       );
-      this._resilientRpc.on("circuit:open", () => this.emit("circuit:open"));
-      this._resilientRpc.on("circuit:close", () => this.emit("circuit:close"));
-      this._resilientRpc.on("circuit:half-open", () => this.emit("circuit:half-open"));
+      this._resilientRpc.on("circuit:open", () => this.emit("circuit:open", undefined));
+      this._resilientRpc.on("circuit:close", () => this.emit("circuit:close", undefined));
+      this._resilientRpc.on("circuit:half-open", () => this.emit("circuit:half-open", undefined));
     }
 
     if (config.advancedCircuitBreaker) {
@@ -706,6 +816,15 @@ export class StellarSplitClient extends EventEmitter {
     if (config.optimisticCache) {
       this._optimisticCache = new OptimisticCache<Invoice>();
     }
+
+    this._stateMachine = new InvoiceStateMachine(config.stateMachine);
+
+    // Soroban protocol feature detection (Issue #529): probe once at startup;
+    // the detector caches internally and re-probes after its staleness window.
+    this._sorobanFeatureDetector = new SorobanFeatureDetector({ rpcUrl: primaryUrl });
+    this._sorobanFeatureDetector.detect().catch(() => {
+      // Best-effort startup probe; getSorobanFeatures() will retry on demand.
+    });
 
     if (
       !this._rpcClient &&
@@ -800,16 +919,330 @@ export class StellarSplitClient extends EventEmitter {
     for (const p of this._pluginInstances) {
       p.onInit?.(this);
     }
-
     if (config.validatePassphrase !== false) {
       void this._validateStartupConfig();
     }
   }
 
   /**
+   * Internal startup validation. Throws if the configured passphrase does not
+   * match the connected RPC node.
+   */
+  private async _validateStartupConfig(): Promise<void> {
+    const { NetworkPassphraseValidator } = await import(
+      "./network/NetworkPassphraseValidator.js"
+    );
+    const { PassphraseMismatchError } = await import("./errors.js");
+    const primaryUrl = Array.isArray(this.config.rpcUrl)
+      ? this.config.rpcUrl[0]!
+      : this.config.rpcUrl;
+    const result = await NetworkPassphraseValidator.validate(
+      this.config.networkPassphrase,
+      primaryUrl,
+    );
+    if (result.mismatch) {
+      throw new PassphraseMismatchError(result.configured, result.reported);
+    }
+  }
+
+  /**
+   * Live network switcher. Migrates state and re-subscribes.
+   */
+  async switchTo(network: "mainnet" | "testnet" | "futurenet"): Promise<void> {
+    const { NetworkSwitcher } = await import("./network/NetworkSwitcher.js");
+    return NetworkSwitcher.switchTo(network, this);
+  }
+
+  isShutdownInProgress(): boolean {
+    return this._shutdownInProgress;
+  }
+
+  beginGracefulShutdown(): void {
+    this._shutdownInProgress = true;
+  }
+
+  registerHorizonStreamManager(manager: { stop(): void }): () => void {
+    this._managedHorizonStreams.add(manager);
+    return () => {
+      this._managedHorizonStreams.delete(manager);
+    };
+  }
+
+  getInFlightRequests(): InFlightRequestInfo[] {
+    return [...this._inFlightRequests.values()].sort(
+      (left, right) => left.startedAt - right.startedAt,
+    );
+  }
+
+  async waitForInFlightRequests(): Promise<void> {
+    await Promise.allSettled([...this._inFlightRequestPromises.values()]);
+  }
+
+  async finalizeShutdown(): Promise<void> {
+    if (this._runtimeShutdownPromise) {
+      return this._runtimeShutdownPromise;
+    }
+
+    this.beginGracefulShutdown();
+    this._runtimeShutdownPromise = (async () => {
+      await this._destroyPlugins();
+      destroySubscriptionManager(this.config.contractId);
+      for (const manager of this._managedHorizonStreams) {
+        manager.stop();
+      }
+      this._managedHorizonStreams.clear();
+
+      this._standby?.stop();
+      this._wsTransport?.disconnect();
+      this._wsTransport = null;
+
+      this._pool?.dispose();
+      this._pool = null;
+
+      if (this._cache && typeof (this._cache as any).persist === "function") {
+        await (this._cache as any).persist();
+      }
+      if (this._cache && typeof (this._cache as any).close === "function") {
+        await (this._cache as any).close();
+      }
+      if (
+        this._rpcClient &&
+        typeof (this._rpcClient as any).close === "function"
+      ) {
+        await (this._rpcClient as any).close();
+      }
+
+      telemetry.destroy();
+    })();
+
+    return this._runtimeShutdownPromise;
+  }
+
+  private async _destroyPlugins(): Promise<void> {
+    if (this._pluginsDestroyed) return;
+    this._pluginsDestroyed = true;
+
+    for (const plugin of [...this._pluginInstances].reverse()) {
+      try {
+        await plugin.onDestroy?.(this);
+      } catch (error) {
+        console.error(
+          `[StellarSplitClient] Plugin "${plugin.name}" onDestroy error:`,
+          error,
+        );
+      }
+    }
+
+    this._pluginInstances = [];
+    this._plugins.clear();
+  }
+
+  private _assertWritable(): void {
+    if (this._shutdownInProgress) {
+      throw new ShutdownInProgressError();
+    }
+  }
+
+  private _trackInFlightRequest<T>(
+    method: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const id = `${method}:${++this._requestSeq}`;
+    const info: InFlightRequestInfo = {
+      id,
+      method,
+      startedAt: Date.now(),
+    };
+
+    this._inFlightRequests.set(id, info);
+    const trackedPromise = (async () => operation())().finally(() => {
+      this._inFlightRequests.delete(id);
+      this._inFlightRequestPromises.delete(id);
+    });
+    this._inFlightRequestPromises.set(id, trackedPromise);
+    return trackedPromise;
+
+    if (config.validatePassphrase !== false) {
+      this._validateStartupConfig();
+    }
+
+    // OpenTelemetry instrumentation (opt-in, zero overhead when omitted/disabled).
+    if (config.otel?.enabled) {
+      const otelExporter = config.otel.exporterUrl
+        ? new OtelExporter({
+            exporterUrl: config.otel.exporterUrl,
+            serviceName: config.otel.serviceName,
+          })
+        : undefined;
+      this._otelInitPromise = createOtelHandle(config.otel, otelExporter)
+        .then((handle) => {
+          this._otel = handle;
+        })
+        .catch(() => {
+          // `@opentelemetry/api` isn't installed, or init otherwise failed --
+          // stay on the zero-overhead no-op handle rather than throwing.
+        });
+      this._instrumentOtel();
+    }
+  }
+
+  /**
+   * Wraps every public StellarSplitClient method (every own, non-underscore-
+   * prefixed function on the prototype) so that calling it opens an OTel
+   * span (and records `split_sdk.rpc_call.*` / `split_sdk.tx.error.count`
+   * metrics) around the original implementation. Only ever invoked from the
+   * constructor when `config.otel.enabled` is true -- when disabled, this
+   * method is never called, no methods are wrapped, and there is no
+   * overhead whatsoever.
+   *
+   * Async methods (the vast majority: `pay`, `createInvoice`, `getInvoice`,
+   * ...) are wrapped with an async-aware span helper. The handful of
+   * synchronous methods (e.g. `switchNetwork`, `getSSEEndpoint`,
+   * `getPoolStats`) are wrapped with a synchronous helper that never awaits
+   * anything, so their return type/signature is preserved for callers.
+   */
+  private _instrumentOtel(): void {
+    const proto = Object.getPrototypeOf(this) as object;
+    const self = this as unknown as Record<string, unknown>;
+    for (const name of Object.getOwnPropertyNames(proto)) {
+      if (name === "constructor" || name.startsWith("_")) continue;
+      const descriptor = Object.getOwnPropertyDescriptor(proto, name);
+      if (!descriptor || typeof descriptor.value !== "function") continue;
+      const original = descriptor.value as (...args: unknown[]) => unknown;
+      const isAsync = original.constructor.name === "AsyncFunction";
+      if (isAsync) {
+        self[name] = (...args: unknown[]) =>
+          this._withOtelSpanAsync(name, args, () => original.apply(this, args) as Promise<unknown>);
+      } else {
+        self[name] = (...args: unknown[]) =>
+          this._withOtelSpanSync(name, args, () => original.apply(this, args));
+      }
+    }
+  }
+
+  /** Best-effort `invoice.id` extraction from a method's first argument. */
+  private _otelInvoiceId(args: unknown[]): string | undefined {
+    const first = args[0];
+    if (typeof first === "string") return first;
+    if (first && typeof first === "object") {
+      const obj = first as Record<string, unknown>;
+      for (const key of ["invoiceId", "invoice_id", "id"]) {
+        const value = obj[key];
+        if (typeof value === "string") return value;
+      }
+    }
+    return undefined;
+  }
+
+  /** Best-effort `tx.hash` extraction from a method's resolved return value. */
+  private _otelTxHash(result: unknown): string | undefined {
+    if (result && typeof result === "object") {
+      const value = (result as Record<string, unknown>).txHash;
+      if (typeof value === "string") return value;
+    }
+    return undefined;
+  }
+
+  /** Shared span attribute setup applied to both the sync and async span helpers. */
+  private _otelStartSpan(name: string, args: unknown[]) {
+    const span = this._otel.startSpan(name);
+    span.setAttribute("stellar.network", this.config.networkPassphrase);
+    const rpcUrl = Array.isArray(this.config.rpcUrl) ? this.config.rpcUrl[0] : this.config.rpcUrl;
+    if (rpcUrl) span.setAttribute("rpc.url", rpcUrl);
+    const invoiceId = this._otelInvoiceId(args);
+    if (invoiceId) span.setAttribute("invoice.id", invoiceId);
+    return span;
+  }
+
+  private async _withOtelSpanAsync<T>(
+    name: string,
+    args: unknown[],
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    if (this._otelInitPromise) await this._otelInitPromise;
+    const span = this._otelStartSpan(name, args);
+    const startedAt = Date.now();
+    try {
+      const result = await fn();
+      const durationMs = Date.now() - startedAt;
+      span.setAttribute("rpc.duration_ms", durationMs);
+      const txHash = this._otelTxHash(result);
+      if (txHash) span.setAttribute("tx.hash", txHash);
+      this._otel.recordRpcCall(durationMs, { method: name });
+      span.end();
+      return result;
+    } catch (error) {
+      const durationMs = Date.now() - startedAt;
+      span.setAttribute("rpc.duration_ms", durationMs);
+      span.recordError(error);
+      this._otel.recordRpcCall(durationMs, { method: name, error: true });
+      this._otel.recordTxError({ method: name });
+      span.end();
+      throw error;
+    }
+  }
+
+  private _withOtelSpanSync<T>(name: string, args: unknown[], fn: () => T): T {
+    const span = this._otelStartSpan(name, args);
+    const startedAt = Date.now();
+    try {
+      const result = fn();
+      const durationMs = Date.now() - startedAt;
+      span.setAttribute("rpc.duration_ms", durationMs);
+      const txHash = this._otelTxHash(result);
+      if (txHash) span.setAttribute("tx.hash", txHash);
+      this._otel.recordRpcCall(durationMs, { method: name });
+      span.end();
+      return result;
+    } catch (error) {
+      const durationMs = Date.now() - startedAt;
+      span.setAttribute("rpc.duration_ms", durationMs);
+      span.recordError(error);
+      this._otel.recordRpcCall(durationMs, { method: name, error: true });
+      this._otel.recordTxError({ method: name });
+      span.end();
+      throw error;
+    }
+  }
+
+  /**
+   * Internal startup validation. Throws PassphraseMismatchError if
+   * the configured passphrase doesn't match the RPC node.
+   */
+  private async _validateStartupConfig(): Promise<void> {
+    const primaryUrl = Array.isArray(this.config.rpcUrl) ? this.config.rpcUrl[0]! : this.config.rpcUrl;
+    const result = await NetworkPassphraseValidator.validate(
+      this.config.networkPassphrase,
+      primaryUrl
+    );
+    if (result.mismatch) {
+      throw new PassphraseMismatchError(result.configured, result.reported);
+    }
+  }
+
+  /**
+   * Live network switcher. Migrates state and re-subscribes.
+   * @param network - 'mainnet' | 'testnet' | 'futurenet'
+   */
+  public async switchTo(network: 'mainnet' | 'testnet' | 'futurenet'): Promise<void> {
+    const { NetworkSwitcher } = await import("./network/NetworkSwitcher.js");
+    return NetworkSwitcher.switchTo(network, this);
+  }
+
+  /**
    * Performs a health check of the client's RPC connection and contract.
    * Resolves with status information or throws HealthCheckTimeoutError if taking > 5000ms.
    */
+  /**
+   * Return the current Soroban protocol feature flags, detected once at
+   * startup and re-probed automatically after the detector's staleness
+   * window (default 1 hour). Emits `protocolUpgradeDetected` on the
+   * underlying detector when a re-probe observes a version change.
+   */
+  async getSorobanFeatures(): Promise<SorobanFeatureFlags> {
+    return this._sorobanFeatureDetector.detect();
+  }
+
   async healthCheck(): Promise<HealthCheckResult> {
     const start = Date.now();
     try {
@@ -1354,6 +1787,27 @@ export class StellarSplitClient extends EventEmitter {
   }
 
   // ---------------------------------------------------------------------------
+  // Debug helpers
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Decode a base64-encoded Stellar transaction envelope XDR into a structured,
+   * human-readable object. Useful for debugging, audit logging, and UI display.
+   *
+   * Only functional when {@link StellarSplitClientConfig.debug} is true;
+   * otherwise returns a placeholder indicating debug mode is off.
+   *
+   * @param xdrBase64 - Base64-encoded transaction envelope XDR.
+   * @returns A parsed envelope, or a notice when debug mode is disabled.
+   */
+  parseXdrEnvelope(xdrBase64: string): ParsedEnvelope | { error: string } {
+    if (!this.config.debug) {
+      return { error: "Debug mode is disabled. Set config.debug = true to enable XDR parsing." };
+    }
+    return parseEnvelope(xdrBase64);
+  }
+
+  // ---------------------------------------------------------------------------
   // Public API
   // ---------------------------------------------------------------------------
 
@@ -1380,24 +1834,18 @@ export class StellarSplitClient extends EventEmitter {
             validateInvoicePayload(params, this.config.payloadGuard);
           }
 
-          // -----------------------------------------------------------
-          // Recipient balance pre-check (#484)
-          // -----------------------------------------------------------
-          if (!params.skipPreCheck) {
-            const assetParts =
-              params.token && params.token !== "native"
-                ? params.token.split(":")
-                : [];
-            const checker = new RecipientBalancePreCheck({
-              assetCode: assetParts[0],
-              assetIssuer: assetParts[1],
-              horizonUrl:
-                params.horizonUrl ?? this.config.horizonUrl,
-            });
-            const recipientAddrs = params.recipients.map((r) => r.address);
-            const failing = await checker.runAndGetFailing(recipientAddrs);
-            if (failing.length > 0) {
-              throw new RecipientPreCheckFailedError(failing);
+          // Pre-submission split ratio validation: catch malformed ratio arrays
+          // early (ratio-sum violations, negative shares, duplicates, zeros).
+          if (params.recipients.length > 1) {
+            const total = params.recipients.reduce((s, r) => s + r.amount, 0n);
+            if (total > 0n) {
+              const splitConfig: SplitConfig = {
+                shares: params.recipients.map((r) => ({
+                  address: r.address,
+                  share: Number(r.amount) / Number(total),
+                })),
+              };
+              validateSplitRatiosOrThrow(splitConfig);
             }
           }
 
@@ -1674,6 +2122,75 @@ export class StellarSplitClient extends EventEmitter {
    * @throws WaterfallInsufficientFundsError if any tier is unsatisfied and
    *   partial submission wasn't allowed.
    */
+  /**
+   * Preflight checks before submitting a payment.
+   *
+   * Verifies the invoice is pending, not expired, and the payer has trustline/balance.
+   */
+  async preflightCheck(params: {
+    invoiceId: string;
+    payer: string;
+    amount: bigint;
+  }): Promise<{
+    valid: boolean;
+    expiry: import("./preflightChecker.js").InvoiceExpiryResult;
+    payerReadiness: import("./preflightChecker.js").PayerReadinessResult;
+  }> {
+    const invoice = await this.getInvoice(params.invoiceId);
+    if (invoice.status !== "Pending") {
+      throw new InvoiceNotPendingError(params.invoiceId);
+    }
+
+    const expiry = checkInvoiceExpiry(Number(invoice.deadline), params.invoiceId);
+
+    // Call checkPayerReadiness, mapping the RPC server to a custom object that
+    // returns the account balances via getAccountBalances (Horizon).
+    const fakeServer = {
+      getAccount: async (address: string) => {
+        const normalizedBalances = await this.getAccountBalances(address);
+        const balances = normalizedBalances.map((nb) => {
+          if (nb.asset === "native") {
+            return {
+              balance: nb.balance,
+              asset_type: "native",
+            };
+          } else {
+            const [code, issuer] = nb.asset.split(":");
+            return {
+              balance: nb.balance,
+              asset_type: "credit_alphanum4",
+              asset_code: code,
+              asset_issuer: issuer,
+            };
+          }
+        });
+        return { balances };
+      },
+    } as any;
+
+    const payerReadiness = await checkPayerReadiness(
+      fakeServer,
+      params.payer,
+      params.amount,
+      invoice.token
+    );
+
+    const valid = expiry.valid && payerReadiness.ready;
+
+    return {
+      valid,
+      expiry,
+      payerReadiness,
+    };
+  }
+
+  /**
+   * Fetch a payment receipt for an invoice and payer.
+   */
+  async getReceipt(invoiceId: string, payerAddress: string): Promise<PaymentReceipt> {
+    return generatePaymentReceipt(this, invoiceId, payerAddress);
+  }
+
   async submitPayment(params: {
     invoiceId: string;
     payer: string;
@@ -1681,7 +2198,18 @@ export class StellarSplitClient extends EventEmitter {
     donateOnFailure?: boolean;
     waterfallPlan?: WaterfallPlan;
     allowPartial?: boolean;
+    expectedContentHash?: string;
   }): Promise<TxResult> {
+    // Verify invoice content hash if provided (integrity check)
+    if (params.expectedContentHash) {
+      const invoice = await this.getInvoice(params.invoiceId);
+      const valid = await verifyInvoiceHash(invoice, params.expectedContentHash);
+      if (!valid) {
+        const computed = await hashInvoice(invoice);
+        throw new InvoiceIntegrityError(params.invoiceId, params.expectedContentHash, computed);
+      }
+    }
+
     if (!params.waterfallPlan) {
       return this.pay({
         payer: params.payer,
@@ -1717,6 +2245,19 @@ export class StellarSplitClient extends EventEmitter {
 
     const result = await this._submitWaterfallTx(params.payer, operations);
     this._cache?.invalidate(params.invoiceId);
+
+    // Record a rollback checkpoint for the submitted legs. The on-chain
+    // submission is atomic (all-or-nothing), so every funded step succeeded
+    // together; downstream app-layer failures (e.g. webhook delivery) are
+    // reconciled by callers via RollbackCoordinator.markLegFailed.
+    const coordinator = this.getRollbackCoordinator();
+    coordinator.begin(
+      result.txHash,
+      params.invoiceId,
+      fundedSteps.map((step) => ({ recipient: step.recipient, amount: step.amount })),
+    );
+    fundedSteps.forEach((_, index) => coordinator.markLegSuccess(result.txHash, index));
+
     return { txHash: result.txHash };
   }
 
@@ -1910,6 +2451,45 @@ export class StellarSplitClient extends EventEmitter {
   }
 
   /**
+   * The InvoiceStateMachine backing updateInvoiceStatus(). Exposed so
+   * consumers can attach `on('transition', ...)` / `on('invalidTransition', ...)`
+   * lifecycle hooks.
+   */
+  get stateMachine(): InvoiceStateMachine {
+    return this._stateMachine;
+  }
+
+  /**
+   * The RpcLoadBalancer backing multi-endpoint calls, present only when
+   * `config.rpcEndpoints` was provided. `null` for single-`rpcUrl` configs.
+   * Exposed so consumers can attach `on('endpoint:demoted', ...)` /
+   * `on('endpoint:reinstated', ...)` hooks or inspect `getEndpointStates()`.
+   */
+  get rpcLoadBalancer(): RpcLoadBalancer | null {
+    return this._rpcLoadBalancer;
+  }
+
+  /**
+   * Updates an invoice's status, validating the transition through
+   * InvoiceStateMachine. Throws InvalidTransitionError (with
+   * `{ from, to, allowed }`) if the transition isn't allowed from the
+   * invoice's current status.
+   *
+   * When optimisticCache is enabled, the result is written into it
+   * immediately so subsequent getInvoice() calls see the new status.
+   */
+  async updateInvoiceStatus(invoiceId: string, to: InvoiceStatus): Promise<Invoice> {
+    const current = await this.getInvoice(invoiceId);
+    const updated = this._stateMachine.transition(current, to);
+
+    if (this._optimisticCache) {
+      this._optimisticCache.applyOptimistic(invoiceId, updated, current).commit();
+    }
+
+    return updated;
+  }
+
+  /**
    * Subscribe to typed InvoiceEvent payloads for a single invoice via the
    * shared SubscriptionManager, instead of polling fetch methods. The first
    * call for a given invoice ID starts the manager's poll-then-push bridge
@@ -1947,6 +2527,22 @@ export class StellarSplitClient extends EventEmitter {
    */
   get circuitBreaker(): { getState(): CircuitBreakerStateSnapshot } | null {
     return this._advancedCircuitBreaker;
+  }
+
+  /**
+   * The rollback coordinator tracking split-payment leg checkpoints created
+   * by `submitPayment`'s waterfall path. Lazily instantiated on first use.
+   */
+  getRollbackCoordinator(): RollbackCoordinator {
+    if (!this._rollbackCoordinator) {
+      this._rollbackCoordinator = new RollbackCoordinator(this._idempotency ?? undefined);
+    }
+    return this._rollbackCoordinator;
+  }
+
+  /** The configured fiat-to-asset price oracle adapter, or null if none was provided. */
+  get priceOracle(): import("./types.js").PriceOracleAdapter | null {
+    return this.config.priceOracle ?? null;
   }
 
   /**
@@ -2374,6 +2970,7 @@ export class StellarSplitClient extends EventEmitter {
       await this._queue.shutdown();
     } finally {
       this._standby?.stop();
+      this._rpcLoadBalancer?.stop();
 
       this._wsTransport?.disconnect();
       this._wsTransport = null;
@@ -2985,7 +3582,35 @@ export class StellarSplitClient extends EventEmitter {
       }
     }
 
-    return computePaymentValidation(invoice, amount, balance);
+    const result = computePaymentValidation(invoice, amount, balance);
+
+    // Add trustline-check results for non-XLM assets when the config has a
+    // horizon URL set.
+    if (this.config.horizonUrl && invoice.token !== "native") {
+      try {
+        const { Horizon } = await import("@stellar/stellar-sdk");
+        const horizon = new Horizon.Server(this.config.horizonUrl);
+        const recipients = invoice.recipients.map((r) => r.address);
+        const trustResult = await checkTrustlines(
+          horizon,
+          recipients,
+          invoice.token,
+        );
+        if (!trustResult.allReady) {
+          const missing = trustResult.entries.filter((e) => !e.hasTrustline);
+          for (const m of missing) {
+            result.errors.push(
+              `Recipient ${m.address} has no trustline for token ${invoice.token}. Establish a trustline before releasing.`,
+            );
+          }
+          result.valid = false;
+        }
+      } catch {
+        // Trustline check failed — don't block payment, just skip.
+      }
+    }
+
+    return result;
   }
 
   private async _getPayerAddress(): Promise<string | null> {
@@ -5867,6 +6492,188 @@ export class StellarSplitClient extends EventEmitter {
       } as Record<string, unknown>,
       () => _submitBridgePayment(proof, this.config),
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #1 — Account Merge Detection: rerouteRecipient
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Reroute an invoice recipient from a merged (invalid) account to a new destination.
+   *
+   * Validates the new address exists on-chain and has required trustlines,
+   * then updates the recipient record. Emits `recipient:rerouted`.
+   *
+   * @param invoiceId   - Invoice whose recipient should be updated.
+   * @param oldAddress  - The merged (invalid) recipient address.
+   * @param newAddress  - The destination account after the merge.
+   */
+  async rerouteRecipient(
+    invoiceId: string,
+    oldAddress: string,
+    newAddress: string,
+  ): Promise<void> {
+    const { AccountMergeDetector, InvalidDestinationError } = await import(
+      "./accounts/AccountMergeDetector.js"
+    );
+
+    const horizonUrl = this.config.horizonUrl;
+    if (!horizonUrl) {
+      throw new Error(
+        "horizonUrl is required in client config to validate reroute destination",
+      );
+    }
+
+    const detector = new AccountMergeDetector(this, horizonUrl);
+    await detector.validateDestination(newAddress);
+
+    // Emit rerouted event so consumers can react
+    this.emit("recipient:rerouted", { invoiceId, oldAddress, newAddress });
+  }
+
+  /**
+   * Finalize an invoice, checking that all recipients are reachable.
+   *
+   * Delegates to PaymentGraphChecker. Throws `UnreachableRecipientError`
+   * unless `allowUnreachable` is set.
+   */
+  async finalizeInvoice(
+    invoiceId: string,
+    options?: { allowUnreachable?: boolean },
+  ): Promise<void> {
+    const { PaymentGraphChecker } = await import(
+      "./graph/PaymentGraphChecker.js"
+    );
+
+    const horizonUrl = this.config.horizonUrl;
+    if (!horizonUrl) {
+      throw new Error(
+        "horizonUrl is required in client config for payment graph checking",
+      );
+    }
+
+    const invoice = await this.getInvoice(invoiceId);
+    const checker = new PaymentGraphChecker({ horizonUrl });
+    await checker.check(invoice, options);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #4 — Wallet Session Manager: connectWallet / disconnectWallet
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Connect a wallet adapter and register it as the active signer.
+   * All subsequent `signTransaction` calls will use this adapter.
+   *
+   * @param adapter - A `WalletAdapter` (e.g. from `WalletSessionManager.detect()`).
+   * @returns The connected Stellar public key.
+   */
+  async connectWallet(adapter: WalletAdapter): Promise<string> {
+    const address = await adapter.connect();
+    this._adapter = adapter;
+
+    // Listen for account changes and update internal reference
+    adapter.onAccountChange((newAddress: string) => {
+      this.emit("wallet:accountChanged", newAddress);
+    });
+
+    this.emit("wallet:connected", { walletName: adapter.name, address });
+    return address;
+  }
+
+  /**
+   * Disconnect the currently connected wallet adapter.
+   */
+  disconnectWallet(): void {
+    if (this._adapter) {
+      this._adapter.disconnect();
+      const walletName = this._adapter.name;
+      this._adapter = null;
+      this.emit("wallet:disconnected", { walletName });
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Invoice Hash Verification
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Verify that an invoice's content hash matches the expected hash,
+   * detecting tampering between creation and payment.
+   *
+   * @param invoice - The invoice to verify.
+   * @param expectedHash - Previously computed content hash.
+   * @returns `true` when hashes match.
+   * @throws InvoiceIntegrityError when hashes diverge.
+   */
+  async verifyInvoice(invoice: Invoice, expectedHash: string): Promise<boolean> {
+    const valid = await verifyInvoiceHash(invoice, expectedHash);
+    if (!valid) {
+      const computed = await hashInvoice(invoice);
+      throw new InvoiceIntegrityError(invoice.id, expectedHash, computed);
+    }
+    return true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Fee Bump Submission
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Build and submit a fee bump transaction wrapping an inner transaction
+   * signed by a recipient who cannot pay their own fee.
+   *
+   * @param innerTxXdr - Base-64 XDR of the inner signed transaction.
+   * @param feeSource  - Stellar address of the account paying the fee.
+   * @param baseFee    - Base fee in stroops.
+   * @param config     - Optional surge multiplier config.
+   * @returns The fee bump transaction hash.
+   */
+  async submitWithFeeBump(
+    innerTxXdr: string,
+    feeSource: string,
+    baseFee?: string,
+    config?: FeeBumpConfig,
+  ): Promise<TxResult> {
+    const innerTx = TransactionBuilder.fromXDR(
+      innerTxXdr,
+      this.config.networkPassphrase,
+    ) as Transaction;
+
+    const effectiveBaseFee = baseFee ?? BASE_FEE;
+    const feeBumpTx = buildFeeBump(innerTx, feeSource, effectiveBaseFee, this.config.networkPassphrase, config);
+
+    const signedXdr = await (this._adapter
+      ? this._adapter.signTransaction(feeBumpTx.toXDR(), this.config.networkPassphrase)
+      : signTransaction(feeBumpTx.toXDR(), this.config.networkPassphrase));
+
+    const sendResult = await this.server.sendTransaction(
+      TransactionBuilder.fromXDR(signedXdr, this.config.networkPassphrase),
+    );
+
+    if (sendResult.status === "ERROR") {
+      throw new TransactionFailedError(
+        `Fee bump transaction failed: ${JSON.stringify(sendResult.errorResult)}`,
+      );
+    }
+
+    const txHash = sendResult.hash;
+    let getResult = await this.server.getTransaction(txHash);
+    let attempts = 0;
+    while (
+      getResult.status === SorobanRpc.Api.GetTransactionStatus.NOT_FOUND &&
+      attempts < 20
+    ) {
+      await new Promise((r) => setTimeout(r, 1500));
+      getResult = await this.server.getTransaction(txHash);
+      attempts++;
+    }
+
+    if (getResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+      throw new TransactionNotConfirmedError(String(getResult.status));
+    }
+
+    return { txHash };
   }
 }
 

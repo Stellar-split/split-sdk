@@ -1,4 +1,4 @@
-import { SorobanRpc } from "@stellar/stellar-sdk";
+import { rpc as SorobanRpc } from "@stellar/stellar-sdk";
 
 export interface ValidationResult {
   valid: boolean;
@@ -15,7 +15,7 @@ export class NetworkPassphraseValidator {
     try {
       const server = new SorobanRpc.Server(rpcUrl);
       const networkInfo = await server.getNetwork();
-      const reported = networkInfo.networkPassphrase;
+      const reported = networkInfo.passphrase;
 
       const isValid = configured === reported;
 

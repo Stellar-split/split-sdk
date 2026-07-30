@@ -1,6 +1,7 @@
 import { rpc as SorobanRpc, scValToNative, xdr } from "@stellar/stellar-sdk";
 import type { InvoiceEvent, Subscription, SubscriptionOptions } from "./types.js";
 import { StellarSplitError } from "./errors.js";
+import { getCursor, setCursor } from "./cursorTracker.js";
 
 /** Error codes for subscription errors. */
 export const SUBSCRIPTION_ERROR_CODES = {
@@ -366,6 +367,14 @@ export function createInvoiceSubscription(
     activeSubscriptions.add(state);
   }
 
+  // Resume from persisted cursor when available
+  const streamId = `subscription:${contractId}:${invoiceId}`;
+  const storedCursor = getCursor(streamId);
+  const cursorLedger = storedCursor ? parseInt(storedCursor, 10) : NaN;
+  if (!isNaN(cursorLedger) && cursorLedger > 0 && state.lastLedger === null) {
+    state.lastLedger = cursorLedger;
+  }
+
   const emitLifecycle = (event: SubscriptionLifecycleEvent) => {
     config.onLifecycleEvent?.(event);
   };
@@ -453,6 +462,13 @@ export function createInvoiceSubscription(
         state.retryCount = 0;
         state.backoffMs = config.initialBackoffMs;
         state.lastLedger = maxLedger + 1;
+
+        // Persist the cursor for resume-on-restart.
+        try {
+          setCursor(streamId, String(state.lastLedger));
+        } catch {
+          // Best-effort
+        }
 
         for (const evt of newEvents) {
           state.pendingCallback = true;
