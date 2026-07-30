@@ -7,6 +7,7 @@ import type { StellarSplitClientConfig } from "./client.js";
 import type { ExportFormat } from "./export.js";
 
 export { StellarSplitClient } from "./client.js";
+export { FinalityChecker } from "./finalityChecker.js";
 export type {
   StellarSplitClientConfig,
   NetworkConfig,
@@ -28,6 +29,13 @@ export {
   serializeInvoiceTemplate,
   deserializeInvoiceTemplate,
 } from "./invoiceTemplate.js";
+export {
+  validateBulkImport,
+} from "./bulkImportValidator.js";
+export type {
+  BulkImportRowError,
+  BulkImportValidationResult,
+} from "./bulkImportValidator.js";
 export {
   StellarSplitError,
   InvoiceNotFoundError,
@@ -192,14 +200,10 @@ export {
   ClassifiedHorizonError,
   isClassifiedHorizonError,
   HorizonErrorClassification,
-  // New: Account freeze / lock state detector
-  AccountFrozenError,
-  isAccountFrozenError,
-  AccountLockedError,
-  isAccountLockedError,
-  // New: Invoice metadata schema validator
-  MetadataValidationError,
-  isMetadataValidationError,
+  FinalityTimeoutError,
+  isFinalityTimeoutError,
+  ApprovalTimeoutError,
+  isApprovalTimeoutError,
 } from "./errors.js";
 
 // Invoice metadata JSON Schema validator (issue #533)
@@ -274,6 +278,14 @@ export { Deduplicator } from "./dedup.js";
 export { TxQueue } from "./queue.js";
 
 export { replayEvents } from "./events.js";
+export { sdkEvents } from "./events.js";
+export { FinalityChecker } from "./finalityChecker.js";
+export type { FinalityServerLike } from "./finalityChecker.js";
+export { ApprovalWorkflowSequencer, ApprovalSession } from "./approvalWorkflowSequencer.js";
+export type { ApprovalWorkflowOptions, NotificationAdapter, SignatureApplier } from "./approvalWorkflowSequencer.js";
+export { OperationChunker, MAX_OPERATIONS_PER_TRANSACTION } from "./operationChunker.js";
+export { StreamHealthProbe } from "./streamHealthProbe.js";
+export type { MonitoredStream, StreamHealthProbeOptions } from "./streamHealthProbe.js";
 export {
   EventChecksumChain,
   verifyChain,
@@ -329,6 +341,13 @@ export type { SequenceCacheConfig } from "./sequenceCache.js";
 
 export { PathRouter } from "./pathRouter.js";
 export type { PathResult, PathHop, PathRequest, PathRouterConfig } from "./pathRouter.js";
+export { PathQueryBuilder } from "./pathQueryBuilder.js";
+export type {
+  StrictSendQueryParams,
+  StrictReceiveQueryParams,
+  PathQueryBuilderConfig,
+} from "./pathQueryBuilder.js";
+export type { PathQuery, PathQueryResult, StrictSendPathQuery, StrictReceivePathQuery } from "./types.js";
 
 export { OfferTracker } from "./offerTracker.js";
 export type { OfferTrackerConfig, OfferTrackerEventMap } from "./offerTracker.js";
@@ -395,9 +414,16 @@ export type {
   DecodedXDR,
   DecodedTransactionEnvelope,
   DecodedTransactionResult,
+  DecodedOperationResult,
   DecodedTransactionMeta,
   DecodedLedgerEntry,
   DecodedOperation,
+  FinalityStatus,
+  FinalityCheckConfig,
+  MultiSigPolicy,
+  ApprovalSessionResult,
+  BatchPaymentResult,
+  ChunkSubmitter,
 } from "./types.js";
 export { InvalidTransitionError } from "./types.js";
 
@@ -425,17 +451,11 @@ export type { RpcClient } from "./rpcClient.js";
 export { negotiateVersion, SDK_CONTRACT_VERSION } from "./version.js";
 export type { VersionInfo } from "./types.js";
 
-export { checkPayerReadiness, checkInvoiceExpiry, checkSponsorReserve, checkRecipientsUnlocked } from "./preflightChecker.js";
-export type { PayerReadinessResult, PayerReadinessReason, InvoiceExpiryResult, InvoiceExpiryReason, SponsorReserveCheck, RecipientLockCheckResult } from "./preflightChecker.js";
+export { checkPayerReadiness, checkInvoiceExpiry, checkSponsorReserve, checkRecipientFlags } from "./preflightChecker.js";
+export type { PayerReadinessResult, PayerReadinessReason, InvoiceExpiryResult, InvoiceExpiryReason, SponsorReserveCheck, RecipientFlagsCheck } from "./preflightChecker.js";
 
-// Account freeze / lock state detector (issue #532)
-export { detectLockState, assertAccountUnlocked } from "./accountStateDetector.js";
-export type { AccountLockState } from "./types.js";
-
-// Asset balance reconciliation engine (issue #535)
-export { ReconciliationEngine } from "./reconciliationEngine.js";
-export type { ReconciliationDateRange, ReconciliationEngineOptions } from "./reconciliationEngine.js";
-export type { ReconciliationFinding, ReconciliationReport } from "./types.js";
+export { inspectFlags, hasAnyRestrictiveFlag } from "./accountFlagsInspector.js";
+export type { AccountFlagSet } from "./types.js";
 
 export { getSuggestion } from "./errorSuggestions.js";
 
@@ -444,6 +464,7 @@ export { getSuggestion } from "./errorSuggestions.js";
 // ---------------------------------------------------------------------------
 
 export { decodeXDR } from "./xdrDecoder.js";
+export { decodeTransactionResult } from "./txResultDecoder.js";
 
 // ---------------------------------------------------------------------------
 // SSE Cursor Tracker — persistent cursor for stream resumption
@@ -589,12 +610,43 @@ export {
   generatePaymentReceipt,
   serializePaymentReceipt,
   deserializePaymentReceipt,
+  finalizePaymentReceipt,
 } from "./receipt.js";
 export type {
   PaymentReceipt,
   PaymentReceiptJSON,
   InvoiceFetcher,
+  ReceiptConfig,
 } from "./receipt.js";
+
+// Transaction operation effect aggregator
+export { aggregateEffects } from "./effectAggregator.js";
+export type { AccountEffectSummary, AssetDelta } from "./types.js";
+
+// Multi-asset invoice line item normalizer
+export { normalizeLineItems } from "./lineItemNormalizer.js";
+export { ContractPriceOracle } from "./priceOracle.js";
+export type { PriceOracle } from "./priceOracle.js";
+export type {
+  InvoiceLineItem,
+  NormalizedLineItem,
+  NormalizedInvoiceTotal,
+} from "./types.js";
+export { UnsupportedLineItemAssetError, isUnsupportedLineItemAssetError } from "./errors.js";
+
+// Contract invocation retry queue
+export { ContractRetryQueue } from "./contractRetryQueue.js";
+export type { ContractInvocationExecutor, ContractRetryQueueConfig } from "./contractRetryQueue.js";
+export type { ContractInvocation, ContractResult } from "./types.js";
+export { ContractRetryExhaustedError, isContractRetryExhaustedError } from "./errors.js";
+
+// Invoice batch processor with concurrency limiter
+export { InvoiceBatchProcessor } from "./invoiceBatchProcessor.js";
+export type {
+  BatchInvoiceResult,
+  InvoiceBatchConfig,
+  InvoicePaymentSubmitter,
+} from "./invoiceBatchProcessor.js";
 
 // Merkle proof functionality
 export { generateMerkleProof, verifyMerkleProof } from "./merkle.js";
@@ -699,6 +751,15 @@ export type {
 export { ScheduledPaymentManager } from "./scheduler.js";
 export type { ScheduledPayment } from "./scheduler.js";
 
+export { InvoiceReminderScheduler, DEFAULT_GRACE_PERIOD_MS } from "./invoiceReminderScheduler.js";
+export type {
+  InvoiceReminderSchedulerEventMap,
+  InvoiceDueAtResolver,
+  InvoiceReminderSchedulerOptions,
+} from "./invoiceReminderScheduler.js";
+export { loadReminderSchedules, saveReminderSchedules } from "./snapshot.js";
+export type { ReminderSchedule, ReminderEvent, ReminderStatus } from "./types.js";
+
 export { compileFilter, applyFilter, FilterIndex } from "./invoiceFilter.js";
 export type { FilterCriteria, CompiledFilter } from "./invoiceFilter.js";
 
@@ -731,8 +792,41 @@ export type {
   TranchedInvoice,
   TrancheStatus,
 } from "./trancheProgress.js";
+
+// Invoice payment progress tracking
+export { PaymentProgressTracker } from "./paymentProgressTracker.js";
+export type {
+  PaymentProgressEventMap,
+  PaymentProgressTrackerOptions,
+} from "./paymentProgressTracker.js";
+export type { InvoicePaymentProgress, RecipientPaymentState } from "./types.js";
+
+// Fiat-to-asset price oracle adapter
+export { CoinGeckoPriceOracle } from "./priceOracle.js";
+export type { CoinGeckoPriceOracleOptions } from "./priceOracle.js";
+export { RateCache } from "./rateCache.js";
+export type { RateCacheConfig } from "./rateCache.js";
+export type { PriceOracleAdapter } from "./types.js";
+export { convertFiatToAsset } from "./currencyConverter.js";
+export type { FiatConversion, ConvertedAmount } from "./currencyConverter.js";
+
 export { Sep41Adapter, createSep41Adapter } from "./sep41Adapter.js";
 export type { Sep41TokenCapabilities } from "./sep41Adapter.js";
+
+export { Sep31Initiator, resolveDirectPaymentServer } from "./sep/sep31Initiator.js";
+export type {
+  Sep31InitiatorEventMap,
+  Sep31Asset,
+  Sep31PartyInfo,
+  Sep31InitiateParams,
+} from "./sep/sep31Initiator.js";
+export type {
+  Sep31PaymentRecord,
+  Sep31Status,
+  Sep31StatusChangedEvent,
+  Sep31FieldSpec,
+  Sep31RequiredFields,
+} from "./types.js";
 
 export { HorizonFallbackReader } from "./horizonFallback.js";
 export type { NormalizedAccount, NormalizedBalance } from "./horizonFallback.js";
@@ -795,6 +889,13 @@ export type {
   ClaimableBalanceLifecycleEventMap,
 } from "./claimableBalanceFallback.js";
 
+export { PredicateBuilder } from "./predicateBuilder.js";
+export type { ClaimPredicate } from "./predicateBuilder.js";
+export type { PredicateConfig } from "./types.js";
+
+export { RateCache } from "./rateCache.js";
+export type { RateCacheEntry, RateOracleFn, RateCacheConfig } from "./rateCache.js";
+
 export { subscribeToInvoice } from "./sse.js";
 export type {
   SSEInvoiceEventType,
@@ -830,6 +931,11 @@ export type {
 } from "./usageAnalytics.js";
 export { IdempotencyManager } from "./idempotency.js";
 export type { IdempotencyConfig } from "./idempotency.js";
+
+export { RollbackCoordinator } from "./splitRollbackCoordinator.js";
+export type { SplitRollbackEventMap } from "./splitRollbackCoordinator.js";
+export type { SplitRollbackRecord } from "./snapshot.js";
+export type { SplitLeg, SplitLegState, SplitResult, SplitRollbackCheckpoint } from "./types.js";
 
 export {
   validateInvoicePayload,
@@ -1135,3 +1241,58 @@ export type {
   ScValPrimitive,
   ContractStorageExporterOptions,
 } from "./diagnostics/ContractStorageExporter.js";
+
+// ---------------------------------------------------------------------------
+// #528 — AccountDataManager: typed CRUD for account data entries
+// ---------------------------------------------------------------------------
+
+export { AccountDataManager } from "./accountDataManager.js";
+export type {
+  AccountDataManagerConfig,
+  TransactionResult as AccountDataTransactionResult,
+} from "./accountDataManager.js";
+export type { AccountDataEntry, AccountDataMap } from "./types.js";
+export {
+  DataEntryValidationError,
+  isDataEntryValidationError,
+} from "./errors.js";
+
+// ---------------------------------------------------------------------------
+// #529 — SorobanFeatureDetector: protocol upgrade / feature flag detection
+// ---------------------------------------------------------------------------
+
+export { SorobanFeatureDetector } from "./sorobanFeatureDetector.js";
+export type {
+  SorobanFeatureDetectorConfig,
+  SorobanFeatureDetectorEventMap,
+} from "./sorobanFeatureDetector.js";
+export type { SorobanFeatureFlags } from "./types.js";
+
+// ---------------------------------------------------------------------------
+// #530 — StreamDeduplicator: paging-token-based stream event dedup
+// ---------------------------------------------------------------------------
+
+export { StreamDeduplicator } from "./streamDeduplicator.js";
+export type {
+  StreamDeduplicatorOptions,
+  StreamDeduplicatorEventMap,
+} from "./streamDeduplicator.js";
+export {
+  InMemoryDedupTokenStore,
+  setDefaultDedupTokenStore,
+  saveDedupTokens,
+  loadDedupTokens,
+} from "./snapshot.js";
+export type { DedupTokenStore } from "./snapshot.js";
+
+// ---------------------------------------------------------------------------
+// #531 — Per-Split Audit Log Emitter
+// ---------------------------------------------------------------------------
+
+export { AuditLogger } from "./auditLogger.js";
+export type { AuditEntry } from "./auditLogger.js";
+export type { SplitAuditEntry } from "./types.js";
+export {
+  exportSplitAuditTrail,
+  SPLIT_AUDIT_CSV_COLUMNS,
+} from "./complianceExporter.js";

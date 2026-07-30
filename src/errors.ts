@@ -379,6 +379,51 @@ export class SimulationFailedError extends StellarSplitError {
   }
 }
 
+/**
+ * Thrown by {@link DeployPipeline} when a WASM upload or contract
+ * instantiation step keeps failing with `tx_bad_seq` after retrying with
+ * a freshly-fetched sequence number.
+ */
+export class DeploySequenceError extends StellarSplitError {
+  readonly step: string;
+  readonly attempts: number;
+
+  constructor(step: string, attempts: number) {
+    super(
+      `Deploy step "${step}" failed after ${attempts} sequence retries due to tx_bad_seq`,
+      "DEPLOY_SEQUENCE_ERROR",
+      { step, attempts }
+    );
+    this.name = "DeploySequenceError";
+    this.step = step;
+    this.attempts = attempts;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * Thrown by {@link WebhookAgent.deliver} when a webhook delivery has
+ * exhausted its configured retry budget without a successful response.
+ */
+export class WebhookExhaustedError extends StellarSplitError {
+  readonly url: string;
+  readonly attempts: number;
+  readonly lastError?: string;
+
+  constructor(url: string, attempts: number, lastError?: string) {
+    super(
+      `Webhook delivery to ${url} failed after ${attempts} attempts${lastError ? `: ${lastError}` : ""}`,
+      "WEBHOOK_EXHAUSTED",
+      { url, attempts, lastError }
+    );
+    this.name = "WebhookExhaustedError";
+    this.url = url;
+    this.attempts = attempts;
+    this.lastError = lastError;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Thrown when no return value is received from a contract call. */
 export class NoReturnValueError extends StellarSplitError {
   readonly method: string;
@@ -704,6 +749,38 @@ export class Sep41AdapterError extends StellarSplitError {
   constructor(message: string) {
     super(message, "SEP41_ADAPTER_ERROR", undefined, message);
     this.name = "Sep41AdapterError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a queued contract invocation exhausts its retry attempts. */
+export class ContractRetryExhaustedError extends StellarSplitError {
+  readonly attempts: number;
+
+  constructor(attempts: number, lastError: unknown) {
+    super(
+      `Contract invocation retry exhausted after ${attempts} attempts`,
+      "CONTRACT_RETRY_EXHAUSTED",
+      { attempts, lastError: lastError instanceof Error ? lastError.message : String(lastError) }
+    );
+    this.name = "ContractRetryExhaustedError";
+    this.attempts = attempts;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a line item's asset has no oracle price available for normalisation. */
+export class UnsupportedLineItemAssetError extends StellarSplitError {
+  readonly asset: string;
+
+  constructor(asset: string) {
+    super(
+      `No oracle price available for line item asset: ${asset}`,
+      "UNSUPPORTED_LINE_ITEM_ASSET",
+      { asset }
+    );
+    this.name = "UnsupportedLineItemAssetError";
+    this.asset = asset;
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
@@ -1085,6 +1162,14 @@ export function isUnknownNetworkError(err: unknown): err is UnknownNetworkError 
 
 export function isInsufficientSignaturesError(err: unknown): err is InsufficientSignaturesError {
   return err instanceof InsufficientSignaturesError;
+}
+
+export function isUnsupportedLineItemAssetError(err: unknown): err is UnsupportedLineItemAssetError {
+  return err instanceof UnsupportedLineItemAssetError;
+}
+
+export function isContractRetryExhaustedError(err: unknown): err is ContractRetryExhaustedError {
+  return err instanceof ContractRetryExhaustedError;
 }
 
 export function isCloneChainTooDeepError(err: unknown): err is CloneChainTooDeepError {
@@ -1701,70 +1786,24 @@ export function isClassifiedHorizonError(err: unknown): err is ClassifiedHorizon
 }
 
 // ---------------------------------------------------------------------------
-// Account freeze / lock state errors
+// Account Data Entry errors
 // ---------------------------------------------------------------------------
 
-/** Thrown when a payment targets an account whose trustline has been frozen by the issuer. */
-export class AccountFrozenError extends StellarSplitError {
-  readonly accountId: string;
-  readonly assetCode: string;
+/**
+ * Thrown when an account data entry key/value exceeds the 64-byte Stellar
+ * protocol limit, or when adding a new key would exceed the 64-entry cap.
+ */
+export class DataEntryValidationError extends StellarSplitError {
+  readonly reason: string;
 
-  constructor(accountId: string, assetCode: string) {
-    super(
-      `Account ${accountId} has a frozen trustline for ${assetCode}`,
-      "ACCOUNT_FROZEN",
-      { accountId, assetCode },
-    );
-    this.name = "AccountFrozenError";
-    this.accountId = accountId;
-    this.assetCode = assetCode;
+  constructor(reason: string, context?: Record<string, unknown>) {
+    super(`Account data entry validation failed: ${reason}`, "DATA_ENTRY_VALIDATION_ERROR", context);
+    this.name = "DataEntryValidationError";
+    this.reason = reason;
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-export function isAccountFrozenError(err: unknown): err is AccountFrozenError {
-  return err instanceof AccountFrozenError;
-}
-
-/** Thrown when a payment targets an account that can never be authorized again for the asset (`AUTH_IMMUTABLE`). */
-export class AccountLockedError extends StellarSplitError {
-  readonly accountId: string;
-  readonly assetCode: string;
-
-  constructor(accountId: string, assetCode: string) {
-    super(
-      `Account ${accountId} is permanently locked out of authorization for ${assetCode}`,
-      "ACCOUNT_LOCKED",
-      { accountId, assetCode },
-    );
-    this.name = "AccountLockedError";
-    this.accountId = accountId;
-    this.assetCode = assetCode;
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-export function isAccountLockedError(err: unknown): err is AccountLockedError {
-  return err instanceof AccountLockedError;
-}
-
-// ---------------------------------------------------------------------------
-// Invoice metadata schema validation errors
-// ---------------------------------------------------------------------------
-
-/** Thrown when invoice metadata fails validation against the registered JSON Schema. */
-export class MetadataValidationError extends StellarSplitError {
-  readonly errors: import("ajv").ErrorObject[];
-
-  constructor(errors: import("ajv").ErrorObject[]) {
-    const summary = errors.map((e) => `${e.instancePath || "/"} ${e.message ?? ""}`.trim()).join("; ");
-    super(`Invoice metadata failed schema validation: ${summary}`, "METADATA_VALIDATION_ERROR", { errors });
-    this.name = "MetadataValidationError";
-    this.errors = errors;
-    Object.setPrototypeOf(this, new.target.prototype);
-  }
-}
-
-export function isMetadataValidationError(err: unknown): err is MetadataValidationError {
-  return err instanceof MetadataValidationError;
+export function isDataEntryValidationError(err: unknown): err is DataEntryValidationError {
+  return err instanceof DataEntryValidationError;
 }
