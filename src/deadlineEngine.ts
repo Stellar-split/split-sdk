@@ -1,3 +1,5 @@
+import type { LedgerCloseEstimator } from "./ledgerCloseEstimator.js";
+
 type TimeoutLike = ReturnType<typeof setInterval>;
 
 export interface CountdownOptions {
@@ -392,5 +394,24 @@ export class DeadlineEngine {
       clearInterval(this.interval);
       this.interval = null;
     }
+  }
+
+  /**
+   * Derive a Unix-seconds deadline from a future ledger sequence number using
+   * a {@link LedgerCloseEstimator}.
+   *
+   * This lets callers express payment expiry in ledger terms and get a
+   * wall-clock deadline that can be passed to `getCountdown()` or stored on
+   * the invoice.
+   *
+   * @param targetLedger - The ledger sequence at which funds should expire.
+   * @param estimator    - A calibrated {@link LedgerCloseEstimator}.
+   * @returns Unix timestamp in seconds for the projected close time.
+   */
+  estimateDeadlineFromLedger(
+    targetLedger: number,
+    estimator: LedgerCloseEstimator,
+  ): number {
+    return Math.floor(estimator.estimateCloseTime(targetLedger).getTime() / 1000);
   }
 }
