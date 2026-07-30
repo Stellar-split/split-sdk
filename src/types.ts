@@ -2020,56 +2020,43 @@ export interface SplitAuditEntry {
 }
 
 // ---------------------------------------------------------------------------
-// Split Rounding Auditor Types (Issue #590)
+// Subentry Capacity Guard Types (Issue #591)
 // ---------------------------------------------------------------------------
 
 /**
- * One input line in a split: a recipient and their ratio of the total.
+ * Result of a subentry capacity check for a Stellar account.
  *
- * `ratio` is a floating-point proportion in the range (0, 1]. All ratios in
- * a split should sum to 1.0, but the auditor tolerates small deviations and
- * corrects them using the largest-remainder method.
+ * Derived from live Horizon account data using the protocol reserve formula:
+ *   (2 + numSubentries + numSponsoring − numSponsored) × baseReserve
  */
-export interface SplitLine {
-  /** Unique identifier for this recipient (e.g. Stellar address). */
-  recipientId: string;
+export interface SubentryCapacityResult {
+  /** Number of subentry slots currently consumed by the account. */
+  used: number;
+  /** Number of subentry slots available for new entries. */
+  available: number;
   /**
-   * Fraction of the invoice total owed to this recipient (0 < ratio ≤ 1).
-   * The sum of all ratios in a split should be 1.0.
+   * Protocol maximum for subentries derived from the account's free XLM
+   * balance (i.e., how many more subentries the balance can support beyond
+   * the base reserve).
    */
-  ratio: number;
+  limit: number;
+  /** Whether the account can accommodate the requested number of additional slots. */
+  canAccommodate: boolean;
 }
 
 /**
- * A single stroop-level adjustment applied by the rounding auditor.
- * Recorded for downstream audit logging via the per-split audit log.
- */
-export interface RoundingAdjustment {
-  /** Recipient whose computed amount was adjusted. */
-  recipientId: string;
-  /**
-   * Signed stroop delta applied to the raw floor amount.
-   * Positive means one stroop was added; negative means one was removed.
-   */
-  delta: bigint;
-}
-
-/**
- * Result returned by `auditSplitRounding`.
+ * Describes a subentry capacity shortfall.
  *
- * Guarantees that `amounts` values sum exactly to the original `total`.
+ * Thrown by splitExecutor when an account cannot accommodate new subentries
+ * (trustlines, data entries, signers, offers) due to insufficient XLM reserve.
  */
-export interface AuditedSplitResult {
-  /**
-   * Final per-recipient amounts in stroops, keyed by recipientId.
-   * These are guaranteed to sum exactly to `total`.
-   */
-  amounts: Record<string, bigint>;
-  /**
-   * Adjustments applied by the largest-remainder correction.
-   * Empty when the raw floor amounts already sum to `total`.
-   */
-  adjustments: RoundingAdjustment[];
-  /** The original invoice total, in stroops. */
-  total: bigint;
+export interface SubentryCapacityError {
+  /** Stellar address of the account that lacks capacity. */
+  accountId: string;
+  /** Number of additional XLM (in stroops) required to satisfy the reserve. */
+  additionalReserveNeededStroops: bigint;
+  /** Number of additional XLM (as decimal string, e.g. "1.5000000") required. */
+  additionalReserveNeededXlm: string;
+  /** The capacity result that triggered this error. */
+  capacityResult: SubentryCapacityResult;
 }
