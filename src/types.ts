@@ -301,6 +301,11 @@ export interface Invoice {
   auto_resolve_rules?: AutoResolveRule[];
   /** ID of the single prerequisite invoice in this invoice's dependency chain. */
   prerequisite_id?: string;
+  /**
+   * Optional token-gate policy. When set, callers must hold the specified
+   * asset balance to read or interact with this invoice.
+   */
+  accessPolicy?: TokenGatePolicy;
 }
 
 /**

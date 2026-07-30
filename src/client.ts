@@ -2419,6 +2419,11 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
 
   /**
    * Fetch an invoice by ID. Returns cached result if within TTL.
+   *
+   * When the invoice has an `accessPolicy` set and the client was constructed
+   * with a `tokenGateController`, the caller's token balance is verified before
+   * the invoice data is returned. Throws {@link TokenGateAccessDeniedError} when
+   * the caller does not meet the balance requirement (and `strict !== false`).
    */
   async getInvoice(
     invoiceId: string,
@@ -2438,15 +2443,27 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
       const useDedupe = opts?.dedupe !== false;
       const effectiveRetry =
         opts?.retry ?? (this._retryOptions ? {} : undefined);
+
+      let invoice: Invoice;
       if (this._retryOptions && effectiveRetry !== undefined) {
-        return await executeWithRetry(
+        invoice = await executeWithRetry(
           () =>
             useDedupe ? this._dedup.dedupe(invoiceId, fetcher) : fetcher(),
           this._retryOptions,
           opts?.retry,
         );
+      } else {
+        invoice = await (useDedupe ? this._dedup.dedupe(invoiceId, fetcher) : fetcher());
       }
-      return useDedupe ? this._dedup.dedupe(invoiceId, fetcher) : fetcher();
+
+      // Token-gate access check: verify caller balance when policy is set.
+      const gateController = this.config.tokenGateController;
+      const callerId = this.config.callerAccountId;
+      if (gateController && callerId && invoice.accessPolicy) {
+        await gateController.verify(callerId, invoice.accessPolicy);
+      }
+
+      return invoice;
     });
   }
 
