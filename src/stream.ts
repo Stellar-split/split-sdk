@@ -3,6 +3,7 @@ import type { InvoiceEventCallbacks, Payment } from "./types.js";
 import type { SSEInvoiceEvent } from "./sse.js";
 import { TooManySubscriptionsError } from "./errors.js";
 import { getCursor, setCursor } from "./cursorTracker.js";
+import type { StreamDeduplicator } from "./streamDeduplicator.js";
 
 /** Maximum concurrent subscriptions allowed. */
 const MAX_SUBSCRIPTIONS = 10;
@@ -117,6 +118,8 @@ function extractPayment(event: SorobanRpc.Api.EventResponse): Payment | null {
  * @param invoiceId - The invoice ID to watch
  * @param handlerOrCallbacks - Called with InvoiceEvent[] (events since last poll), or callbacks object for legacy API
  * @param intervalMs - Poll interval in milliseconds (default: 5000, max: 30000)
+ * @param dedup - Optional deduplicator; events whose pagingToken has already
+ *   been processed are discarded before reaching handlers/callbacks.
  * @returns Unsubscribe function that stops the stream
  * @throws TooManySubscriptionsError if more than 10 subscriptions are created
  */
@@ -125,7 +128,8 @@ export function subscribeToInvoice(
   contractId: string,
   invoiceId: string,
   handlerOrCallbacks: ((events: SSEInvoiceEvent[]) => void) | InvoiceEventCallbacks,
-  intervalMs: number = 5000
+  intervalMs: number = 5000,
+  dedup?: StreamDeduplicator
 ): () => void {
   // Resume from last persisted cursor when available.
   const streamId = `contract:${contractId}:invoice:${invoiceId}`;
@@ -216,6 +220,8 @@ export function subscribeToInvoice(
 
         const eventInvoiceId = extractInvoiceId(event);
         if (eventInvoiceId !== invoiceId) continue;
+
+        if (dedup && !dedup.filter({ paging_token: event.pagingToken })) continue;
 
         hasChanges = true;
 

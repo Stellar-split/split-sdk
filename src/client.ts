@@ -55,6 +55,8 @@ import { PluginRegistry } from "./plugin.js";
 import type { SdkPlugin } from "./plugin.js";
 import { checkRPCHealth } from "./health.js";
 import { Deduplicator } from "./dedup.js";
+import { SorobanFeatureDetector } from "./sorobanFeatureDetector.js";
+import type { SorobanFeatureFlags } from "./types.js";
 import { verifyBatchPayments } from "./batchVerifier.js";
 import { type HealthCheckResult, HealthCheckTimeoutError } from "./types.js";
 import type {
@@ -233,6 +235,7 @@ import { PriorityQueue } from "./priorityQueue.js";
 import type { RequestPriority } from "./priorityQueue.js";
 import { IdempotencyManager } from "./idempotency.js";
 import type { IdempotencyConfig } from "./idempotency.js";
+import { RollbackCoordinator } from "./splitRollbackCoordinator.js";
 import { validateInvoicePayload } from "./payloadGuard.js";
 import { validateSplitRatiosOrThrow } from "./validators/splitRatioValidator.js";
 import type { SplitConfig } from "./types.js";
@@ -489,6 +492,12 @@ export interface StellarSplitClientConfig {
    * for inspecting in-flight transaction envelopes. Defaults to false.
    */
   debug?: boolean;
+  /**
+   * Optional fiat-to-asset price oracle adapter (see `PriceOracleAdapter` in
+   * types.ts). Used by `convertFiatToAsset` in currencyConverter.ts to
+   * resolve display conversions. Defaults to no oracle configured.
+   */
+  priceOracle?: import("./types.js").PriceOracleAdapter;
 }
 
 /** Network configuration. */
@@ -622,6 +631,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
   private _retryOptions: RetryOptions | null = null;
   private _horizonReader: HorizonFallbackReader | null = null;
   private _idempotency: IdempotencyManager | null = null;
+  private _rollbackCoordinator: RollbackCoordinator | null = null;
   private _pool: ConnectionPool | null = null;
   /**
    * Effective pool size chosen at construction (or 0 when pooling is off).
@@ -654,6 +664,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
   private _advancedCircuitBreaker: AdvancedCircuitBreaker | null = null;
   /** Optimistic UI cache for Invoice reads during a pending pay() call. */
   private _optimisticCache: OptimisticCache<Invoice> | null = null;
+  private _sorobanFeatureDetector: SorobanFeatureDetector;
   private _shutdownInProgress = false;
   private _pluginsDestroyed = false;
   private _runtimeShutdownPromise: Promise<void> | null = null;
@@ -807,6 +818,13 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
     }
 
     this._stateMachine = new InvoiceStateMachine(config.stateMachine);
+
+    // Soroban protocol feature detection (Issue #529): probe once at startup;
+    // the detector caches internally and re-probes after its staleness window.
+    this._sorobanFeatureDetector = new SorobanFeatureDetector({ rpcUrl: primaryUrl });
+    this._sorobanFeatureDetector.detect().catch(() => {
+      // Best-effort startup probe; getSorobanFeatures() will retry on demand.
+    });
 
     if (
       !this._rpcClient &&
@@ -1215,6 +1233,16 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
    * Performs a health check of the client's RPC connection and contract.
    * Resolves with status information or throws HealthCheckTimeoutError if taking > 5000ms.
    */
+  /**
+   * Return the current Soroban protocol feature flags, detected once at
+   * startup and re-probed automatically after the detector's staleness
+   * window (default 1 hour). Emits `protocolUpgradeDetected` on the
+   * underlying detector when a re-probe observes a version change.
+   */
+  async getSorobanFeatures(): Promise<SorobanFeatureFlags> {
+    return this._sorobanFeatureDetector.detect();
+  }
+
   async healthCheck(): Promise<HealthCheckResult> {
     const start = Date.now();
     try {
@@ -2170,6 +2198,19 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
 
     const result = await this._submitWaterfallTx(params.payer, operations);
     this._cache?.invalidate(params.invoiceId);
+
+    // Record a rollback checkpoint for the submitted legs. The on-chain
+    // submission is atomic (all-or-nothing), so every funded step succeeded
+    // together; downstream app-layer failures (e.g. webhook delivery) are
+    // reconciled by callers via RollbackCoordinator.markLegFailed.
+    const coordinator = this.getRollbackCoordinator();
+    coordinator.begin(
+      result.txHash,
+      params.invoiceId,
+      fundedSteps.map((step) => ({ recipient: step.recipient, amount: step.amount })),
+    );
+    fundedSteps.forEach((_, index) => coordinator.markLegSuccess(result.txHash, index));
+
     return { txHash: result.txHash };
   }
 
@@ -2439,6 +2480,22 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
    */
   get circuitBreaker(): { getState(): CircuitBreakerStateSnapshot } | null {
     return this._advancedCircuitBreaker;
+  }
+
+  /**
+   * The rollback coordinator tracking split-payment leg checkpoints created
+   * by `submitPayment`'s waterfall path. Lazily instantiated on first use.
+   */
+  getRollbackCoordinator(): RollbackCoordinator {
+    if (!this._rollbackCoordinator) {
+      this._rollbackCoordinator = new RollbackCoordinator(this._idempotency ?? undefined);
+    }
+    return this._rollbackCoordinator;
+  }
+
+  /** The configured fiat-to-asset price oracle adapter, or null if none was provided. */
+  get priceOracle(): import("./types.js").PriceOracleAdapter | null {
+    return this.config.priceOracle ?? null;
   }
 
   /**
