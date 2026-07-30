@@ -7,6 +7,7 @@ import type { StellarSplitClientConfig } from "./client.js";
 import type { ExportFormat } from "./export.js";
 
 export { StellarSplitClient } from "./client.js";
+export { FinalityChecker } from "./finalityChecker.js";
 export type {
   StellarSplitClientConfig,
   NetworkConfig,

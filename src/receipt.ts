@@ -23,6 +23,10 @@ export interface PaymentReceipt {
   decodedResult?: DecodedTransactionResult;
   /** Convert receipt to a JSON-serializable object (with bigints represented as strings). */
   toJSON(): PaymentReceiptJSON;
+  /** Payment status (optional). */
+  status?: "pending" | "finalized";
+  /** Balance deltas for recipients (optional). */
+  effectSummary?: Record<string, bigint>;
 }
 
 /** Options controlling optional receipt enrichment. */
@@ -228,7 +232,7 @@ function _buildReceiptObject(data: {
     ledgerTimestamp: data.ledgerTimestamp,
     decodedResult: data.decodedResult,
     toJSON(): PaymentReceiptJSON {
-      return {
+      const json: PaymentReceiptJSON = {
         invoiceId: this.invoiceId,
         payer: this.payer,
         totalPaid: this.totalPaid.toString(),
@@ -241,6 +245,15 @@ function _buildReceiptObject(data: {
         ledgerTimestamp: this.ledgerTimestamp,
         decodedResult: this.decodedResult,
       };
+      if (this.status) {
+        json.status = this.status;
+      }
+      if (this.effectSummary) {
+        json.effectSummary = Object.fromEntries(
+          Object.entries(this.effectSummary).map(([k, v]) => [k, v.toString()])
+        );
+      }
+      return json;
     },
   };
 }

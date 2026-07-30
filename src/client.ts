@@ -78,7 +78,9 @@ import {
 import type { CompressionConfig } from "./compression.js";
 import { calculateFee } from "./fee.js";
 import { resolveToken } from "./token.js";
+import { generatePaymentReceipt } from "./receipt.js";
 import type { PaymentReceipt } from "./receipt.js";
+import { checkInvoiceExpiry, checkPayerReadiness } from "./preflightChecker.js";
 import { createInvoiceSubscription } from "./subscription.js";
 import type { Subscription, InvoiceEvent, SubscriptionOptions } from "./types.js";
 import { getSubscriptionManager } from "./streaming/SubscriptionManager.js";
@@ -2073,6 +2075,75 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
    * @throws WaterfallInsufficientFundsError if any tier is unsatisfied and
    *   partial submission wasn't allowed.
    */
+  /**
+   * Preflight checks before submitting a payment.
+   *
+   * Verifies the invoice is pending, not expired, and the payer has trustline/balance.
+   */
+  async preflightCheck(params: {
+    invoiceId: string;
+    payer: string;
+    amount: bigint;
+  }): Promise<{
+    valid: boolean;
+    expiry: import("./preflightChecker.js").InvoiceExpiryResult;
+    payerReadiness: import("./preflightChecker.js").PayerReadinessResult;
+  }> {
+    const invoice = await this.getInvoice(params.invoiceId);
+    if (invoice.status !== "Pending") {
+      throw new InvoiceNotPendingError(params.invoiceId);
+    }
+
+    const expiry = checkInvoiceExpiry(Number(invoice.deadline), params.invoiceId);
+
+    // Call checkPayerReadiness, mapping the RPC server to a custom object that
+    // returns the account balances via getAccountBalances (Horizon).
+    const fakeServer = {
+      getAccount: async (address: string) => {
+        const normalizedBalances = await this.getAccountBalances(address);
+        const balances = normalizedBalances.map((nb) => {
+          if (nb.asset === "native") {
+            return {
+              balance: nb.balance,
+              asset_type: "native",
+            };
+          } else {
+            const [code, issuer] = nb.asset.split(":");
+            return {
+              balance: nb.balance,
+              asset_type: "credit_alphanum4",
+              asset_code: code,
+              asset_issuer: issuer,
+            };
+          }
+        });
+        return { balances };
+      },
+    } as any;
+
+    const payerReadiness = await checkPayerReadiness(
+      fakeServer,
+      params.payer,
+      params.amount,
+      invoice.token
+    );
+
+    const valid = expiry.valid && payerReadiness.ready;
+
+    return {
+      valid,
+      expiry,
+      payerReadiness,
+    };
+  }
+
+  /**
+   * Fetch a payment receipt for an invoice and payer.
+   */
+  async getReceipt(invoiceId: string, payerAddress: string): Promise<PaymentReceipt> {
+    return generatePaymentReceipt(this, invoiceId, payerAddress);
+  }
+
   async submitPayment(params: {
     invoiceId: string;
     payer: string;
