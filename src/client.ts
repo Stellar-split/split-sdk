@@ -55,6 +55,8 @@ import { PluginRegistry } from "./plugin.js";
 import type { SdkPlugin } from "./plugin.js";
 import { checkRPCHealth } from "./health.js";
 import { Deduplicator } from "./dedup.js";
+import { SorobanFeatureDetector } from "./sorobanFeatureDetector.js";
+import type { SorobanFeatureFlags } from "./types.js";
 import { verifyBatchPayments } from "./batchVerifier.js";
 import { type HealthCheckResult, HealthCheckTimeoutError } from "./types.js";
 import type {
@@ -76,7 +78,9 @@ import {
 import type { CompressionConfig } from "./compression.js";
 import { calculateFee } from "./fee.js";
 import { resolveToken } from "./token.js";
+import { generatePaymentReceipt } from "./receipt.js";
 import type { PaymentReceipt } from "./receipt.js";
+import { checkInvoiceExpiry, checkPayerReadiness } from "./preflightChecker.js";
 import { createInvoiceSubscription } from "./subscription.js";
 import type { Subscription, InvoiceEvent, SubscriptionOptions } from "./types.js";
 import { getSubscriptionManager } from "./streaming/SubscriptionManager.js";
@@ -231,7 +235,9 @@ import { PriorityQueue } from "./priorityQueue.js";
 import type { RequestPriority } from "./priorityQueue.js";
 import { IdempotencyManager } from "./idempotency.js";
 import type { IdempotencyConfig } from "./idempotency.js";
+import { RollbackCoordinator } from "./splitRollbackCoordinator.js";
 import { validateInvoicePayload } from "./payloadGuard.js";
+import { InvoiceMetadataValidator } from "./validators/invoiceMetadataValidator.js";
 import { validateSplitRatiosOrThrow } from "./validators/splitRatioValidator.js";
 import type { SplitConfig } from "./types.js";
 import { checkTrustlines } from "./trustlineChecker.js";
@@ -488,10 +494,11 @@ export interface StellarSplitClientConfig {
    */
   debug?: boolean;
   /**
-   * Optional invoice version tracker. When provided, updateInvoice() will
-   * record a snapshot before applying updates, building a full change history.
+   * Optional fiat-to-asset price oracle adapter (see `PriceOracleAdapter` in
+   * types.ts). Used by `convertFiatToAsset` in currencyConverter.ts to
+   * resolve display conversions. Defaults to no oracle configured.
    */
-  versionTracker?: import("./invoiceVersionTracker.js").InvoiceVersionTracker;
+  priceOracle?: import("./types.js").PriceOracleAdapter;
 }
 
 /** Network configuration. */
@@ -614,6 +621,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
   private _plugins = new Set<string>();
   private _pluginInstances: StellarSplitPlugin[] = [];
   private _pluginRegistry = new PluginRegistry();
+  private _metadataValidator: InvoiceMetadataValidator;
   private _dedup = new Deduplicator<Invoice>();
   private _cache: SimpleCache<any> | ICacheStore<any> | null = null;
   private _auditLogger: AuditLogger | null = null;
@@ -625,6 +633,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
   private _retryOptions: RetryOptions | null = null;
   private _horizonReader: HorizonFallbackReader | null = null;
   private _idempotency: IdempotencyManager | null = null;
+  private _rollbackCoordinator: RollbackCoordinator | null = null;
   private _pool: ConnectionPool | null = null;
   /**
    * Effective pool size chosen at construction (or 0 when pooling is off).
@@ -657,6 +666,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
   private _advancedCircuitBreaker: AdvancedCircuitBreaker | null = null;
   /** Optimistic UI cache for Invoice reads during a pending pay() call. */
   private _optimisticCache: OptimisticCache<Invoice> | null = null;
+  private _sorobanFeatureDetector: SorobanFeatureDetector;
   private _shutdownInProgress = false;
   private _pluginsDestroyed = false;
   private _runtimeShutdownPromise: Promise<void> | null = null;
@@ -760,6 +770,10 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
     super();
     validateOrThrow(config);
     this.config = config;
+    this._metadataValidator = new InvoiceMetadataValidator(
+      config.metadataSchema,
+      config.metadataThrowOnInvalid ?? true,
+    );
     const primaryUrl = Array.isArray(config.rpcUrl)
       ? config.rpcUrl[0]!
       : config.rpcUrl;
@@ -810,6 +824,13 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
     }
 
     this._stateMachine = new InvoiceStateMachine(config.stateMachine);
+
+    // Soroban protocol feature detection (Issue #529): probe once at startup;
+    // the detector caches internally and re-probes after its staleness window.
+    this._sorobanFeatureDetector = new SorobanFeatureDetector({ rpcUrl: primaryUrl });
+    this._sorobanFeatureDetector.detect().catch(() => {
+      // Best-effort startup probe; getSorobanFeatures() will retry on demand.
+    });
 
     if (
       !this._rpcClient &&
@@ -1218,6 +1239,16 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
    * Performs a health check of the client's RPC connection and contract.
    * Resolves with status information or throws HealthCheckTimeoutError if taking > 5000ms.
    */
+  /**
+   * Return the current Soroban protocol feature flags, detected once at
+   * startup and re-probed automatically after the detector's staleness
+   * window (default 1 hour). Emits `protocolUpgradeDetected` on the
+   * underlying detector when a re-probe observes a version change.
+   */
+  async getSorobanFeatures(): Promise<SorobanFeatureFlags> {
+    return this._sorobanFeatureDetector.detect();
+  }
+
   async healthCheck(): Promise<HealthCheckResult> {
     const start = Date.now();
     try {
@@ -1325,6 +1356,36 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
       return (this._cache as any).getStats();
     }
     return null;
+  }
+
+  /**
+   * Internal startup validation. Throws PassphraseMismatchError if
+   * the configured passphrase doesn't match the RPC node.
+   */
+  private async _validateStartupConfig(): Promise<void> {
+    const { NetworkPassphraseValidator } = await import("./network/NetworkPassphraseValidator.js");
+    const { PassphraseMismatchError } = await import("./errors.js");
+    const primaryUrl = Array.isArray(this.config.rpcUrl)
+      ? this.config.rpcUrl[0]!
+      : this.config.rpcUrl;
+    const result = await NetworkPassphraseValidator.validate(
+      this.config.networkPassphrase,
+      primaryUrl,
+    );
+    if (result.mismatch) {
+      throw new PassphraseMismatchError(result.configured, result.reported);
+    }
+  }
+
+  /**
+   * Live network switcher. Migrates state and re-subscribes.
+   * @param network - 'mainnet' | 'testnet' | 'futurenet'
+   */
+  public async switchTo(
+    network: "mainnet" | "testnet" | "futurenet",
+  ): Promise<void> {
+    const { NetworkSwitcher } = await import("./network/NetworkSwitcher.js");
+    return NetworkSwitcher.switchTo(network, this);
   }
 
   private _logAudit(
@@ -1779,6 +1840,8 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
             validateInvoicePayload(params, this.config.payloadGuard);
           }
 
+          this._metadataValidator.validate(params.metadata);
+
           // Pre-submission split ratio validation: catch malformed ratio arrays
           // early (ratio-sum violations, negative shares, duplicates, zeros).
           if (params.recipients.length > 1) {
@@ -1874,6 +1937,23 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
   ): Promise<string> {
     const startTime = Date.now();
     const sourceInvoice = await this.getInvoice(sourceId);
+
+    // -------------------------------------------------------------------
+    // Cloneability pre-flight validation (#486)
+    // -------------------------------------------------------------------
+    if (!overrides.skipValidation) {
+      const rpcUrl = Array.isArray(this.config.rpcUrl)
+        ? this.config.rpcUrl[0]
+        : this.config.rpcUrl;
+      const validator = new InvoiceCloneabilityValidator({
+        horizonUrl: overrides.horizonUrl ?? this.config.horizonUrl,
+        rpcUrl,
+      });
+      const report = await validator.validate(sourceInvoice);
+      if (!report.cloneable) {
+        throw new InvoiceNotCloneableError(report);
+      }
+    }
 
     const mapEntries: xdr.ScMapEntry[] = [];
 
@@ -2050,6 +2130,75 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
    * @throws WaterfallInsufficientFundsError if any tier is unsatisfied and
    *   partial submission wasn't allowed.
    */
+  /**
+   * Preflight checks before submitting a payment.
+   *
+   * Verifies the invoice is pending, not expired, and the payer has trustline/balance.
+   */
+  async preflightCheck(params: {
+    invoiceId: string;
+    payer: string;
+    amount: bigint;
+  }): Promise<{
+    valid: boolean;
+    expiry: import("./preflightChecker.js").InvoiceExpiryResult;
+    payerReadiness: import("./preflightChecker.js").PayerReadinessResult;
+  }> {
+    const invoice = await this.getInvoice(params.invoiceId);
+    if (invoice.status !== "Pending") {
+      throw new InvoiceNotPendingError(params.invoiceId);
+    }
+
+    const expiry = checkInvoiceExpiry(Number(invoice.deadline), params.invoiceId);
+
+    // Call checkPayerReadiness, mapping the RPC server to a custom object that
+    // returns the account balances via getAccountBalances (Horizon).
+    const fakeServer = {
+      getAccount: async (address: string) => {
+        const normalizedBalances = await this.getAccountBalances(address);
+        const balances = normalizedBalances.map((nb) => {
+          if (nb.asset === "native") {
+            return {
+              balance: nb.balance,
+              asset_type: "native",
+            };
+          } else {
+            const [code, issuer] = nb.asset.split(":");
+            return {
+              balance: nb.balance,
+              asset_type: "credit_alphanum4",
+              asset_code: code,
+              asset_issuer: issuer,
+            };
+          }
+        });
+        return { balances };
+      },
+    } as any;
+
+    const payerReadiness = await checkPayerReadiness(
+      fakeServer,
+      params.payer,
+      params.amount,
+      invoice.token
+    );
+
+    const valid = expiry.valid && payerReadiness.ready;
+
+    return {
+      valid,
+      expiry,
+      payerReadiness,
+    };
+  }
+
+  /**
+   * Fetch a payment receipt for an invoice and payer.
+   */
+  async getReceipt(invoiceId: string, payerAddress: string): Promise<PaymentReceipt> {
+    return generatePaymentReceipt(this, invoiceId, payerAddress);
+  }
+
   async submitPayment(params: {
     invoiceId: string;
     payer: string;
@@ -2104,6 +2253,19 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
 
     const result = await this._submitWaterfallTx(params.payer, operations);
     this._cache?.invalidate(params.invoiceId);
+
+    // Record a rollback checkpoint for the submitted legs. The on-chain
+    // submission is atomic (all-or-nothing), so every funded step succeeded
+    // together; downstream app-layer failures (e.g. webhook delivery) are
+    // reconciled by callers via RollbackCoordinator.markLegFailed.
+    const coordinator = this.getRollbackCoordinator();
+    coordinator.begin(
+      result.txHash,
+      params.invoiceId,
+      fundedSteps.map((step) => ({ recipient: step.recipient, amount: step.amount })),
+    );
+    fundedSteps.forEach((_, index) => coordinator.markLegSuccess(result.txHash, index));
+
     return { txHash: result.txHash };
   }
 
@@ -2418,6 +2580,22 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
    */
   get circuitBreaker(): { getState(): CircuitBreakerStateSnapshot } | null {
     return this._advancedCircuitBreaker;
+  }
+
+  /**
+   * The rollback coordinator tracking split-payment leg checkpoints created
+   * by `submitPayment`'s waterfall path. Lazily instantiated on first use.
+   */
+  getRollbackCoordinator(): RollbackCoordinator {
+    if (!this._rollbackCoordinator) {
+      this._rollbackCoordinator = new RollbackCoordinator(this._idempotency ?? undefined);
+    }
+    return this._rollbackCoordinator;
+  }
+
+  /** The configured fiat-to-asset price oracle adapter, or null if none was provided. */
+  get priceOracle(): import("./types.js").PriceOracleAdapter | null {
+    return this.config.priceOracle ?? null;
   }
 
   /**

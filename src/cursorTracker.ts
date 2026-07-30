@@ -8,6 +8,8 @@
 
 import type { CursorStore } from "./types.js";
 
+export type CursorPersistence = CursorStore;
+
 /**
  * In-memory cursor store suitable for session-scoped pagination.
  * Cursors are lost when the process exits.
@@ -35,6 +37,7 @@ export class InMemoryCursorStore implements CursorStore {
 
 /** Singleton in-memory store shared across the module. */
 let defaultStore: CursorStore = new InMemoryCursorStore();
+const syncCursorStore = new Map<string, string>();
 
 /**
  * Override the default cursor store.
@@ -44,11 +47,45 @@ export function setDefaultCursorStore(store: CursorStore): void {
   defaultStore = store;
 }
 
+/** Alias retained for public API compatibility. */
+export function configureCursorStore(store: CursorStore): void {
+  setDefaultCursorStore(store);
+}
+
 /**
  * Get the current default cursor store.
  */
 export function getDefaultCursorStore(): CursorStore {
   return defaultStore;
+}
+
+/** Persist a cursor in the default in-memory stream cursor cache. */
+export function setCursor(key: string, cursor: string): void {
+  syncCursorStore.set(key, cursor);
+  void defaultStore.save(key, cursor);
+}
+
+/** Read a cursor from the default in-memory stream cursor cache. */
+export function getCursor(key: string): string | null {
+  return syncCursorStore.get(key) ?? null;
+}
+
+/** Remove a persisted cursor from the default stream cursor cache. */
+export function removeCursor(key: string): void {
+  syncCursorStore.delete(key);
+  void defaultStore.delete(key);
+}
+
+/** Persist a cursor from a snapshot-like object containing a cursor field. */
+export function setCursorFromSnapshot(key: string, snapshot: { cursor?: string | number | null }): void {
+  if (snapshot.cursor !== undefined && snapshot.cursor !== null) {
+    setCursor(key, String(snapshot.cursor));
+  }
+}
+
+/** Clear in-memory cursors for tests. */
+export function _resetCursorTrackerForTesting(): void {
+  syncCursorStore.clear();
 }
 
 /**

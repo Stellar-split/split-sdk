@@ -1,4 +1,6 @@
 import { rpc as SorobanRpc } from "@stellar/stellar-sdk";
+import { TypedEventEmitter } from "./events/TypedEventEmitter.js";
+import type { FinalityStatus } from "./types.js";
 
 /** Type of contract event. */
 export type ContractEventType = "created" | "payment" | "released" | "refunded";
@@ -15,6 +17,21 @@ export interface ContractEvent {
   ledger: number;
   /** Unix timestamp of the event. */
   timestamp: number;
+}
+
+export interface SDKEventMap extends Record<string, unknown> {
+  streamStallDetected: { streamId: string };
+  streamAutoReset: { streamId: string };
+  invoiceFinalized: { txHash: string; finality: FinalityStatus };
+  approvalRequested: { signerPublicKey: string };
+  approvalReceived: { signerPublicKey: string };
+  approvalWorkflowComplete: { signerCount: number };
+}
+
+export const sdkEvents = new TypedEventEmitter<SDKEventMap>();
+
+export function emitSdkEvent<K extends keyof SDKEventMap>(event: K, payload: SDKEventMap[K]): void {
+  sdkEvents.emit(event, payload);
 }
 
 /**
