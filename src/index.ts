@@ -1112,3 +1112,15 @@ export type {
   ScValPrimitive,
   ContractStorageExporterOptions,
 } from "./diagnostics/ContractStorageExporter.js";
+
+// ---------------------------------------------------------------------------
+// #550 — InvoiceVersionTracker: invoice version history diff tracker
+// ---------------------------------------------------------------------------
+
+export { InvoiceVersionTracker, InMemoryVersionStore } from "./invoiceVersionTracker.js";
+export type {
+  InvoiceVersion,
+  InvoiceVersionDiff,
+  InvoiceVersionTrackerOptions,
+  VersionStore,
+} from "./invoiceVersionTracker.js";
