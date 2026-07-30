@@ -336,6 +336,13 @@ export type { SequenceCacheConfig } from "./sequenceCache.js";
 
 export { PathRouter } from "./pathRouter.js";
 export type { PathResult, PathHop, PathRequest, PathRouterConfig } from "./pathRouter.js";
+export { PathQueryBuilder } from "./pathQueryBuilder.js";
+export type {
+  StrictSendQueryParams,
+  StrictReceiveQueryParams,
+  PathQueryBuilderConfig,
+} from "./pathQueryBuilder.js";
+export type { PathQuery, PathQueryResult, StrictSendPathQuery, StrictReceivePathQuery } from "./types.js";
 
 export { OfferTracker } from "./offerTracker.js";
 export type { OfferTrackerConfig, OfferTrackerEventMap } from "./offerTracker.js";
@@ -778,6 +785,24 @@ export type {
   TranchedInvoice,
   TrancheStatus,
 } from "./trancheProgress.js";
+
+// Invoice payment progress tracking
+export { PaymentProgressTracker } from "./paymentProgressTracker.js";
+export type {
+  PaymentProgressEventMap,
+  PaymentProgressTrackerOptions,
+} from "./paymentProgressTracker.js";
+export type { InvoicePaymentProgress, RecipientPaymentState } from "./types.js";
+
+// Fiat-to-asset price oracle adapter
+export { CoinGeckoPriceOracle } from "./priceOracle.js";
+export type { CoinGeckoPriceOracleOptions } from "./priceOracle.js";
+export { RateCache } from "./rateCache.js";
+export type { RateCacheConfig } from "./rateCache.js";
+export type { PriceOracleAdapter } from "./types.js";
+export { convertFiatToAsset } from "./currencyConverter.js";
+export type { FiatConversion, ConvertedAmount } from "./currencyConverter.js";
+
 export { Sep41Adapter, createSep41Adapter } from "./sep41Adapter.js";
 export type { Sep41TokenCapabilities } from "./sep41Adapter.js";
 
@@ -899,6 +924,11 @@ export type {
 } from "./usageAnalytics.js";
 export { IdempotencyManager } from "./idempotency.js";
 export type { IdempotencyConfig } from "./idempotency.js";
+
+export { RollbackCoordinator } from "./splitRollbackCoordinator.js";
+export type { SplitRollbackEventMap } from "./splitRollbackCoordinator.js";
+export type { SplitRollbackRecord } from "./snapshot.js";
+export type { SplitLeg, SplitLegState, SplitResult, SplitRollbackCheckpoint } from "./types.js";
 
 export {
   validateInvoicePayload,

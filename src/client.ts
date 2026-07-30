@@ -233,6 +233,7 @@ import { PriorityQueue } from "./priorityQueue.js";
 import type { RequestPriority } from "./priorityQueue.js";
 import { IdempotencyManager } from "./idempotency.js";
 import type { IdempotencyConfig } from "./idempotency.js";
+import { RollbackCoordinator } from "./splitRollbackCoordinator.js";
 import { validateInvoicePayload } from "./payloadGuard.js";
 import { validateSplitRatiosOrThrow } from "./validators/splitRatioValidator.js";
 import type { SplitConfig } from "./types.js";
@@ -489,6 +490,12 @@ export interface StellarSplitClientConfig {
    * for inspecting in-flight transaction envelopes. Defaults to false.
    */
   debug?: boolean;
+  /**
+   * Optional fiat-to-asset price oracle adapter (see `PriceOracleAdapter` in
+   * types.ts). Used by `convertFiatToAsset` in currencyConverter.ts to
+   * resolve display conversions. Defaults to no oracle configured.
+   */
+  priceOracle?: import("./types.js").PriceOracleAdapter;
 }
 
 /** Network configuration. */
@@ -622,6 +629,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
   private _retryOptions: RetryOptions | null = null;
   private _horizonReader: HorizonFallbackReader | null = null;
   private _idempotency: IdempotencyManager | null = null;
+  private _rollbackCoordinator: RollbackCoordinator | null = null;
   private _pool: ConnectionPool | null = null;
   /**
    * Effective pool size chosen at construction (or 0 when pooling is off).
@@ -2119,6 +2127,19 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
 
     const result = await this._submitWaterfallTx(params.payer, operations);
     this._cache?.invalidate(params.invoiceId);
+
+    // Record a rollback checkpoint for the submitted legs. The on-chain
+    // submission is atomic (all-or-nothing), so every funded step succeeded
+    // together; downstream app-layer failures (e.g. webhook delivery) are
+    // reconciled by callers via RollbackCoordinator.markLegFailed.
+    const coordinator = this.getRollbackCoordinator();
+    coordinator.begin(
+      result.txHash,
+      params.invoiceId,
+      fundedSteps.map((step) => ({ recipient: step.recipient, amount: step.amount })),
+    );
+    fundedSteps.forEach((_, index) => coordinator.markLegSuccess(result.txHash, index));
+
     return { txHash: result.txHash };
   }
 
@@ -2388,6 +2409,22 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
    */
   get circuitBreaker(): { getState(): CircuitBreakerStateSnapshot } | null {
     return this._advancedCircuitBreaker;
+  }
+
+  /**
+   * The rollback coordinator tracking split-payment leg checkpoints created
+   * by `submitPayment`'s waterfall path. Lazily instantiated on first use.
+   */
+  getRollbackCoordinator(): RollbackCoordinator {
+    if (!this._rollbackCoordinator) {
+      this._rollbackCoordinator = new RollbackCoordinator(this._idempotency ?? undefined);
+    }
+    return this._rollbackCoordinator;
+  }
+
+  /** The configured fiat-to-asset price oracle adapter, or null if none was provided. */
+  get priceOracle(): import("./types.js").PriceOracleAdapter | null {
+    return this.config.priceOracle ?? null;
   }
 
   /**

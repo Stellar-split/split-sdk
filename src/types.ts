@@ -126,6 +126,47 @@ export interface Recipient {
 import { StellarSplitError } from "./errors.js";
 
 // ---------------------------------------------------------------------------
+// Split Rollback Coordinator Types
+// ---------------------------------------------------------------------------
+
+/** Lifecycle state of a single leg tracked by the rollback coordinator. */
+export type SplitLegState = "pending" | "succeeded" | "failed";
+
+/** A single recipient leg within a multi-recipient split payment. */
+export interface SplitLeg {
+  /** Stellar address of this leg's recipient. */
+  recipient: string;
+  /** Amount owed to this recipient, in stroops. */
+  amount: bigint;
+  /** Current reconciliation state of this leg. */
+  state: SplitLegState;
+}
+
+/** Result of submitting a multi-recipient split payment. */
+export interface SplitResult {
+  /** Identifier grouping the legs of this split (typically the tx hash). */
+  splitId: string;
+  /** Invoice this split payment was submitted for. */
+  invoiceId: string;
+  /** Transaction hash of the on-chain submission. */
+  txHash: string;
+  /** Per-recipient legs included in the split. */
+  legs: SplitLeg[];
+}
+
+/** A persistent checkpoint recording the intended legs of a split payment. */
+export interface SplitRollbackCheckpoint {
+  /** Identifier grouping the legs of this split. */
+  splitId: string;
+  /** Invoice this split payment was submitted for. */
+  invoiceId: string;
+  /** Unix epoch ms when the checkpoint was created. */
+  createdAt: number;
+  /** Per-recipient legs, in submission order. */
+  legs: SplitLeg[];
+}
+
+// ---------------------------------------------------------------------------
 // AMM Calculator Types
 // ---------------------------------------------------------------------------
 
