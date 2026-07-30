@@ -192,6 +192,11 @@ export {
   ClassifiedHorizonError,
   isClassifiedHorizonError,
   HorizonErrorClassification,
+  // New: Account freeze / lock state detector
+  AccountFrozenError,
+  isAccountFrozenError,
+  AccountLockedError,
+  isAccountLockedError,
 } from "./errors.js";
 
 // ---------------------------------------------------------------------------
@@ -413,8 +418,12 @@ export type { RpcClient } from "./rpcClient.js";
 export { negotiateVersion, SDK_CONTRACT_VERSION } from "./version.js";
 export type { VersionInfo } from "./types.js";
 
-export { checkPayerReadiness, checkInvoiceExpiry, checkSponsorReserve } from "./preflightChecker.js";
-export type { PayerReadinessResult, PayerReadinessReason, InvoiceExpiryResult, InvoiceExpiryReason, SponsorReserveCheck } from "./preflightChecker.js";
+export { checkPayerReadiness, checkInvoiceExpiry, checkSponsorReserve, checkRecipientsUnlocked } from "./preflightChecker.js";
+export type { PayerReadinessResult, PayerReadinessReason, InvoiceExpiryResult, InvoiceExpiryReason, SponsorReserveCheck, RecipientLockCheckResult } from "./preflightChecker.js";
+
+// Account freeze / lock state detector (issue #532)
+export { detectLockState, assertAccountUnlocked } from "./accountStateDetector.js";
+export type { AccountLockState } from "./types.js";
 
 export { getSuggestion } from "./errorSuggestions.js";
 

@@ -1699,3 +1699,51 @@ export class ClassifiedHorizonError extends StellarSplitError {
 export function isClassifiedHorizonError(err: unknown): err is ClassifiedHorizonError {
   return err instanceof ClassifiedHorizonError;
 }
+
+// ---------------------------------------------------------------------------
+// Account freeze / lock state errors
+// ---------------------------------------------------------------------------
+
+/** Thrown when a payment targets an account whose trustline has been frozen by the issuer. */
+export class AccountFrozenError extends StellarSplitError {
+  readonly accountId: string;
+  readonly assetCode: string;
+
+  constructor(accountId: string, assetCode: string) {
+    super(
+      `Account ${accountId} has a frozen trustline for ${assetCode}`,
+      "ACCOUNT_FROZEN",
+      { accountId, assetCode },
+    );
+    this.name = "AccountFrozenError";
+    this.accountId = accountId;
+    this.assetCode = assetCode;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isAccountFrozenError(err: unknown): err is AccountFrozenError {
+  return err instanceof AccountFrozenError;
+}
+
+/** Thrown when a payment targets an account that can never be authorized again for the asset (`AUTH_IMMUTABLE`). */
+export class AccountLockedError extends StellarSplitError {
+  readonly accountId: string;
+  readonly assetCode: string;
+
+  constructor(accountId: string, assetCode: string) {
+    super(
+      `Account ${accountId} is permanently locked out of authorization for ${assetCode}`,
+      "ACCOUNT_LOCKED",
+      { accountId, assetCode },
+    );
+    this.name = "AccountLockedError";
+    this.accountId = accountId;
+    this.assetCode = assetCode;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isAccountLockedError(err: unknown): err is AccountLockedError {
+  return err instanceof AccountLockedError;
+}

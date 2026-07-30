@@ -1647,3 +1647,17 @@ export interface CursorStore {
   /** Delete a saved cursor. */
   delete(key: string): Promise<void>;
 }
+
+/** Result of {@link detectLockState} — an account's freeze/lock report for a given asset. */
+export interface AccountLockState {
+  /** True when the trustline has been frozen by the issuer (authorization revoked). */
+  isFrozen: boolean;
+  /** True when the account can never be authorized for this asset again (`AUTH_IMMUTABLE`). */
+  isLocked: boolean;
+  /** Whether the trustline currently holds full authorization. */
+  trustlineAuthorized: boolean;
+  /** Whether the issuer has `AUTH_REVOCABLE` set, meaning it could freeze this trustline in the future. */
+  revocableByIssuer: boolean;
+  /** Reason for a frozen/locked/missing-trustline state, when applicable. */
+  reason?: "frozen" | "immutable" | "no_trustline";
+}
