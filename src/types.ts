@@ -1686,3 +1686,66 @@ export interface CursorStore {
   /** Delete a saved cursor. */
   delete(key: string): Promise<void>;
 }
+
+// ---------------------------------------------------------------------------
+// Account Data Entry Types (Issue #528)
+// ---------------------------------------------------------------------------
+
+/** A single decoded key-value data entry stored on a Stellar account. */
+export interface AccountDataEntry {
+  /** Data entry key (max 64 bytes). */
+  key: string;
+  /** Decoded (UTF-8) value, or null when the entry has been cleared. */
+  value: string | null;
+}
+
+/** All data entries currently stored on an account, keyed by entry name. */
+export type AccountDataMap = Record<string, string>;
+
+// ---------------------------------------------------------------------------
+// Soroban Feature Detection Types (Issue #529)
+// ---------------------------------------------------------------------------
+
+/**
+ * Typed flags for protocol-version-gated Soroban features, plus the raw
+ * resource limits pulled from the network's `ConfigSettingEntry` ledger
+ * entries.
+ */
+export interface SorobanFeatureFlags {
+  /** Current Stellar protocol version integer. */
+  protocolVersion: number;
+  /** Whether the network supports the `ExtendFootprintTtl` operation (protocol >= 20). */
+  supportsExtendFootprint: boolean;
+  /** Whether the network supports archived-entry restoration (protocol >= 20). */
+  supportsRestoreFootprint: boolean;
+  /** Maximum Soroban instructions allowed per transaction. */
+  maxInstructionsPerTx: number;
+  /** Maximum Soroban instructions allowed per ledger. */
+  maxInstructionsPerLedger: number;
+  /** Unix timestamp (ms) when these flags were detected. */
+  detectedAt: number;
+}
+
+// ---------------------------------------------------------------------------
+// Per-Split Audit Log Types (Issue #531)
+// ---------------------------------------------------------------------------
+
+/** A granular audit record for a single settled leg of a multi-recipient split payment. */
+export interface SplitAuditEntry {
+  /** Invoice the split payment belongs to. */
+  invoiceId: string;
+  /** Zero-based index of this leg within the split. */
+  legIndex: number;
+  /** Stellar address of the recipient for this leg. */
+  recipientId: string;
+  /** Asset code paid out for this leg. */
+  assetCode: string;
+  /** Amount paid to this recipient, in stroops. */
+  amount: bigint;
+  /** Operation ID of the settlement operation. */
+  operationId: string;
+  /** Ledger sequence number at which the leg settled. */
+  ledgerSequence: number;
+  /** Unix timestamp (seconds) when the leg settled. */
+  settledAt: number;
+}

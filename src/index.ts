@@ -1131,3 +1131,58 @@ export type {
   ScValPrimitive,
   ContractStorageExporterOptions,
 } from "./diagnostics/ContractStorageExporter.js";
+
+// ---------------------------------------------------------------------------
+// #528 — AccountDataManager: typed CRUD for account data entries
+// ---------------------------------------------------------------------------
+
+export { AccountDataManager } from "./accountDataManager.js";
+export type {
+  AccountDataManagerConfig,
+  TransactionResult as AccountDataTransactionResult,
+} from "./accountDataManager.js";
+export type { AccountDataEntry, AccountDataMap } from "./types.js";
+export {
+  DataEntryValidationError,
+  isDataEntryValidationError,
+} from "./errors.js";
+
+// ---------------------------------------------------------------------------
+// #529 — SorobanFeatureDetector: protocol upgrade / feature flag detection
+// ---------------------------------------------------------------------------
+
+export { SorobanFeatureDetector } from "./sorobanFeatureDetector.js";
+export type {
+  SorobanFeatureDetectorConfig,
+  SorobanFeatureDetectorEventMap,
+} from "./sorobanFeatureDetector.js";
+export type { SorobanFeatureFlags } from "./types.js";
+
+// ---------------------------------------------------------------------------
+// #530 — StreamDeduplicator: paging-token-based stream event dedup
+// ---------------------------------------------------------------------------
+
+export { StreamDeduplicator } from "./streamDeduplicator.js";
+export type {
+  StreamDeduplicatorOptions,
+  StreamDeduplicatorEventMap,
+} from "./streamDeduplicator.js";
+export {
+  InMemoryDedupTokenStore,
+  setDefaultDedupTokenStore,
+  saveDedupTokens,
+  loadDedupTokens,
+} from "./snapshot.js";
+export type { DedupTokenStore } from "./snapshot.js";
+
+// ---------------------------------------------------------------------------
+// #531 — Per-Split Audit Log Emitter
+// ---------------------------------------------------------------------------
+
+export { AuditLogger } from "./auditLogger.js";
+export type { AuditEntry } from "./auditLogger.js";
+export type { SplitAuditEntry } from "./types.js";
+export {
+  exportSplitAuditTrail,
+  SPLIT_AUDIT_CSV_COLUMNS,
+} from "./complianceExporter.js";
