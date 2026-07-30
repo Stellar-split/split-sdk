@@ -2018,3 +2018,45 @@ export interface SplitAuditEntry {
   /** Unix timestamp (seconds) when the leg settled. */
   settledAt: number;
 }
+
+// ---------------------------------------------------------------------------
+// Subentry Capacity Guard Types (Issue #591)
+// ---------------------------------------------------------------------------
+
+/**
+ * Result of a subentry capacity check for a Stellar account.
+ *
+ * Derived from live Horizon account data using the protocol reserve formula:
+ *   (2 + numSubentries + numSponsoring − numSponsored) × baseReserve
+ */
+export interface SubentryCapacityResult {
+  /** Number of subentry slots currently consumed by the account. */
+  used: number;
+  /** Number of subentry slots available for new entries. */
+  available: number;
+  /**
+   * Protocol maximum for subentries derived from the account's free XLM
+   * balance (i.e., how many more subentries the balance can support beyond
+   * the base reserve).
+   */
+  limit: number;
+  /** Whether the account can accommodate the requested number of additional slots. */
+  canAccommodate: boolean;
+}
+
+/**
+ * Describes a subentry capacity shortfall.
+ *
+ * Thrown by splitExecutor when an account cannot accommodate new subentries
+ * (trustlines, data entries, signers, offers) due to insufficient XLM reserve.
+ */
+export interface SubentryCapacityError {
+  /** Stellar address of the account that lacks capacity. */
+  accountId: string;
+  /** Number of additional XLM (in stroops) required to satisfy the reserve. */
+  additionalReserveNeededStroops: bigint;
+  /** Number of additional XLM (as decimal string, e.g. "1.5000000") required. */
+  additionalReserveNeededXlm: string;
+  /** The capacity result that triggered this error. */
+  capacityResult: SubentryCapacityResult;
+}
