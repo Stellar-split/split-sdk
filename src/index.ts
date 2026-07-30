@@ -1112,3 +1112,20 @@ export type {
   ScValPrimitive,
   ContractStorageExporterOptions,
 } from "./diagnostics/ContractStorageExporter.js";
+
+// ---------------------------------------------------------------------------
+// #548 — TokenGateController: token-gated invoice access control
+// ---------------------------------------------------------------------------
+
+export { TokenGateController } from "./tokenGateController.js";
+export type {
+  TokenGateControllerOptions,
+  TokenGateVerifyResult,
+} from "./tokenGateController.js";
+
+export type { TokenGatePolicy } from "./types.js";
+
+export {
+  TokenGateAccessDeniedError,
+  isTokenGateAccessDeniedError,
+} from "./errors.js";

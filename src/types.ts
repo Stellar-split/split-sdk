@@ -260,6 +260,11 @@ export interface Invoice {
   auto_resolve_rules?: AutoResolveRule[];
   /** ID of the single prerequisite invoice in this invoice's dependency chain. */
   prerequisite_id?: string;
+  /**
+   * Optional token-gate policy. When set, callers must hold the specified
+   * asset balance to read or interact with this invoice.
+   */
+  accessPolicy?: TokenGatePolicy;
 }
 
 /**
@@ -1646,4 +1651,29 @@ export interface CursorStore {
   load(key: string): Promise<string | null>;
   /** Delete a saved cursor. */
   delete(key: string): Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
+// Token-Gate Types (#548)
+// ---------------------------------------------------------------------------
+
+/**
+ * Policy defining the minimum token balance required for a caller to access
+ * an invoice. Used by {@link TokenGateController}.
+ */
+export interface TokenGatePolicy {
+  /**
+   * The Stellar asset (code + issuer) that the caller must hold.
+   * Pass a string in "CODE:ISSUER" format for custom assets, or "native" for XLM.
+   */
+  asset: string;
+  /**
+   * Minimum balance required (as a decimal string, e.g. "10.0000000").
+   */
+  minBalance: string;
+  /**
+   * When `false`, a balance shortfall only emits a warning instead of
+   * throwing {@link TokenGateAccessDeniedError}. Defaults to `true`.
+   */
+  strict?: boolean;
 }

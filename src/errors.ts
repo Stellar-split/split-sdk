@@ -1699,3 +1699,45 @@ export class ClassifiedHorizonError extends StellarSplitError {
 export function isClassifiedHorizonError(err: unknown): err is ClassifiedHorizonError {
   return err instanceof ClassifiedHorizonError;
 }
+
+// ---------------------------------------------------------------------------
+// Token-Gate Errors (#548)
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown when a caller's token balance is below the minimum required by a
+ * {@link TokenGatePolicy}.
+ */
+export class TokenGateAccessDeniedError extends StellarSplitError {
+  readonly callerAccountId: string;
+  readonly assetCode: string;
+  readonly required: string;
+  readonly actual: string;
+
+  constructor(
+    callerAccountId: string,
+    assetCode: string,
+    required: string,
+    actual: string,
+    raw?: string,
+  ) {
+    super(
+      `Token-gate access denied for ${callerAccountId}: requires ${required} ${assetCode}, has ${actual}`,
+      "TOKEN_GATE_ACCESS_DENIED",
+      { callerAccountId, assetCode, required, actual },
+      raw,
+    );
+    this.name = "TokenGateAccessDeniedError";
+    this.callerAccountId = callerAccountId;
+    this.assetCode = assetCode;
+    this.required = required;
+    this.actual = actual;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isTokenGateAccessDeniedError(
+  err: unknown,
+): err is TokenGateAccessDeniedError {
+  return err instanceof TokenGateAccessDeniedError;
+}
