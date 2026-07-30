@@ -3,10 +3,20 @@ node_modules/
 dist/
 
 # Environment
+.env
+.env.local
+*.env.*
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+# Coverage & test artefacts
 coverage/
 .vitest/
 .nyc_output/
 test-results/
+
+# Test snapshots (all formats)
 **/__snapshots__/
 *.snap
 *.snapshot
@@ -15,46 +25,32 @@ testsnapshot/
 testSnapshot/
 test-snapshot/
 test-snapshots/
-.env
-.env.local
-*.env.*
 
-# TypeScript incremental build info
-*.tsbuildinfo
+# Profiler / speedscope output
+*.profile.json
+*.speedscope.json
 
 # OS metadata
 .DS_Store
 Thumbs.db
-
-# Task / scratch files
-*.log
-task1.md
-task2.md
-task3.md
-task4.md
-somzilla.md
-
-# Test snapshots & temporary output
-**/__snapshots__/
-*.snap
-/tmp/
-*.profile.json
-*.speedscope.json
 
 # IDE / editor
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
 # Logs
 *.log
 npm-debug.log*
-# Editor / IDE
-.idea/
-*.swp
-*.swo
-*~
-# Temp files
+
+# Temp / scratch files
+/tmp/
 *.tmp
 *.temp
+task1.md
+task2.md
+task3.md
+task4.md
+somzilla.md

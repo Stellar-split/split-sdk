@@ -1,5 +1,6 @@
 import type { Invoice, SplitRule, SplitPreviewEntry } from "./types.js";
 import { deduplicateRecipients } from "./validators/recipientDeduplicator.js";
+import type { RecipientShare, SplitConfig } from "./validators/splitRatioValidator.js";
 
 /**
  * Apply a single {@link SplitRule} against a funded amount.
@@ -84,4 +85,107 @@ export function previewSplitRules(
     entries.push({ recipient: rule.recipient, amount });
   }
   return entries;
+}
+
+// ---------------------------------------------------------------------------
+// Issue #545 — Split Config Diff Generator
+// ---------------------------------------------------------------------------
+
+/**
+ * A single recipient that changed their ratio between two {@link SplitConfig}
+ * objects.
+ */
+export interface ChangedShare {
+  /** The recipient address whose ratio changed. */
+  accountId: string;
+  /** Share value in the original config. */
+  oldRatio: number;
+  /** Share value in the revised config. */
+  newRatio: number;
+}
+
+/**
+ * Typed diff between two {@link SplitConfig} objects.
+ *
+ * - `added`          — recipients present in `revised` but not in `original`.
+ * - `removed`        — recipients present in `original` but not in `revised`.
+ * - `changed`        — recipients present in both with a different ratio.
+ * - `totalRatioDelta`— signed difference of the sums of all shares
+ *                      (`revisedSum − originalSum`).  Should be 0 for a valid
+ *                      rebalance.
+ */
+export interface SplitConfigDiff {
+  /** Recipients that were added in the revised config. */
+  added: RecipientShare[];
+  /** Recipients that were removed from the original config. */
+  removed: RecipientShare[];
+  /** Recipients present in both configs whose ratio changed. */
+  changed: ChangedShare[];
+  /**
+   * Signed difference between the sum of all shares in the revised config
+   * and the sum of all shares in the original config.
+   * For a valid split re-balance this should equal 0.
+   */
+  totalRatioDelta: number;
+}
+
+/**
+ * Generate a structured diff between two {@link SplitConfig} split
+ * configurations.
+ *
+ * Pure function — performs no RPC calls or side effects.
+ *
+ * @param original - The existing / before split configuration.
+ * @param revised  - The proposed / after split configuration.
+ * @returns A {@link SplitConfigDiff} describing what changed.
+ *
+ * @example
+ * ```ts
+ * const diff = generateSplitDiff(original, revised);
+ * console.log(diff.added, diff.removed, diff.changed, diff.totalRatioDelta);
+ * ```
+ */
+export function generateSplitDiff(
+  original: SplitConfig,
+  revised: SplitConfig,
+): SplitConfigDiff {
+  // Build lookup maps keyed by address for O(1) access
+  const origMap = new Map<string, RecipientShare>(
+    original.shares.map((s) => [s.address, s]),
+  );
+  const revMap = new Map<string, RecipientShare>(
+    revised.shares.map((s) => [s.address, s]),
+  );
+
+  const added: RecipientShare[] = [];
+  const removed: RecipientShare[] = [];
+  const changed: ChangedShare[] = [];
+
+  // Identify added and changed
+  for (const [address, revShare] of revMap) {
+    const origShare = origMap.get(address);
+    if (origShare === undefined) {
+      added.push(revShare);
+    } else if (origShare.share !== revShare.share) {
+      changed.push({
+        accountId: address,
+        oldRatio: origShare.share,
+        newRatio: revShare.share,
+      });
+    }
+  }
+
+  // Identify removed
+  for (const [address, origShare] of origMap) {
+    if (!revMap.has(address)) {
+      removed.push(origShare);
+    }
+  }
+
+  // Compute signed total ratio delta
+  const originalSum = original.shares.reduce((acc, s) => acc + s.share, 0);
+  const revisedSum = revised.shares.reduce((acc, s) => acc + s.share, 0);
+  const totalRatioDelta = revisedSum - originalSum;
+
+  return { added, removed, changed, totalRatioDelta };
 }

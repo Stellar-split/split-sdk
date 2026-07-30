@@ -310,6 +310,27 @@ export { connectWallet, getPublicKey, signTransaction } from "./wallet.js";
 export { checkRPCHealth } from "./health.js";
 export { FallbackChain, FallbackExhaustedError } from "./fallbackChain.js";
 
+// ---------------------------------------------------------------------------
+// #544 — Soroban Contract Event Log Subscriber
+// ---------------------------------------------------------------------------
+
+export { ContractEventSubscriber } from "./contractEventSubscriber.js";
+export type {
+  ContractEventFilter,
+  ParsedContractEvent,
+  ContractEventSubscriberConfig,
+} from "./contractEventSubscriber.js";
+
+// ---------------------------------------------------------------------------
+// #546 — Horizon Endpoint Availability Prober
+// ---------------------------------------------------------------------------
+
+export { HorizonProber } from "./horizonProber.js";
+export type {
+  HorizonProbeResult,
+  HorizonProberConfig,
+} from "./horizonProber.js";
+
 // AMM Calculator
 export { estimateSwapOutput, calculatePoolShare } from "./ammCalculator.js";
 
@@ -1017,6 +1038,16 @@ export type {
 export { getInvoiceStats, computeInvoiceStats } from "./invoiceStats.js";
 
 export { previewSplitRules } from "./splitPreview.js";
+
+// ---------------------------------------------------------------------------
+// #545 — Invoice Split Preview Change Diff Generator
+// ---------------------------------------------------------------------------
+
+export { generateSplitDiff } from "./splitPreview.js";
+export type {
+  SplitConfigDiff,
+  ChangedShare,
+} from "./splitPreview.js";
 
 export { simulateAutoResolve } from "./autoResolveSimulator.js";
 
