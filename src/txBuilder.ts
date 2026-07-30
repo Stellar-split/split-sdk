@@ -14,6 +14,7 @@ import type { StellarSplitClientConfig } from "./client.js";
 import { signTransaction } from "./wallet.js";
 import { SimulationFailedError, TransactionFailedError, TransactionNotConfirmedError } from "./errors.js";
 import { checkInvoiceExpiry } from "./preflightChecker.js";
+import type { LedgerCloseEstimator } from "./ledgerCloseEstimator.js";
 
 /** Builder for composing multi-operation StellarSplit transactions. */
 export class StellarSplitTxBuilder {
@@ -23,6 +24,7 @@ export class StellarSplitTxBuilder {
   private readonly sourceAddress: string;
   private readonly operations: xdr.Operation[] = [];
   private _surgeConfig?: FeeSurgeConfig;
+  private _ledgerEstimator?: LedgerCloseEstimator;
 
   constructor(config: StellarSplitClientConfig, sourceAddress: string) {
     this.config = config;
@@ -40,6 +42,34 @@ export class StellarSplitTxBuilder {
   enableSurgeDetection(config?: FeeSurgeConfig): this {
     this._surgeConfig = config ?? {};
     return this;
+  }
+
+  /**
+   * Attach a {@link LedgerCloseEstimator} to derive precise timebounds from
+   * ledger sequence numbers rather than fixed wall-clock offsets.
+   *
+   * When set, you can pass `targetLedger` to {@link build} / {@link submit}
+   * and the builder will compute `timebounds.maxTime` via the estimator.
+   *
+   * @param estimator - A calibrated {@link LedgerCloseEstimator}.
+   */
+  setLedgerEstimator(estimator: LedgerCloseEstimator): this {
+    this._ledgerEstimator = estimator;
+    return this;
+  }
+
+  /**
+   * Compute a wall-clock `expiresAt` (Unix seconds) from a target ledger
+   * sequence, using the attached {@link LedgerCloseEstimator}.
+   * Returns `undefined` when no estimator has been set.
+   *
+   * @param targetLedger - The ledger sequence after which the tx should expire.
+   */
+  expiresAtFromLedger(targetLedger: number): number | undefined {
+    if (!this._ledgerEstimator) return undefined;
+    return Math.floor(
+      this._ledgerEstimator.estimateCloseTime(targetLedger).getTime() / 1000,
+    );
   }
 
   addPay(invoiceId: string, amount: bigint | number | string): this {

@@ -310,6 +310,13 @@ export { watchExpiry } from "./watcher.js";
 
 export { DeadlineEngine } from "./deadlineEngine.js";
 
+export { LedgerCloseEstimator } from "./ledgerCloseEstimator.js";
+export type {
+  LedgerCloseEstimatorOptions,
+  LedgerRecord,
+  CalibrationState,
+} from "./ledgerCloseEstimator.js";
+
 export { StellarSplitTxBuilder } from "./txBuilder.js";
 
 export { SequenceCache, isSequenceTooOld } from "./sequenceCache.js";
