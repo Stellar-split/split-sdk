@@ -195,9 +195,13 @@ import {
   StellarSplitError,
   AdminOperationError,
   PassphraseMismatchError,
-  InvoiceIntegrityError,
-  InvalidTransactionTypeError,
+  NetworkMismatchError,
 } from "./errors.js";
+import {
+  NetworkEnvironment,
+  NETWORK_PRESETS,
+} from "./config.js";
+import type { NetworkPreset } from "./config.js";
 import { hashInvoice, verifyInvoiceHash } from "./invoiceHashVerifier.js";
 import { buildFeeBump } from "./feeBumpBuilder.js";
 import type { FeeBumpConfig } from "./feeBumpBuilder.js";
@@ -3192,6 +3196,13 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
   }
 
   /**
+   * Returns a copy of the client configuration.
+   */
+  public getConfig(): StellarSplitClientConfig {
+    return this.config;
+  }
+
+  /**
    * Create a group of linked invoices.
    *
    * @returns The new group ID and transaction hash.
@@ -4021,52 +4032,108 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
   }
 
   /**
-   * Switch to a different network.
-   *
-   * @param network - Network name ('testnet', 'mainnet') or custom NetworkConfig
+   * Reconfigures internal Horizon and Soroban RPC URL references and validates
+   * that the active network passphrase matches the live RPC endpoint's reported
+   * passphrase before accepting the network switch.
    */
-  switchNetwork(network: string | NetworkConfig): void {
-    let config: NetworkConfig;
+  public switchNetwork(
+    env: Exclude<NetworkEnvironment, NetworkEnvironment.CUSTOM>,
+  ): Promise<void>;
+  public switchNetwork(
+    env: NetworkEnvironment.CUSTOM,
+    preset: NetworkPreset,
+  ): Promise<void>;
+  public switchNetwork(preset: NetworkPreset): Promise<void>;
+  public async switchNetwork(
+    envOrPreset: NetworkEnvironment | NetworkPreset,
+    customPreset?: NetworkPreset,
+  ): Promise<void> {
+    let preset: NetworkPreset;
 
-    if (typeof network === "string") {
-      const preset = NETWORKS[network];
-      if (!preset) {
-        throw new UnknownNetworkError(network);
+    if (typeof envOrPreset === "string") {
+      if (envOrPreset === NetworkEnvironment.CUSTOM) {
+        if (!customPreset) {
+          throw new StellarSplitError(
+            "Passing NetworkEnvironment.CUSTOM requires a full NetworkPreset object",
+            "INVALID_NETWORK_PRESET",
+          );
+        }
+        preset = customPreset;
+      } else {
+        const builtIn =
+          NETWORK_PRESETS[
+            envOrPreset as Exclude<NetworkEnvironment, NetworkEnvironment.CUSTOM>
+          ];
+        if (!builtIn) {
+          throw new StellarSplitError(
+            `Unknown network environment: ${envOrPreset}`,
+            "UNKNOWN_NETWORK_ENVIRONMENT",
+          );
+        }
+        preset = builtIn;
       }
-      config = { ...preset, contractId: this.config.contractId };
     } else {
-      config = network;
+      preset = envOrPreset;
     }
 
-    this.config = config;
-    this.server = new SorobanRpc.Server(config.rpcUrl, {
-      allowHttp: config.rpcUrl.startsWith("http://"),
+    if (!preset.horizonUrl || !preset.rpcUrl || !preset.networkPassphrase) {
+      throw new StellarSplitError(
+        "NetworkPreset must specify horizonUrl, rpcUrl, and networkPassphrase",
+        "INVALID_NETWORK_PRESET",
+      );
+    }
+
+    const tempServer = new SorobanRpc.Server(preset.rpcUrl, {
+      allowHttp: preset.rpcUrl.startsWith("http://"),
     });
 
-    // Rebuild the connection pool for the new endpoint. We read from
-    // `_effectiveRpcPoolSize` (cached at construction) rather than
-    // `this.config.rpcPoolSize` here because `NetworkConfig` doesn't carry a
-    // pool size — reading from `this.config` after `this.config = config`
-    // above would silently disable pooling on every network switch.
+    let livePassphrase: string;
+    try {
+      const networkInfo = await tempServer.getNetwork();
+      livePassphrase = networkInfo.passphrase;
+    } catch (err) {
+      throw new StellarSplitError(
+        `Failed to reach RPC endpoint ${preset.rpcUrl} to verify network passphrase: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        "RPC_NETWORK_CHECK_FAILED",
+        { rpcUrl: preset.rpcUrl },
+        err instanceof Error ? err.stack : undefined,
+      );
+    }
+
+    if (livePassphrase !== preset.networkPassphrase) {
+      throw new NetworkMismatchError(preset.networkPassphrase, livePassphrase);
+    }
+
+    this.config.horizonUrl = preset.horizonUrl;
+    this.config.rpcUrl = preset.rpcUrl;
+    this.config.networkPassphrase = preset.networkPassphrase;
+    this._mainServer = tempServer;
+    if (preset.horizonUrl) {
+      this._horizonReader = new HorizonFallbackReader(preset.horizonUrl);
+    }
+
     if (this._pool) {
       this._pool.dispose();
       this._pool = null;
     }
-    const wantsPool = !this._standby && this._effectiveRpcPoolSize >= 2;
+    const wantsPool = !this._standby && (this._effectiveRpcPoolSize ?? 0) >= 2;
     if (wantsPool) {
       try {
         this._pool = new ConnectionPool({
-          rpcUrl: config.rpcUrl,
+          rpcUrl: preset.rpcUrl,
           poolSize: this._effectiveRpcPoolSize,
-          allowHttp: config.rpcUrl.startsWith("http://"),
+          allowHttp: preset.rpcUrl.startsWith("http://"),
         });
       } catch {
-        // The Soroban SDK can reject bare http:// without allowHttp or ws:// URLs.
-        // Fail open so switchNetwork() stays a no-op rather than crashing the SDK.
+        // Fail open so switchNetwork() stays resilient
       }
     }
 
-    this.contract = new Contract(config.contractId);
+    if (this.config.contractId) {
+      this.contract = new Contract(this.config.contractId);
+    }
   }
 
   // ---------------------------------------------------------------------------

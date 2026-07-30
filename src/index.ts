@@ -29,7 +29,14 @@ export {
   deserializeInvoiceTemplate,
 } from "./invoiceTemplate.js";
 export {
+  NetworkEnvironment,
+  NETWORK_PRESETS,
+} from "./config.js";
+export type { NetworkPreset } from "./config.js";
+
+export {
   StellarSplitError,
+  NetworkMismatchError,
   InvoiceNotFoundError,
   InvoiceNotPendingError,
   DeadlinePassedError,

@@ -1699,3 +1699,22 @@ export class ClassifiedHorizonError extends StellarSplitError {
 export function isClassifiedHorizonError(err: unknown): err is ClassifiedHorizonError {
   return err instanceof ClassifiedHorizonError;
 }
+
+/** Thrown when the live RPC passphrase does not match the expected network preset. */
+export class NetworkMismatchError extends StellarSplitError {
+  readonly expected: string;
+  readonly actual: string;
+
+  constructor(expected: string, actual: string, raw?: string) {
+    super(
+      `Network mismatch: expected "${expected}" but RPC reported "${actual}"`,
+      "NETWORK_MISMATCH",
+      { expected, actual },
+      raw
+    );
+    this.name = "NetworkMismatchError";
+    this.expected = expected;
+    this.actual = actual;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
