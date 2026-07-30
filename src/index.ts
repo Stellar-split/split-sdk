@@ -206,6 +206,10 @@ export {
   isApprovalTimeoutError,
 } from "./errors.js";
 
+// Invoice metadata JSON Schema validator (issue #533)
+export { InvoiceMetadataValidator } from "./validators/invoiceMetadataValidator.js";
+export type { MetadataValidationResult } from "./validators/invoiceMetadataValidator.js";
+
 // ---------------------------------------------------------------------------
 // Lifecycle management (graceful shutdown)
 // ---------------------------------------------------------------------------
@@ -763,12 +767,14 @@ export type { FilterCriteria, CompiledFilter } from "./invoiceFilter.js";
 export { diffInvoices, hasDiff } from "./diff.js";
 export type { InvoiceDiff, InvoiceDiffEntry } from "./diff.js";
 
-export { diffSimulations } from "./simulationDiff.js";
+export { diffSimulations, compareSimulations, formatDiffSummary } from "./simulationDiff.js";
 export type {
   SimulationDiff,
   SimulationDiffSuccess,
   SimulationDiffNotComparable,
   ResourceDelta,
+  SimulationComparison,
+  SimulationComparisonNotComparable,
 } from "./simulationDiff.js";
 
 // Payment velocity tracking

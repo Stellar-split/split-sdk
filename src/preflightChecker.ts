@@ -259,3 +259,49 @@ export async function checkPayerReadiness(
 
   return { ready: true };
 }
+
+// ---------------------------------------------------------------------------
+// Account Freeze / Lock Preflight Check
+// ---------------------------------------------------------------------------
+
+/** Per-recipient lock state report, keyed by recipient address. */
+export interface RecipientLockCheckResult {
+  allUnlocked: boolean;
+  states: Record<string, AccountLockState>;
+}
+
+/**
+ * Pre-submission check: verify none of the payment recipients are frozen or
+ * permanently locked out of authorization for `asset`.
+ *
+ * Calls {@link detectLockState} for each recipient. Throws on the first
+ * frozen or locked account found so callers fail fast before building a
+ * transaction that would otherwise be rejected on-chain.
+ *
+ * @param server     - Horizon server instance.
+ * @param recipients - Recipient addresses to check.
+ * @param asset      - Asset being sent.
+ *
+ * @throws {AccountFrozenError} When a recipient's trustline has been frozen by the issuer.
+ * @throws {AccountLockedError} When a recipient can never be authorized again for the asset.
+ */
+export async function checkRecipientsUnlocked(
+  server: Horizon.Server,
+  recipients: string[],
+  asset: Asset,
+): Promise<RecipientLockCheckResult> {
+  const states: Record<string, AccountLockState> = {};
+
+  for (const recipient of recipients) {
+    const state = await detectLockState(server, recipient, asset);
+    states[recipient] = state;
+    if (state.isFrozen) {
+      throw new AccountFrozenError(recipient, asset.getCode());
+    }
+    if (state.isLocked) {
+      throw new AccountLockedError(recipient, asset.getCode());
+    }
+  }
+
+  return { allUnlocked: true, states };
+}

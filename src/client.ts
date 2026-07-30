@@ -237,6 +237,7 @@ import { IdempotencyManager } from "./idempotency.js";
 import type { IdempotencyConfig } from "./idempotency.js";
 import { RollbackCoordinator } from "./splitRollbackCoordinator.js";
 import { validateInvoicePayload } from "./payloadGuard.js";
+import { InvoiceMetadataValidator } from "./validators/invoiceMetadataValidator.js";
 import { validateSplitRatiosOrThrow } from "./validators/splitRatioValidator.js";
 import type { SplitConfig } from "./types.js";
 import { checkTrustlines } from "./trustlineChecker.js";
@@ -620,6 +621,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
   private _plugins = new Set<string>();
   private _pluginInstances: StellarSplitPlugin[] = [];
   private _pluginRegistry = new PluginRegistry();
+  private _metadataValidator: InvoiceMetadataValidator;
   private _dedup = new Deduplicator<Invoice>();
   private _cache: SimpleCache<any> | ICacheStore<any> | null = null;
   private _auditLogger: AuditLogger | null = null;
@@ -768,6 +770,10 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
     super();
     validateOrThrow(config);
     this.config = config;
+    this._metadataValidator = new InvoiceMetadataValidator(
+      config.metadataSchema,
+      config.metadataThrowOnInvalid ?? true,
+    );
     const primaryUrl = Array.isArray(config.rpcUrl)
       ? config.rpcUrl[0]!
       : config.rpcUrl;
@@ -1833,6 +1839,8 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
           if (this.config.payloadGuard) {
             validateInvoicePayload(params, this.config.payloadGuard);
           }
+
+          this._metadataValidator.validate(params.metadata);
 
           // Pre-submission split ratio validation: catch malformed ratio arrays
           // early (ratio-sum violations, negative shares, duplicates, zeros).
