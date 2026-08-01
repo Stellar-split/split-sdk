@@ -17,6 +17,7 @@ import {
   Keypair,
 } from "@stellar/stellar-sdk";
 import { TypedEventEmitter } from "./events/TypedEventEmitter.js";
+import type { Signer } from "./signing/signer.js";
 import type { CircuitStateChangeLogEvent } from "./resilience/CircuitBreaker.js";
 import { InvoiceStateMachine } from "./state/InvoiceStateMachine.js";
 import type { StateMachineConfig } from "./types/state.js";
@@ -81,6 +82,7 @@ import { resolveToken } from "./token.js";
 import { generatePaymentReceipt } from "./receipt.js";
 import type { PaymentReceipt } from "./receipt.js";
 import { checkInvoiceExpiry, checkPayerReadiness } from "./preflightChecker.js";
+import { InvoiceCloneabilityValidator } from "./preflight/InvoiceCloneabilityValidator.js";
 import { createInvoiceSubscription } from "./subscription.js";
 import type { Subscription, InvoiceEvent, SubscriptionOptions } from "./types.js";
 import { getSubscriptionManager } from "./streaming/SubscriptionManager.js";
@@ -200,6 +202,7 @@ import {
   AdminOperationError,
   PassphraseMismatchError,
   InvoiceIntegrityError,
+  InvoiceNotCloneableError,
   InvalidTransactionTypeError,
 } from "./errors.js";
 import { hashInvoice, verifyInvoiceHash } from "./invoiceHashVerifier.js";
@@ -324,6 +327,14 @@ export interface StellarSplitClientConfig {
   cache?: { enabled?: boolean; ttl?: Record<string, number>; ttlMs?: number };
   /** Optional signing keypair for request signing. */
   signingKeypair?: Keypair;
+  /**
+   * Optional pluggable signing vault adapter (issue #589). When provided,
+   * transaction signing can be delegated to a hardware security module,
+   * cloud KMS, or encrypted keystore through the narrow {@link Signer}
+   * contract instead of an in-memory {@link Keypair}. Exposed at runtime via
+   * `client.signer`.
+   */
+  signer?: Signer;
   /** Optional compliance rules injectable for invoice checks. */
   complianceRules?: import("./compliance.js").ComplianceRule[];
   /** Optional dependency injection container for RPC, cache, and wallet implementations. */
@@ -652,6 +663,9 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
   private _activeTransportType: TransportType = 'http';
   private _fallbackListeners: Array<(event: { from: 'websocket'; to: 'http' }) => void> = [];
   /** Admin keypair used to sign admin-only operations (freeze/unfreeze). */
+  /** Pluggable signing vault adapter (issue #589). */
+  private _signer: Signer | null = null;
+  /** Admin keypair used to sign admin-only operations (freeze/unfreeze). */
   private _adminKeypair: Keypair | null = null;
   /** Resilient RPC wrapper providing retry + circuit breaker for all RPC calls. */
   private _resilientRpc: ResilientRpcClient | null = null;
@@ -909,6 +923,9 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
       });
     }
 
+    // Pluggable signing vault adapter (issue #589)
+    this._signer = config.signer ?? null;
+
     // Admin keypair for admin-only operations
     if (config.adminKeypair) {
       this._adminKeypair = config.adminKeypair;
@@ -1090,6 +1107,14 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
         });
       this._instrumentOtel();
     }
+  }
+
+  /**
+   * The pluggable signing vault adapter (issue #589) provided at construction,
+   * or `null` when the client was created without one.
+   */
+  get signer(): Signer | null {
+    return this._signer;
   }
 
   /**

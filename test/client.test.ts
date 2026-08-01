@@ -846,7 +846,12 @@ describe("cloneInvoice", () => {
       clear: vi.fn(),
     };
 
-    const result = await client.cloneInvoice("123", { newDeadline: 1_800_000_000 });
+    // The fixture invoice (2023 deadline, unfunded recipient) is not cloneable;
+    // these tests exercise the submission path, so validation is skipped.
+    const result = await client.cloneInvoice("123", {
+      newDeadline: 1_800_000_000,
+      skipValidation: true,
+    });
 
     expect(result).toBe("456");
     expect(submitSpy).toHaveBeenCalledTimes(1);
@@ -886,7 +891,9 @@ describe("cloneInvoice", () => {
     };
     (client as any)._cache = cache;
 
-    await expect(client.cloneInvoice("123")).rejects.toThrow("network error");
+    await expect(
+      client.cloneInvoice("123", { skipValidation: true }),
+    ).rejects.toThrow("network error");
     expect(cache.set).not.toHaveBeenCalled();
     expect(cache.invalidate).not.toHaveBeenCalled();
   });
