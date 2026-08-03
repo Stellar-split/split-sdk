@@ -1807,3 +1807,180 @@ export class DataEntryValidationError extends StellarSplitError {
 export function isDataEntryValidationError(err: unknown): err is DataEntryValidationError {
   return err instanceof DataEntryValidationError;
 }
+
+// ---------------------------------------------------------------------------
+// Preflight / fee-bump / integrity errors (consumed by preflightChecker,
+// feeBumpBuilder, splitRollbackCoordinator, invoiceMetadataValidator, etc.)
+// ---------------------------------------------------------------------------
+
+/** Thrown when an invoice has already expired at payment-preflight time. */
+export class PaymentExpiredError extends StellarSplitError {
+  readonly invoiceId: string;
+  readonly expiresAt: number;
+
+  constructor(invoiceId: string, expiresAt: number) {
+    super(`Invoice ${invoiceId} expired at ${expiresAt}`, "PAYMENT_EXPIRED", {
+      invoiceId,
+      expiresAt,
+    });
+    this.name = "PaymentExpiredError";
+    this.invoiceId = invoiceId;
+    this.expiresAt = expiresAt;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a sponsor account lacks the reserve to cover new ledger entries. */
+export class InsufficientSponsorReserveError extends StellarSplitError {
+  readonly sponsorAddress: string;
+  readonly availableStroops: bigint;
+  readonly requiredStroops: bigint;
+  readonly newEntryCount: number;
+
+  constructor(
+    sponsorAddress: string,
+    availableStroops: bigint,
+    requiredStroops: bigint,
+    newEntryCount: number,
+  ) {
+    super(
+      `Sponsor ${sponsorAddress} has insufficient reserve: ${availableStroops} available, ${requiredStroops} required for ${newEntryCount} new entries`,
+      "INSUFFICIENT_SPONSOR_RESERVE",
+      { sponsorAddress, availableStroops: availableStroops.toString(), requiredStroops: requiredStroops.toString(), newEntryCount },
+    );
+    this.name = "InsufficientSponsorReserveError";
+    this.sponsorAddress = sponsorAddress;
+    this.availableStroops = availableStroops;
+    this.requiredStroops = requiredStroops;
+    this.newEntryCount = newEntryCount;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a fee-bump inner transaction is not a v1 transaction. */
+export class InvalidTransactionTypeError extends StellarSplitError {
+  readonly typeName: string;
+
+  constructor(typeName: string) {
+    super(`Invalid transaction type: ${typeName}`, "INVALID_TRANSACTION_TYPE", {
+      typeName,
+    });
+    this.name = "InvalidTransactionTypeError";
+    this.typeName = typeName;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a rollback is requested for an unknown split id/leg. */
+export class UnknownSplitError extends StellarSplitError {
+  readonly splitId: string;
+
+  constructor(splitId: string) {
+    super(`Unknown split: ${splitId}`, "UNKNOWN_SPLIT", { splitId });
+    this.name = "UnknownSplitError";
+    this.splitId = splitId;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when invoice metadata fails validation (ajv-style error list). */
+export class MetadataValidationError extends StellarSplitError {
+  readonly errors: unknown[];
+
+  constructor(errors: unknown[]) {
+    super(
+      `Invoice metadata validation failed with ${errors.length} error(s)`,
+      "METADATA_VALIDATION",
+      { count: errors.length },
+    );
+    this.name = "MetadataValidationError";
+    this.errors = errors;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when an invoice's content hash diverges from its declared hash. */
+export class InvoiceIntegrityError extends StellarSplitError {
+  readonly invoiceId: string;
+  readonly expectedHash: string;
+  readonly computedHash: string;
+
+  constructor(invoiceId: string, expectedHash: string, computedHash: string) {
+    super(
+      `Invoice ${invoiceId} integrity check failed: declared hash ${expectedHash} does not match computed ${computedHash}`,
+      "INVOICE_INTEGRITY",
+      { invoiceId, expectedHash, computedHash },
+    );
+    this.name = "InvoiceIntegrityError";
+    this.invoiceId = invoiceId;
+    this.expectedHash = expectedHash;
+    this.computedHash = computedHash;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when an approval workflow exceeds its configured timeout. */
+export class ApprovalTimeoutError extends StellarSplitError {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`Approval workflow timed out after ${timeoutMs} ms`, "APPROVAL_TIMEOUT", {
+      timeoutMs,
+    });
+    this.name = "ApprovalTimeoutError";
+    this.timeoutMs = timeoutMs;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isApprovalTimeoutError(err: unknown): err is ApprovalTimeoutError {
+  return err instanceof ApprovalTimeoutError;
+}
+
+/** Thrown when a transaction is not confirmed within the finality wait budget. */
+export class FinalityTimeoutError extends StellarSplitError {
+  readonly txHash: string;
+  readonly maxWaitMs: number;
+
+  constructor(txHash: string, maxWaitMs: number) {
+    super(
+      `Transaction ${txHash} not confirmed within ${maxWaitMs} ms`,
+      "FINALITY_TIMEOUT",
+      { txHash, maxWaitMs },
+    );
+    this.name = "FinalityTimeoutError";
+    this.txHash = txHash;
+    this.maxWaitMs = maxWaitMs;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isFinalityTimeoutError(err: unknown): err is FinalityTimeoutError {
+  return err instanceof FinalityTimeoutError;
+}
+
+/** Thrown when a path query is malformed (missing/invalid parameters). */
+export class InvalidPathQueryError extends StellarSplitError {
+  readonly context: Record<string, unknown> | undefined;
+
+  constructor(message: string, context?: Record<string, unknown>) {
+    super(message, "INVALID_PATH_QUERY", context);
+    this.name = "InvalidPathQueryError";
+    this.context = context;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when an invoice cannot be cloned (cloneability pre-flight failed). */
+export class InvoiceNotCloneableError extends StellarSplitError {
+  readonly report: import("./preflight/InvoiceCloneabilityValidator.js").CloneabilityReport;
+
+  constructor(report: import("./preflight/InvoiceCloneabilityValidator.js").CloneabilityReport) {
+    super("Invoice is not cloneable", "INVOICE_NOT_CLONEABLE", {
+      fieldReports: report.fieldReports,
+    });
+    this.name = "InvoiceNotCloneableError";
+    this.report = report;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}

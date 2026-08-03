@@ -279,7 +279,6 @@ export { TxQueue } from "./queue.js";
 
 export { replayEvents } from "./events.js";
 export { sdkEvents } from "./events.js";
-export { FinalityChecker } from "./finalityChecker.js";
 export type { FinalityServerLike } from "./finalityChecker.js";
 export { ApprovalWorkflowSequencer, ApprovalSession } from "./approvalWorkflowSequencer.js";
 export type { ApprovalWorkflowOptions, NotificationAdapter, SignatureApplier } from "./approvalWorkflowSequencer.js";
@@ -921,8 +920,7 @@ export { PredicateBuilder } from "./predicateBuilder.js";
 export type { ClaimPredicate } from "./predicateBuilder.js";
 export type { PredicateConfig } from "./types.js";
 
-export { RateCache } from "./rateCache.js";
-export type { RateCacheEntry, RateOracleFn, RateCacheConfig } from "./rateCache.js";
+export type { RateCacheEntry, RateOracleFn } from "./rateCache.js";
 
 export { subscribeToInvoice } from "./sse.js";
 export type {
@@ -1334,3 +1332,37 @@ export {
   exportSplitAuditTrail,
   SPLIT_AUDIT_CSV_COLUMNS,
 } from "./complianceExporter.js";
+
+// ---------------------------------------------------------------------------
+// #589 — Pluggable Signing Key Vault Adapter
+// ---------------------------------------------------------------------------
+
+export type { Signer } from "./signing/signer.js";
+export { KeypairSigner } from "./signing/adapters/KeypairSigner.js";
+export { EncryptedFileSigner } from "./signing/adapters/EncryptedFileSigner.js";
+export type {
+  EncryptedFileSignerOptions,
+} from "./signing/adapters/EncryptedFileSigner.js";
+export {
+  encryptSigningKeyToPem,
+  writeEncryptedSigningKeyFile,
+} from "./signing/adapters/EncryptedFileSigner.js";
+export { CloudKmsSigner } from "./signing/adapters/CloudKmsSigner.js";
+export type { KmsClient } from "./signing/adapters/CloudKmsSigner.js";
+
+// ---------------------------------------------------------------------------
+// #588 — Soroban Transaction Footprint Optimizer
+// ---------------------------------------------------------------------------
+
+export { optimizeFootprint } from "./soroban/footprint.js";
+export type {
+  OptimizeFootprintOptions,
+  FootprintLogger,
+} from "./soroban/footprint.js";
+export { footprintDiff } from "./utils/footprintDiff.js";
+export type { FootprintDiff } from "./utils/footprintDiff.js";
+export { submitTransaction } from "./transaction/submit.js";
+export type {
+  SubmitTransactionOptions,
+  SubmitServer,
+} from "./transaction/submit.js";
