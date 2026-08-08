@@ -11,6 +11,20 @@ All notable changes to this project will be documented in this file.
 ### Features
 
 
+- **Add pluggable signing key vault adapter (closes #589)**
+  - `Signer` interface (`sign(txHash: Buffer): Promise<Buffer>`) decouples signing from key storage — inject an HSM, cloud KMS, or encrypted keystore without SDK changes
+  - `KeypairSigner` wraps an in-memory stellar-sdk `Keypair`; produces 64-byte ed25519 signatures verifiable via `Keypair.verify`
+  - `EncryptedFileSigner` reads an AES-256-GCM encrypted PEM key file, decrypts on first use, and holds the keypair in a `WeakRef` — GC pressure (or `clearCache()`) triggers a transparent re-read on the next sign
+  - `CloudKmsSigner` delegates to any injected `KmsClient { sign(keyId, digest) }`, keeping vendor SDKs out of the package and enabling trivial test mocking
+  - `StellarSplitClient` accepts `signer: Signer` at construction (exposed via `client.signer`)
+  - Full docs in `docs/SIGNING_VAULT.md`
+- **Add Soroban transaction footprint optimizer (closes #588)**
+  - `optimizeFootprint(tx, sim)` rebuilds a transaction with the minimal read/write key set from `simulateTransaction`, pruning stale/over-broad keys that inflate inclusion fees
+  - `footprintDiff` public utility classifies `{ added, removed, unchanged }` ledger keys by canonical XDR encoding
+  - Each pruned key is logged at `debug` level via the SDK logger
+  - `submitTransaction(server, tx, sim, opts?)` runs the optimizer by default; pass `{ optimizeFootprint: false }` to opt out
+  - Already-minimal footprints pass through byte-identical; the input transaction is never mutated
+  - Full docs in `docs/FOOTPRINT_OPTIMIZER.md`
 - **Add invoice due-date reminder scheduler (closes #542)**
   - `InvoiceReminderScheduler.schedule(invoiceId, offsets: number[])` registers reminders at each offset (ms) before an invoice's due date
   - Schedules persist via `saveReminderSchedules`/`loadReminderSchedules` (`src/snapshot.ts`), keyed by invoice, so reminders survive process restarts
