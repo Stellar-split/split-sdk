@@ -14,6 +14,7 @@ import { TelemetryCollector } from "../src/telemetryCollector.js";
 import { DIContainer } from "../src/container.js";
 import { StellarSplitClient } from "../src/client.js";
 import { WalletConnectAdapter } from "../src/adapters/walletconnect.js";
+import { KeypairSigner } from "../src/signing/adapters/KeypairSigner.js";
 import { buildSchema } from "graphql";
 import { generateGraphQLSchema } from "../src/graphql.js";
 
@@ -1326,6 +1327,31 @@ describe("getCrossChainRef / setCrossChainRef", () => {
     });
 
     expect(submitSpy).toHaveBeenCalledWith(creator, expect.anything());
+  });
+});
+
+describe("signer option (issue #589)", () => {
+  it("accepts a pluggable Signer and exposes it via client.signer", () => {
+    const keypair = Keypair.random();
+    const signer = new KeypairSigner(keypair);
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+      signer,
+    });
+
+    expect(client.signer).toBe(signer);
+  });
+
+  it("returns null from client.signer when no signer is configured", () => {
+    const client = new StellarSplitClient({
+      rpcUrl: "https://example.com",
+      networkPassphrase: "Test Network",
+      contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+    });
+
+    expect(client.signer).toBeNull();
   });
 });
 

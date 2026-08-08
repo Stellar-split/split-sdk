@@ -151,6 +151,32 @@ new StellarSplitClient(config: StellarSplitClientConfig)
 |----------|---------|-------------|
 | `enrichInvoice(invoiceId)` | `Promise<EnrichedInvoice>` | Fetch IPFS metadata from invoice memo CID and merge it into the invoice |
 
+### Pluggable Signing Key Vault Adapter
+
+Decouple transaction signing from key storage with a narrow `Signer` contract — inject an HSM, cloud KMS, or AES-encrypted keystore without modifying SDK internals.
+
+| Class / Function | Description |
+|------------------|-------------|
+| `KeypairSigner` | `Signer` backed by an in-memory `Keypair` |
+| `EncryptedFileSigner` | `Signer` reading an AES-256-GCM encrypted PEM keystore (decrypts on first use, `WeakRef`-cached) |
+| `CloudKmsSigner` | `Signer` delegating to any injected `KmsClient` |
+| `encryptSigningKeyToPem(secret, aesKey)` | Encrypt a Stellar secret seed to a PEM payload |
+| `writeEncryptedSigningKeyFile(path, secret, aesKey)` | Write an encrypted keystore to disk |
+
+Pass any `Signer` to `StellarSplitClient` via the `signer` constructor option (exposed as `client.signer`). See [docs/SIGNING_VAULT.md](./docs/SIGNING_VAULT.md).
+
+### Soroban Transaction Footprint Optimizer
+
+Prune stale or over-broad ledger keys from Soroban transactions before submission to cut inclusion fees.
+
+| Function | Description |
+|----------|-------------|
+| `optimizeFootprint(tx, sim)` | Rebuild a transaction with the minimal footprint reported by simulation |
+| `footprintDiff(original, minimal)` | Classify `{ added, removed, unchanged }` ledger keys |
+| `submitTransaction(server, tx, sim, opts?)` | Submit with the optimizer on by default (`{ optimizeFootprint: false }` disables it) |
+
+See [docs/FOOTPRINT_OPTIMIZER.md](./docs/FOOTPRINT_OPTIMIZER.md).
+
 ### Utilities
 
 | Function | Description |
