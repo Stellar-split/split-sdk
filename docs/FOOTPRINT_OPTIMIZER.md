@@ -92,6 +92,8 @@ footprint optimizer immediately before submission unless disabled.
 ```typescript
 import { optimizeFootprint } from "@stellar-split/sdk";
 
+// `server` here is a full SorobanRpc.Server (which provides both
+// simulateTransaction and sendTransaction).
 const sim = await server.simulateTransaction(tx);
 if (sim.result === "success") {
   const optimized = optimizeFootprint(tx, sim);
@@ -151,8 +153,8 @@ const optimized = optimizeFootprint(tx, sim, { logger });
 
 ## Related Functions
 
-- [`SimulationSandbox`](./API.md) — fork ledger state and simulate without the network
-- [`diffSimulations`](./API.md) — compare simulation results
+- [`diffSimulations`](./API.md#diffsimulations) — compare simulation results
+- `SimulationSandbox` — fork ledger state and simulate without the network
 
 ## Related Issues
 

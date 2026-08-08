@@ -61,6 +61,7 @@ import { KeypairSigner } from "@stellar-split/sdk";
 const keypair = Keypair.fromSecret(process.env.SIGNING_SECRET!);
 const signer = new KeypairSigner(keypair);
 
+// txHash is the raw 32-byte transaction hash (e.g. Buffer.from(tx.hash())).
 const signature = await signer.sign(txHash);
 ```
 
@@ -95,6 +96,7 @@ const aesKey = randomBytes(32);
 await writeEncryptedSigningKeyFile("./vault.pem", keypair.secret(), aesKey);
 
 const signer = new EncryptedFileSigner("./vault.pem", { aesKey });
+// txHash is the raw 32-byte transaction hash (e.g. Buffer.from(tx.hash())).
 const signature = await signer.sign(txHash); // decrypts on first use
 
 signer.clearCache(); // force re-read on the next sign (e.g. after key rotation)
@@ -123,6 +125,7 @@ const awsKmsClient: KmsClient = {
 };
 
 const signer = new CloudKmsSigner(awsKmsClient, "alias/split-signing-key");
+// txHash is the raw 32-byte transaction hash (e.g. Buffer.from(tx.hash())).
 const signature = await signer.sign(txHash);
 ```
 
