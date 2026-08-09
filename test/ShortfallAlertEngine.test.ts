@@ -407,12 +407,14 @@ describe("ShortfallAlertEngine", () => {
   function createMockEngine(options?: { pollIntervalMs?: number }) {
     // Create a minimal mock engine for testing
     // In actual implementation, this would be the real ShortfallAlertEngine
-    const tracked = new Map<string, ShortfallAlert>();
+    const tracked = new Map<string, ShortfallAlert[]>();
     const firedTriggers = new Set<string>();
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
 
     const mockEngine = {
       track(invoiceId: string, alert: ShortfallAlert) {
-        tracked.set(invoiceId, alert);
+        if (!tracked.has(invoiceId)) tracked.set(invoiceId, []);
+        tracked.get(invoiceId)!.push(alert);
       },
       untrack(invoiceId: string) {
         tracked.delete(invoiceId);
@@ -424,8 +426,8 @@ describe("ShortfallAlertEngine", () => {
         });
       },
       async forceCheck(invoiceId: string) {
-        const alert = tracked.get(invoiceId);
-        if (!alert) return;
+        const alerts = tracked.get(invoiceId);
+        if (!alerts || alerts.length === 0) return;
 
         const invoice = await mockGetInvoice(invoiceId);
         if (!invoice) return;
@@ -435,32 +437,46 @@ describe("ShortfallAlertEngine", () => {
         const now = Math.floor(Date.now() / 1000);
         const timeRemainingMs = Math.max(0, (invoice.dueDate - now) * 1000);
 
-        for (const trigger of alert.triggerAt) {
-          const triggerKey = `${invoiceId}-${JSON.stringify(trigger)}`;
+        for (const alert of alerts) {
+          for (const trigger of alert.triggerAt) {
+            const triggerKey = `${invoiceId}-${alert.handler.toString().slice(0, 20)}-${trigger.type}-${typeof trigger.threshold === "bigint" ? String(trigger.threshold) : trigger.threshold}`;
 
-          let shouldFire = false;
-          if (trigger.type === "percent") {
-            shouldFire = shortfallPercent > trigger.threshold && timeRemainingMs < trigger.timeBeforeDeadlineMs;
-          } else if (trigger.type === "absolute") {
-            shouldFire = shortfallAmount > (trigger.threshold as bigint) && timeRemainingMs < trigger.timeBeforeDeadlineMs;
-          }
+            let shouldFire = false;
+            if (trigger.type === "percent") {
+              shouldFire = shortfallPercent > trigger.threshold && timeRemainingMs <= trigger.timeBeforeDeadlineMs;
+            } else if (trigger.type === "absolute") {
+              shouldFire = shortfallAmount > (trigger.threshold as bigint) && timeRemainingMs <= trigger.timeBeforeDeadlineMs;
+            }
 
-          if (shouldFire && !firedTriggers.has(triggerKey)) {
-            firedTriggers.add(triggerKey);
-            alert.handler({
-              invoiceId,
-              shortfallAmount,
-              shortfallPercent,
-              timeRemainingMs,
-            });
+            if (shouldFire && !firedTriggers.has(triggerKey)) {
+              firedTriggers.add(triggerKey);
+              alert.handler({
+                invoiceId,
+                shortfallAmount,
+                shortfallPercent,
+                timeRemainingMs,
+              });
+            }
           }
         }
       },
       stop() {
+        if (pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
         tracked.clear();
         firedTriggers.clear();
       },
     };
+
+    if (options?.pollIntervalMs) {
+      pollTimer = setInterval(async () => {
+        for (const invoiceId of tracked.keys()) {
+          await mockEngine.forceCheck(invoiceId);
+        }
+      }, options.pollIntervalMs);
+    }
 
     return mockEngine as any as ShortfallAlertEngine;
   }

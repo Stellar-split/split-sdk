@@ -115,7 +115,7 @@ class ShutdownHandlerInstance {
    * resolves when the shutdown completes or rejects if `onTimeout: "error"`
    * and the drain timeout is exceeded.
    */
-  async shutdown(): Promise<void> {
+  shutdown(): Promise<void> {
     if (this.shutdownPromise) return this.shutdownPromise;
 
     this.shutdownPromise = new Promise<void>((resolve, reject) => {
@@ -203,4 +203,7 @@ export class GracefulShutdownHandler {
     const instance = new ShutdownHandlerInstance(client, options);
     return instance.register();
   }
+
+  /** Exposed for testing purposes. */
+  static readonly ShutdownHandlerInstance = ShutdownHandlerInstance;
 }

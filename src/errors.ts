@@ -1974,13 +1974,118 @@ export class InvalidPathQueryError extends StellarSplitError {
 /** Thrown when an invoice cannot be cloned (cloneability pre-flight failed). */
 export class InvoiceNotCloneableError extends StellarSplitError {
   readonly report: import("./preflight/InvoiceCloneabilityValidator.js").CloneabilityReport;
+  readonly details: import("./preflight/InvoiceCloneabilityValidator.js").CloneabilityReport;
 
   constructor(report: import("./preflight/InvoiceCloneabilityValidator.js").CloneabilityReport) {
-    super("Invoice is not cloneable", "INVOICE_NOT_CLONEABLE", {
-      fieldReports: report.fieldReports,
-    });
+    const fields = report.fieldReports.map((f) => f.field).join(", ");
+    super(
+      `Invoice ${report.invoiceId} is not cloneable: ${fields}`,
+      "INVOICE_NOT_CLONEABLE",
+      { fieldReports: report.fieldReports },
+    );
     this.name = "InvoiceNotCloneableError";
     this.report = report;
+    this.details = report;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when one or more recipients fail a pre-payment balance pre-check. */
+export class RecipientPreCheckFailedError extends StellarSplitError {
+  readonly failingResults: Array<{
+    recipient: string;
+    checks: Array<{ name: string; passed: boolean; detail?: string }>;
+    passed: boolean;
+    remediations: string[];
+  }>;
+
+  constructor(
+    failingResults: Array<{
+      recipient: string;
+      checks: Array<{ name: string; passed: boolean; detail?: string }>;
+      passed: boolean;
+      remediations: string[];
+    }>,
+  ) {
+    const summary = failingResults
+      .map((r) => {
+        const failingChecks = r.checks
+          .filter((c) => !c.passed)
+          .map((c) => c.name)
+          .join(", ");
+        return `${r.recipient}: ${failingChecks || "unknown check"}`;
+      })
+      .join("; ");
+    super(
+      `Recipient pre-check failed: ${summary}`,
+      "RECIPIENT_PRE_CHECK_FAILED",
+      { count: failingResults.length },
+    );
+    this.name = "RecipientPreCheckFailedError";
+    this.failingResults = failingResults;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a caller does not meet the token gate policy's balance requirement. */
+export class TokenGateAccessDeniedError extends StellarSplitError {
+  readonly callerAccountId: string;
+  readonly assetCode: string;
+  readonly required: string;
+  readonly actual: string;
+
+  constructor(
+    callerAccountId: string,
+    assetCode: string,
+    required: string,
+    actual: string,
+  ) {
+    super(
+      `Access denied: ${callerAccountId} holds ${actual} ${assetCode} (minimum required: ${required})`,
+      "TOKEN_GATE_ACCESS_DENIED",
+      { callerAccountId, assetCode, required, actual },
+    );
+    this.name = "TokenGateAccessDeniedError";
+    this.callerAccountId = callerAccountId;
+    this.assetCode = assetCode;
+    this.required = required;
+    this.actual = actual;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a stellar.toml file cannot be fetched or is unreachable. */
+export class StellarTomlFetchError extends StellarSplitError {
+  readonly domain: string;
+
+  constructor(domain: string, cause?: string) {
+    super(
+      cause
+        ? `Failed to fetch stellar.toml for domain "${domain}": ${cause}`
+        : `Failed to fetch stellar.toml for domain "${domain}"`,
+      "STELLAR_TOML_FETCH_ERROR",
+      { domain },
+    );
+    this.name = "StellarTomlFetchError";
+    this.domain = domain;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when all channel accounts in the pool are busy and the acquire timeout elapses. */
+export class ChannelExhaustedError extends StellarSplitError {
+  readonly poolSize: number;
+  readonly timeoutMs: number;
+
+  constructor(poolSize: number, timeoutMs: number) {
+    super(
+      `All ${poolSize} channel account${poolSize === 1 ? "" : "s"} are in use and the acquire timeout of ${timeoutMs}ms elapsed`,
+      "CHANNEL_EXHAUSTED",
+      { poolSize, timeoutMs },
+    );
+    this.name = "ChannelExhaustedError";
+    this.poolSize = poolSize;
+    this.timeoutMs = timeoutMs;
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }

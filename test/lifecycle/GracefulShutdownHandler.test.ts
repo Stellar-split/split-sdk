@@ -466,7 +466,7 @@ describe("GracefulShutdownHandler", () => {
         this.options = { drainTimeoutMs: 30_000, signals: ["SIGTERM", "SIGINT"], onTimeout: "force", ...options };
       }
 
-      async shutdown(): Promise<void> {
+      shutdown(): Promise<void> {
         if (this.shutdownPromise) return this.shutdownPromise;
 
         this.shutdownPromise = new Promise<void>((resolve, reject) => {

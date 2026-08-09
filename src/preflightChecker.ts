@@ -305,3 +305,28 @@ export async function checkRecipientsUnlocked(
 
   return { allUnlocked: true, states };
 }
+
+// ---------------------------------------------------------------------------
+// Trustline Auth Requirement Check
+// ---------------------------------------------------------------------------
+
+/** Result of checking whether an asset issuer requires authorization. */
+export interface TrustlineAuthRequirementResult {
+  authRequired: boolean;
+}
+
+/**
+ * Preflight check: detect whether the issuer's account has AUTH_REQUIRED set,
+ * meaning each trustline must be explicitly approved before payments can flow.
+ *
+ * @param server - Horizon server instance.
+ * @param issuer - Stellar address of the asset issuer.
+ */
+export async function checkTrustlineAuthRequirement(
+  server: Horizon.Server,
+  issuer: string,
+): Promise<TrustlineAuthRequirementResult> {
+  const account = await server.loadAccount(issuer);
+  const authRequired = (account as unknown as { flags: { auth_required: boolean } }).flags.auth_required === true;
+  return { authRequired };
+}

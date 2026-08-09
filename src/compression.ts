@@ -22,11 +22,21 @@ function toBytes(payload: CompressionPayload): Uint8Array {
 }
 
 function isCompressionStreamAvailable(): boolean {
-  return typeof CompressionStream !== "undefined" && typeof Response !== "undefined" && typeof Blob !== "undefined";
+  return (
+    typeof CompressionStream !== "undefined" &&
+    typeof Response !== "undefined" &&
+    typeof Blob !== "undefined" &&
+    typeof (Blob.prototype as any).stream === "function"
+  );
 }
 
 function isDecompressionStreamAvailable(): boolean {
-  return typeof DecompressionStream !== "undefined" && typeof Response !== "undefined" && typeof Blob !== "undefined";
+  return (
+    typeof DecompressionStream !== "undefined" &&
+    typeof Response !== "undefined" &&
+    typeof Blob !== "undefined" &&
+    typeof (Blob.prototype as any).stream === "function"
+  );
 }
 
 function isCompressedPayload(value: unknown): value is CompressedPayload {

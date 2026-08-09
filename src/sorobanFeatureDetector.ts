@@ -14,6 +14,9 @@ import type { SorobanFeatureFlags } from "./types.js";
 /** Protocol version at which ExtendFootprintTtl / RestoreFootprint became available. */
 const STATE_ARCHIVAL_PROTOCOL_VERSION = 20;
 
+/** Protocol version at which SetTrustLineFlags replaced the legacy AllowTrust operation. */
+const SET_TRUST_LINE_FLAGS_PROTOCOL_VERSION = 18;
+
 /** Events emitted by {@link SorobanFeatureDetector}. */
 export interface SorobanFeatureDetectorEventMap {
   [key: string]: unknown;
@@ -43,6 +46,30 @@ const FALLBACK_FLAGS: Omit<SorobanFeatureFlags, "detectedAt"> = {
  * flags from it, caching the result and emitting `protocolUpgradeDetected`
  * when a re-check observes a version change.
  */
+// ---------------------------------------------------------------------------
+// Standalone helpers used by TrustlineAuthHandler
+// ---------------------------------------------------------------------------
+
+/**
+ * Query the Horizon server's root resource to obtain the current protocol version.
+ *
+ * @param server - Horizon server instance (must expose a `root()` method).
+ */
+export async function detectProtocolVersion(
+  server: { root: () => Promise<{ current_protocol_version: number }> },
+): Promise<number> {
+  const root = await server.root();
+  return root.current_protocol_version;
+}
+
+/**
+ * Returns `true` when the given protocol version supports `SetTrustLineFlags`
+ * (protocol >= 18). Older networks must use the legacy `AllowTrust` operation.
+ */
+export function supportsSetTrustLineFlags(protocolVersion: number): boolean {
+  return protocolVersion >= SET_TRUST_LINE_FLAGS_PROTOCOL_VERSION;
+}
+
 export class SorobanFeatureDetector extends TypedEventEmitter<SorobanFeatureDetectorEventMap> {
   private readonly server: SorobanRpc.Server;
   private readonly staleAfterMs: number;

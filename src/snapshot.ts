@@ -81,19 +81,31 @@ export async function loadDedupTokens(namespace: string): Promise<string[] | nul
 // Reminder schedule persistence (InvoiceReminderScheduler)
 // ---------------------------------------------------------------------------
 
-let reminderSchedulesStore: ReminderSchedule[] = [];
+const REMINDER_SCHEDULES_KEY = "stellar_split_reminder_schedules";
 
-/**
- * Load the persisted reminder schedules (in-memory singleton, reset per
- * process). Callers receive a defensive copy.
- */
-export function loadReminderSchedules(): ReminderSchedule[] {
-  return reminderSchedulesStore.map((s) => ({ ...s }));
+function _hasLocalStorage(): boolean {
+  return typeof localStorage !== "undefined" && localStorage !== null;
 }
 
-/** Persist the reminder schedules (in-memory singleton). */
+/**
+ * Load the persisted reminder schedules from localStorage (browser) or return
+ * an empty array in environments without localStorage (e.g. Node.js SSR).
+ */
+export function loadReminderSchedules(): ReminderSchedule[] {
+  if (!_hasLocalStorage()) return [];
+  const raw = localStorage.getItem(REMINDER_SCHEDULES_KEY);
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw) as ReminderSchedule[];
+  } catch {
+    return [];
+  }
+}
+
+/** Persist the reminder schedules to localStorage. */
 export function saveReminderSchedules(schedules: ReminderSchedule[]): void {
-  reminderSchedulesStore = schedules.map((s) => ({ ...s }));
+  if (!_hasLocalStorage()) return;
+  localStorage.setItem(REMINDER_SCHEDULES_KEY, JSON.stringify(schedules));
 }
 
 // ---------------------------------------------------------------------------

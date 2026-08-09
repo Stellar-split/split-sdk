@@ -200,10 +200,8 @@ describe("TokenRefreshInterceptor", () => {
     const refreshedHandler = vi.fn();
     interceptor.onTokenRefreshed(refreshedHandler);
 
-    // Fast-forward to 60 seconds before expiry
-    vi.advanceTimersByTime(120_000);
-
-    await vi.runAllTimersAsync();
+    // Advance exactly to the scheduled refresh time (expiry - buffer = 120s)
+    await vi.advanceTimersByTimeAsync(120_000);
 
     expect(walletAdapter.sign).toHaveBeenCalled();
     expect(refreshedHandler).toHaveBeenCalled();
@@ -214,22 +212,20 @@ describe("TokenRefreshInterceptor", () => {
     const token = createJWT({ exp: expiryTime });
     const newToken = createJWT({ exp: now + 7200 });
 
-    const refreshPromise = new Promise<void>((resolve) => {
-      global.fetch = vi.fn((url: string) => {
-        if (url.includes("challenge")) {
-          return new Promise((res) => {
-            setTimeout(
-              () => res(new Response(JSON.stringify({ challengeXdr: "challenge-tx" }))),
-              100
-            );
-          });
-        }
+    global.fetch = vi.fn((url: string) => {
+      if (url.includes("challenge")) {
         return new Promise((res) => {
           setTimeout(
-            () => res(new Response(JSON.stringify({ token: newToken }))),
+            () => res(new Response(JSON.stringify({ challengeXdr: "challenge-tx" }))),
             100
           );
         });
+      }
+      return new Promise((res) => {
+        setTimeout(
+          () => res(new Response(JSON.stringify({ token: newToken }))),
+          100
+        );
       });
     });
 
@@ -244,11 +240,14 @@ describe("TokenRefreshInterceptor", () => {
 
     interceptor.setToken(token);
 
-    // Simulate concurrent requests during refresh
+    // Advance to trigger the refresh timer — performRefresh starts, isRefreshing = true
+    vi.advanceTimersByTime(120_000);
+
+    // Queue 5 concurrent requests while refresh is in progress (isRefreshing = true)
     const requests = Array.from({ length: 5 }, () => interceptor.getToken());
 
-    vi.advanceTimersByTime(120_000);
-    await vi.runAllTimersAsync();
+    // Advance past both 100ms fetch delays to complete the refresh
+    await vi.advanceTimersByTimeAsync(250);
 
     const results = await Promise.all(requests);
 
@@ -278,12 +277,17 @@ describe("TokenRefreshInterceptor", () => {
     const failedHandler = vi.fn();
     interceptor.onRefreshFailed(failedHandler);
 
-    const request = interceptor.getToken();
-
+    // Trigger the refresh timer — performRefresh starts, isRefreshing = true
     vi.advanceTimersByTime(120_000);
+
+    // Queue a request while refresh is in progress; catch immediately to avoid unhandled rejection
+    const request = interceptor.getToken().catch((e: unknown) => e);
+
+    // Flush microtasks to let the rejected fetch propagate through performRefresh
     await vi.runAllTimersAsync();
 
-    await expect(request).rejects.toThrow("TokenRefreshFailedError");
+    const error = await request;
+    expect(error).toMatchObject({ name: "TokenRefreshFailedError" });
     expect(failedHandler).toHaveBeenCalled();
   });
 
@@ -313,8 +317,8 @@ describe("TokenRefreshInterceptor", () => {
 
     interceptor.setToken(token);
 
-    vi.advanceTimersByTime(120_000);
-    await vi.runAllTimersAsync();
+    // Advance exactly to the scheduled refresh time (expiry - buffer = 120s)
+    await vi.advanceTimersByTimeAsync(120_000);
 
     expect(walletAdapter.sign).toHaveBeenCalledWith("challenge-tx-xdr");
   });

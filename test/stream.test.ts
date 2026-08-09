@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { SSEInvoiceEvent } from "../src/sse.js";
 import { TooManySubscriptionsError, isTooManySubscriptionsError } from "../src/errors.js";
+import { _resetCursorTrackerForTesting } from "../src/cursorTracker.js";
 
 describe("TooManySubscriptionsError", () => {
   it("has correct code and context", () => {
@@ -26,6 +27,7 @@ describe("TooManySubscriptionsError", () => {
 
 describe("subscribeToInvoice (polling)", () => {
   beforeEach(() => {
+    _resetCursorTrackerForTesting();
     vi.useFakeTimers();
   });
 

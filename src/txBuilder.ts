@@ -185,7 +185,7 @@ export class StellarSplitTxBuilder {
     const invoiceId = options?.invoiceId ?? "unknown";
     const sourceAccount = ({
       accountId: () => this.sourceAddress,
-      sequenceNumber: () => sequence,
+      sequenceNumber: () => "0",
       incrementSequenceNumber: () => {},
     } as unknown) as Account;
 

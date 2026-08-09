@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { EscrowVaultManager } from "../src/escrowVaultManager.js";
+import { EscrowVaultManager, _clearVaultStoreForTesting } from "../src/escrowVaultManager.js";
 import { ValidationError } from "../src/errors.js";
 
 // ---------------------------------------------------------------------------
@@ -12,17 +12,20 @@ const INVOICE_ID = "invoice-001";
 const ASSET = "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
 const AMOUNT = 100_000_000n; // 10 USDC
 const RECIPIENT = "GCZST3XVCDTUJ76ZAV2HA72KYTZ4KXX52HRXVWWRWXH2NBDXZWQS2FB2";
-const SIGNER_SECRET = "SBFGJMXZUO5PXRNEODTQEDTWBMJCXZUQARWRJFMZJY5LHB7XMHFKGKN"; // test key
+// Real Stellar testnet keypair (generated via Keypair.random())
+const SIGNER_SECRET = "SACMTNNDGFQ3VHH626GZHSMYP4IXFHNXALFJGH2N7EIWWWYCPVERWGWY";
+const SIGNER_PUBLIC = "GACGEUOKM4DH3W24QYRONGWCFWAZ4OGYVAKCFB26WFM2VEWC6ETCSBLS";
 
 const PAST_DATE = new Date(Date.now() - 60_000);    // 1 minute ago
 const FUTURE_DATE = new Date(Date.now() + 60_000);  // 1 minute from now
 
 // Fake vault creation response
 const FAKE_TX_HASH = "abc123deadbeef";
-const FAKE_BALANCE_ID = "00000000abc123";
+// Stellar claimable balance IDs must be 72 hex chars (8 type prefix + 64 hash)
+const FAKE_BALANCE_ID = "00000000da0d57da7d4850e7fc10d2a9d0ebc731f7afb40574c03395b17d49149b91f5be";
 
 /**
- * Patch the Horizon Server calls used internally by EscrowVaultManager.
+ * Build a fake Horizon server object returned by _getServer().
  */
 function mockHorizonServer(overrides: {
   loadAccount?: () => Promise<unknown>;
@@ -31,7 +34,7 @@ function mockHorizonServer(overrides: {
   operations?: () => Promise<unknown>;
 } = {}) {
   const fakeAccount = {
-    accountId: () => "GFAKESOURCE",
+    accountId: () => SIGNER_PUBLIC,
     sequenceNumber: () => "0",
     incrementSequenceNumber: vi.fn(),
   };
@@ -60,6 +63,7 @@ describe("EscrowVaultManager", () => {
   let manager: EscrowVaultManager;
 
   beforeEach(() => {
+    _clearVaultStoreForTesting();
     manager = new EscrowVaultManager({
       horizonUrl: HORIZON_URL,
       networkPassphrase: NETWORK_PASSPHRASE,
@@ -80,10 +84,7 @@ describe("EscrowVaultManager", () => {
     it("creates a vault and returns a holding EscrowVault record", async () => {
       const fakeServer = mockHorizonServer();
       vi.spyOn(manager as any, "_extractBalanceId").mockResolvedValue(FAKE_BALANCE_ID);
-
-      // Patch Horizon.Server constructor
-      const { Horizon } = await import("@stellar/stellar-sdk");
-      vi.spyOn(Horizon, "Server").mockImplementation(() => fakeServer as any);
+      vi.spyOn(manager as any, "_getServer").mockReturnValue(fakeServer);
 
       const vault = await manager.create(
         INVOICE_ID,
@@ -102,8 +103,7 @@ describe("EscrowVaultManager", () => {
     });
 
     it("emits escrowFunded event after creation", async () => {
-      const { Horizon } = await import("@stellar/stellar-sdk");
-      vi.spyOn(Horizon, "Server").mockImplementation(() => mockHorizonServer() as any);
+      vi.spyOn(manager as any, "_getServer").mockReturnValue(mockHorizonServer());
       vi.spyOn(manager as any, "_extractBalanceId").mockResolvedValue(FAKE_BALANCE_ID);
 
       const listener = vi.fn();
@@ -134,8 +134,7 @@ describe("EscrowVaultManager", () => {
 
   describe("getStatus()", () => {
     it("returns holding for a newly-created vault before holdUntil", async () => {
-      const { Horizon } = await import("@stellar/stellar-sdk");
-      vi.spyOn(Horizon, "Server").mockImplementation(() => mockHorizonServer() as any);
+      vi.spyOn(manager as any, "_getServer").mockReturnValue(mockHorizonServer());
       vi.spyOn(manager as any, "_extractBalanceId").mockResolvedValue(FAKE_BALANCE_ID);
 
       const vault = await manager.create(
@@ -151,7 +150,6 @@ describe("EscrowVaultManager", () => {
     });
 
     it("returns expired when holdUntil has passed and balance is not claimed", async () => {
-      const { Horizon } = await import("@stellar/stellar-sdk");
       // Balance still exists on-chain (not claimed) → expired
       const fakeServer = {
         ...mockHorizonServer(),
@@ -159,7 +157,7 @@ describe("EscrowVaultManager", () => {
           call: vi.fn().mockResolvedValue({}), // balance exists
         }),
       };
-      vi.spyOn(Horizon, "Server").mockImplementation(() => fakeServer as any);
+      vi.spyOn(manager as any, "_getServer").mockReturnValue(fakeServer);
       vi.spyOn(manager as any, "_extractBalanceId").mockResolvedValue(FAKE_BALANCE_ID);
 
       const vault = await manager.create(
@@ -178,8 +176,7 @@ describe("EscrowVaultManager", () => {
     });
 
     it("returns released for a vault that was already released", async () => {
-      const { Horizon } = await import("@stellar/stellar-sdk");
-      vi.spyOn(Horizon, "Server").mockImplementation(() => mockHorizonServer() as any);
+      vi.spyOn(manager as any, "_getServer").mockReturnValue(mockHorizonServer());
       vi.spyOn(manager as any, "_extractBalanceId").mockResolvedValue(FAKE_BALANCE_ID);
 
       const vault = await manager.create(
@@ -208,8 +205,7 @@ describe("EscrowVaultManager", () => {
 
   describe("release()", () => {
     it("transitions vault to released and emits escrowReleased", async () => {
-      const { Horizon } = await import("@stellar/stellar-sdk");
-      vi.spyOn(Horizon, "Server").mockImplementation(() => mockHorizonServer() as any);
+      vi.spyOn(manager as any, "_getServer").mockReturnValue(mockHorizonServer());
       vi.spyOn(manager as any, "_extractBalanceId").mockResolvedValue(FAKE_BALANCE_ID);
 
       const vault = await manager.create(
@@ -236,8 +232,7 @@ describe("EscrowVaultManager", () => {
     });
 
     it("throws ValidationError when attempting to release before holdUntil", async () => {
-      const { Horizon } = await import("@stellar/stellar-sdk");
-      vi.spyOn(Horizon, "Server").mockImplementation(() => mockHorizonServer() as any);
+      vi.spyOn(manager as any, "_getServer").mockReturnValue(mockHorizonServer());
       vi.spyOn(manager as any, "_extractBalanceId").mockResolvedValue(FAKE_BALANCE_ID);
 
       const vault = await manager.create(
@@ -254,8 +249,7 @@ describe("EscrowVaultManager", () => {
     });
 
     it("throws ValidationError for an already-released vault", async () => {
-      const { Horizon } = await import("@stellar/stellar-sdk");
-      vi.spyOn(Horizon, "Server").mockImplementation(() => mockHorizonServer() as any);
+      vi.spyOn(manager as any, "_getServer").mockReturnValue(mockHorizonServer());
       vi.spyOn(manager as any, "_extractBalanceId").mockResolvedValue(FAKE_BALANCE_ID);
 
       const vault = await manager.create(
@@ -279,7 +273,6 @@ describe("EscrowVaultManager", () => {
 
   describe("escrowExpired event", () => {
     it("emits escrowExpired when balance is not claimed after holdUntil", async () => {
-      const { Horizon } = await import("@stellar/stellar-sdk");
       // claimableBalance call returns success (balance still exists → expired, not claimed)
       const fakeServer = {
         ...mockHorizonServer(),
@@ -287,7 +280,7 @@ describe("EscrowVaultManager", () => {
           call: vi.fn().mockResolvedValue({}),
         }),
       };
-      vi.spyOn(Horizon, "Server").mockImplementation(() => fakeServer as any);
+      vi.spyOn(manager as any, "_getServer").mockReturnValue(fakeServer);
       vi.spyOn(manager as any, "_extractBalanceId").mockResolvedValue(FAKE_BALANCE_ID);
 
       const vault = await manager.create(

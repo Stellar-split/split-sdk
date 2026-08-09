@@ -124,6 +124,16 @@ export class TokenGateController {
     const key = cacheKey(callerAccountId, policy);
     const cached = this._cache.get(key);
     if (cached !== undefined) {
+      const strict = policy.strict !== false;
+      if (!cached.allowed && strict) {
+        const assetCode = policy.asset.split(":")[0] ?? policy.asset;
+        throw new TokenGateAccessDeniedError(
+          callerAccountId,
+          assetCode,
+          policy.minBalance,
+          cached.actualBalance,
+        );
+      }
       return { ...cached, cached: true };
     }
 

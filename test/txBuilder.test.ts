@@ -26,10 +26,18 @@ vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
 
 const { StellarSplitTxBuilder } = await import("../src/txBuilder.js");
 
+const mockAdapter = {
+  name: "MockAdapter",
+  connect: vi.fn().mockResolvedValue("G_MOCK"),
+  getAddress: vi.fn().mockResolvedValue("G_MOCK"),
+  signTransaction: vi.fn().mockImplementation((xdr: string) => Promise.resolve(xdr)),
+};
+
 const TEST_CONFIG = {
   rpcUrl: "http://localhost:8000",
   networkPassphrase: "Test",
   contractId: StrKey.encodeContract(Keypair.random().rawPublicKey()),
+  adapter: mockAdapter,
 };
 
 describe("StellarSplitTxBuilder", () => {

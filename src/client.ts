@@ -945,6 +945,25 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
     if (config.validatePassphrase !== false) {
       void this._validateStartupConfig();
     }
+
+    // OpenTelemetry instrumentation (opt-in, zero overhead when omitted/disabled).
+    if (config.otel?.enabled) {
+      const otelExporter = config.otel.exporterUrl
+        ? new OtelExporter({
+            exporterUrl: config.otel.exporterUrl,
+            serviceName: config.otel.serviceName,
+          })
+        : undefined;
+      this._otelInitPromise = createOtelHandle(config.otel, otelExporter)
+        .then((handle) => {
+          this._otel = handle;
+        })
+        .catch(() => {
+          // `@opentelemetry/api` isn't installed, or init otherwise failed --
+          // stay on the zero-overhead no-op handle rather than throwing.
+        });
+      this._instrumentOtel();
+    }
   }
 
   /**
@@ -1084,29 +1103,6 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
     });
     this._inFlightRequestPromises.set(id, trackedPromise);
     return trackedPromise;
-
-    if (config.validatePassphrase !== false) {
-      this._validateStartupConfig();
-    }
-
-    // OpenTelemetry instrumentation (opt-in, zero overhead when omitted/disabled).
-    if (config.otel?.enabled) {
-      const otelExporter = config.otel.exporterUrl
-        ? new OtelExporter({
-            exporterUrl: config.otel.exporterUrl,
-            serviceName: config.otel.serviceName,
-          })
-        : undefined;
-      this._otelInitPromise = createOtelHandle(config.otel, otelExporter)
-        .then((handle) => {
-          this._otel = handle;
-        })
-        .catch(() => {
-          // `@opentelemetry/api` isn't installed, or init otherwise failed --
-          // stay on the zero-overhead no-op handle rather than throwing.
-        });
-      this._instrumentOtel();
-    }
   }
 
   /**

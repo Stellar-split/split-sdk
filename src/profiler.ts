@@ -136,9 +136,11 @@ export class ProfilerSession {
     }
 
     const clientPrototype = StellarSplitClient.prototype as unknown as Record<string, unknown>;
-    const methodNames = Object.getOwnPropertyNames(clientPrototype).filter(
-      (key) => key !== "constructor" && typeof clientPrototype[key] === "function"
-    );
+    const methodNames = Object.getOwnPropertyNames(clientPrototype).filter((key) => {
+      if (key === "constructor") return false;
+      const desc = Object.getOwnPropertyDescriptor(clientPrototype, key);
+      return desc !== undefined && typeof desc.value === "function";
+    });
 
     const thisSession = this;
     for (const methodName of methodNames) {

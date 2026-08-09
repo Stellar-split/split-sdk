@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import { Horizon } from "@stellar/stellar-sdk";
 import type { DecodedTransactionResult, Invoice, Payment } from "./types.js";
 import { PayerAddressRequiredError } from "./errors.js";
 import { decodeTransactionResult } from "./txResultDecoder.js";
@@ -25,8 +26,8 @@ export interface PaymentReceipt {
   toJSON(): PaymentReceiptJSON;
   /** Payment status (optional). */
   status?: "pending" | "finalized";
-  /** Balance deltas for recipients (optional). */
-  effectSummary?: Record<string, bigint>;
+  /** Per-account balance deltas aggregated from transaction effects (optional). */
+  effectSummary?: Array<{ accountId: string; assetDeltas: Array<{ asset: string; delta: bigint }> }>;
 }
 
 /** Options controlling optional receipt enrichment. */
@@ -141,7 +142,7 @@ export async function generatePaymentReceipt(
   source: InvoiceFetcher | Invoice,
   invoiceIdOrPayer: string,
   payerAddress?: string,
-  resultXdr?: string
+  options?: ReceiptConfig,
 ): Promise<PaymentReceipt> {
   let receipt: PaymentReceipt;
   if ("getInvoice" in source && typeof source.getInvoice === "function") {
@@ -149,10 +150,59 @@ export async function generatePaymentReceipt(
       throw new PayerAddressRequiredError();
     }
     const invoice = await source.getInvoice(invoiceIdOrPayer);
-    return compilePaymentReceipt(invoice, payerAddress, resultXdr);
+    receipt = compilePaymentReceipt(invoice, payerAddress);
+  } else {
+    receipt = compilePaymentReceipt(source as Invoice, invoiceIdOrPayer);
   }
 
-  return compilePaymentReceipt(source as Invoice, invoiceIdOrPayer, resultXdr);
+  if (options?.includeEffects && options.server && options.txHash) {
+    const effectSummary = await _fetchEffectSummary(options.server as Horizon.Server, options.txHash);
+    (receipt as Record<string, unknown>).effectSummary = effectSummary;
+  }
+
+  return receipt;
+}
+
+async function _fetchEffectSummary(
+  server: Horizon.Server,
+  txHash: string,
+): Promise<Array<{ accountId: string; assetDeltas: Array<{ asset: string; delta: bigint }> }>> {
+  const page = await (server as unknown as { effects(): { forTransaction(h: string): { call(): Promise<{ records: unknown[] }> } } })
+    .effects()
+    .forTransaction(txHash)
+    .call();
+
+  const byAccount = new Map<string, Map<string, bigint>>();
+
+  for (const effect of page.records as Array<{
+    type: string;
+    account: string;
+    asset_type: string;
+    asset_code?: string;
+    asset_issuer?: string;
+    amount: string;
+  }>) {
+    if (effect.type !== "account_debited" && effect.type !== "account_credited") continue;
+
+    const assetKey =
+      effect.asset_type === "native"
+        ? "native"
+        : `${effect.asset_code}:${effect.asset_issuer}`;
+
+    const amountStroops = BigInt(Math.round(parseFloat(effect.amount) * 10_000_000));
+    const delta = effect.type === "account_debited" ? -amountStroops : amountStroops;
+
+    if (!byAccount.has(effect.account)) {
+      byAccount.set(effect.account, new Map());
+    }
+    const assetMap = byAccount.get(effect.account)!;
+    assetMap.set(assetKey, (assetMap.get(assetKey) ?? 0n) + delta);
+  }
+
+  return Array.from(byAccount.entries()).map(([accountId, assetMap]) => ({
+    accountId,
+    assetDeltas: Array.from(assetMap.entries()).map(([asset, delta]) => ({ asset, delta })),
+  }));
 }
 
 /**

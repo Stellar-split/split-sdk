@@ -13,6 +13,7 @@
 import { Asset, Horizon, Operation } from "@stellar/stellar-sdk";
 import { PathNotFoundError, PathRouterError } from "./errors.js";
 import { PathQueryBuilder } from "./pathQueryBuilder.js";
+import { OrderBookSampler, type FillEstimate } from "./orderBookSampler.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -99,6 +100,9 @@ export interface PathRouterConfig {
 export class PathRouter {
   private readonly server: Horizon.Server;
   private readonly queryBuilder: PathQueryBuilder;
+  private readonly slippageTolerancePercent: number;
+  private readonly onHighSlippage: ((warning: HighSlippageWarning) => void) | undefined;
+  private readonly sampler: OrderBookSampler;
 
   /**
    * @param horizonUrl - Horizon server URL.
@@ -135,6 +139,27 @@ export class PathRouter {
   async findStrictSendPath(req: PathRequest): Promise<PathResult> {
     const sourceAssetType = assetType(req.sourceAsset);
     const destAssetType = assetType(req.destinationAsset);
+
+    // Sample order book for slippage before path query
+    try {
+      const estimate = await this.sampler.sample(
+        req.sourceAsset,
+        req.destinationAsset,
+        "sell",
+        req.sourceAmount,
+      );
+      if (estimate.slippagePercent > this.slippageTolerancePercent && this.onHighSlippage) {
+        this.onHighSlippage({
+          baseAsset: sourceAssetType,
+          counterAsset: destAssetType,
+          slippagePercent: estimate.slippagePercent,
+          slippageTolerancePercent: this.slippageTolerancePercent,
+          fillEstimate: estimate,
+        });
+      }
+    } catch {
+      // Slippage check is best-effort; don't block path finding on sampler errors
+    }
 
     try {
       const query = this.queryBuilder.forStrictSend({

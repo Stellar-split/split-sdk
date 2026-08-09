@@ -357,7 +357,7 @@ describe("InvoicePaymentStreamProcessor", () => {
               }
               listeners.get(event)?.push(handler);
             },
-          } as any,
+          } as any),
           stream: async function* (invoiceId: string, opts?: any) {
             for await (const item of createMockProcessor(
               mockEventSource,
@@ -394,7 +394,7 @@ describe("InvoicePaymentStreamProcessor", () => {
               }
               listeners.get(event)?.push(handler);
             },
-          } as any,
+          } as any),
           stream: async function* (invoiceId: string, opts?: any) {
             for await (const item of createMockProcessor(
               mockEventSource,
@@ -444,7 +444,7 @@ describe("InvoicePaymentStreamProcessor", () => {
 
           for (const event of response.events) {
             yield event;
-            cursor = { ledger: event.ledger || cursor.ledger, offset: 0 };
+            cursor = { ledger: (event.ledger || cursor.ledger) + 1, offset: 0 };
           }
 
           await storage.setCursor(invoiceId, cursor);

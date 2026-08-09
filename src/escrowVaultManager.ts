@@ -68,6 +68,11 @@ export interface EscrowVaultManagerOptions {
 
 const vaultStore = new Map<string, EscrowVault>();
 
+/** @internal test-only */
+export function _clearVaultStoreForTesting(): void {
+  vaultStore.clear();
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -135,6 +140,12 @@ export class EscrowVaultManager extends TypedEventEmitter<EscrowEventMap> {
 
   private _pollTimer: ReturnType<typeof setInterval> | null = null;
 
+  private _getServer(): Horizon.Server {
+    return new Horizon.Server(this.horizonUrl, {
+      allowHttp: this.horizonUrl.startsWith("http://"),
+    });
+  }
+
   constructor(options: EscrowVaultManagerOptions) {
     super();
     this.horizonUrl = options.horizonUrl.replace(/\/$/, "");
@@ -172,9 +183,7 @@ export class EscrowVaultManager extends TypedEventEmitter<EscrowEventMap> {
     }
 
     const stellarAsset = parseAsset(asset);
-    const server = new Horizon.Server(this.horizonUrl, {
-      allowHttp: this.horizonUrl.startsWith("http://"),
-    });
+    const server = this._getServer();
 
     const { Keypair } = await import("@stellar/stellar-sdk");
     const sourceKeypair = Keypair.fromSecret(sourceSecret);
@@ -272,9 +281,7 @@ export class EscrowVaultManager extends TypedEventEmitter<EscrowEventMap> {
       );
     }
 
-    const server = new Horizon.Server(this.horizonUrl, {
-      allowHttp: this.horizonUrl.startsWith("http://"),
-    });
+    const server = this._getServer();
 
     const { Keypair } = await import("@stellar/stellar-sdk");
     const signerKeypair = Keypair.fromSecret(signerSecret);
@@ -292,7 +299,7 @@ export class EscrowVaultManager extends TypedEventEmitter<EscrowEventMap> {
     })
       .addOperation(
         Operation.claimClaimableBalance({
-          balanceID: vault.balanceId,
+          balanceId: vault.balanceId,
         }),
       )
       .setTimeout(30)
@@ -423,9 +430,7 @@ export class EscrowVaultManager extends TypedEventEmitter<EscrowEventMap> {
    * Returns `true` if the balance is no longer present (i.e. claimed).
    */
   private async _checkClaimedOnChain(vault: EscrowVault): Promise<boolean> {
-    const server = new Horizon.Server(this.horizonUrl, {
-      allowHttp: this.horizonUrl.startsWith("http://"),
-    });
+    const server = this._getServer();
     try {
       await server.claimableBalance(vault.balanceId).call();
       // Balance still exists → not claimed

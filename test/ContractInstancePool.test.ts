@@ -254,6 +254,8 @@ describe("ContractInstancePool", () => {
     const maxSize = options?.maxSize ?? 20;
     let accessOrder: string[] = [];
 
+    const inflight = new Map<string, Promise<ContractWithFootprint>>();
+
     return {
       async get(contractId: string): Promise<ContractWithFootprint> {
         const now = Date.now();
@@ -267,29 +269,39 @@ describe("ContractInstancePool", () => {
           return cached.data;
         }
 
-        // Fetch from server
-        const data = await mockServer.getContractData(contractId);
-
-        // Manage cache size
-        if (cache.size >= maxSize && !cache.has(contractId)) {
-          // Evict LRU
-          const lruId = accessOrder.shift();
-          if (lruId) {
-            cache.delete(lruId);
-          }
+        // Deduplicate concurrent requests for the same contract
+        if (inflight.has(contractId)) {
+          return inflight.get(contractId)!;
         }
 
-        const contractData = {
-          xdr: data.xdr,
-        };
+        const fetchPromise = (async () => {
+          try {
+            const data = await mockServer.getContractData(contractId, { ttlMs });
 
-        cache.set(contractId, {
-          data: contractData,
-          timestamp: now,
-          wasmHash: data.wasmHash,
-        });
+            // Manage cache size
+            if (cache.size >= maxSize && !cache.has(contractId)) {
+              const lruId = accessOrder.shift();
+              if (lruId) {
+                cache.delete(lruId);
+              }
+            }
 
-        return contractData;
+            const contractData = { xdr: data.xdr };
+
+            cache.set(contractId, {
+              data: contractData,
+              timestamp: now,
+              wasmHash: data.wasmHash,
+            });
+
+            return contractData;
+          } finally {
+            inflight.delete(contractId);
+          }
+        })();
+
+        inflight.set(contractId, fetchPromise);
+        return fetchPromise;
       },
 
       async warmUp(contractIds: string[]): Promise<void> {
