@@ -3,6 +3,7 @@
  */
 import { Invoice } from "./types";
 import { Account, MuxedAccount, StrKey } from "@stellar/stellar-sdk";
+import { StellarSplitError } from "./errors.js";
 
 /** Number of decimal places used by Stellar token amounts (stroops). */
 const STROOPS_PER_UNIT = 10_000_000n;
@@ -85,6 +86,32 @@ export function isExpired(deadline: number): boolean {
 export function truncateAddress(address: string, chars = 4): string {
   if (address.length <= chars * 2 + 3) return address;
   return `${address.slice(0, chars)}...${address.slice(-chars)}`;
+}
+
+/**
+ * Format a Stellar address for display by keeping the leading and trailing
+ * characters and replacing the middle with an ellipsis.
+ *
+ * Defaults to 5 leading and 4 trailing characters: "GABCD...WXYZ".
+ * Throws a {@link StellarSplitError} with code `INVALID_RECIPIENT` when the
+ * address is too short to format.
+ *
+ * @example
+ * formatAddress("GABCDEFGHIJKLMNOPQRSTUVWXYZ") // "GABCD...WXYZ"
+ */
+export function formatAddress(
+  address: string,
+  opts: { leading?: number; trailing?: number } = {}
+): string {
+  const leading = opts.leading ?? 5;
+  const trailing = opts.trailing ?? 4;
+  if (address.length < leading + trailing + 3) {
+    throw new StellarSplitError(
+      `Address is too short to format: expected at least ${leading + trailing + 3} characters, got ${address.length}`,
+      "INVALID_RECIPIENT"
+    );
+  }
+  return `${address.slice(0, leading)}...${address.slice(-trailing)}`;
 }
 
 /**

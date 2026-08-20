@@ -11,6 +11,7 @@
 
 import type { CollectionPage, HorizonPaginatorOptions } from "./types.js";
 import { buildCursorKey, getDefaultCursorStore } from "./cursorTracker.js";
+import { StellarSplitError } from "./errors.js";
 
 /** Default namespace for cursor store keys. */
 const DEFAULT_NAMESPACE = "horizon";
@@ -94,4 +95,55 @@ export async function collectAll<T>(
     results.push(record);
   }
   return results;
+}
+
+/**
+ * Page a plain array in memory, returning a slice with pagination metadata.
+ *
+ * @param items - The full array of items to paginate.
+ * @param opts - Pagination options: `page` (1-indexed) and `pageSize` (1-200).
+ * @returns An object with `data`, `total`, `totalPages`, `hasNext`, and `hasPrev`.
+ *
+ * @throws {StellarSplitError} If `pageSize` is outside the range 1-200.
+ *
+ * @example
+ * ```typescript
+ * const result = paginateArray([1, 2, 3, 4, 5], { page: 1, pageSize: 2 });
+ * // { data: [1, 2], total: 5, totalPages: 3, hasNext: true, hasPrev: false }
+ * ```
+ */
+export function paginateArray<T>(
+  items: T[],
+  opts: { page: number; pageSize: number },
+): { data: T[]; total: number; totalPages: number; hasNext: boolean; hasPrev: boolean } {
+  const { page, pageSize } = opts;
+
+  if (pageSize < 1 || pageSize > 200) {
+    throw new StellarSplitError("pageSize must be between 1 and 200", "INVALID_RECIPIENT");
+  }
+
+  const total = items.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  if (page < 1 || page > totalPages) {
+    return {
+      data: [],
+      total,
+      totalPages,
+      hasNext: false,
+      hasPrev: page > 1,
+    };
+  }
+
+  const startIndex = (page - 1) * pageSize;
+  const endIndex = Math.min(startIndex + pageSize, total);
+  const data = items.slice(startIndex, endIndex);
+
+  return {
+    data,
+    total,
+    totalPages,
+    hasNext: page < totalPages,
+    hasPrev: page > 1,
+  };
 }
