@@ -989,7 +989,7 @@ export type {
 // Split ratio validator
 // ---------------------------------------------------------------------------
 
-export { validateSplitRatios, validateSplitRatiosOrThrow, ratiosToRecipients } from "./validators/splitRatioValidator.js";
+export { validateSplitRatios, validateSplitRatiosOrThrow, ratiosToRecipients, validateSplitTotal, normalizeSplits } from "./validators/splitRatioValidator.js";
 export type {
   RecipientShare,
   SplitConfig,
@@ -1366,3 +1366,10 @@ export type {
   SubmitTransactionOptions,
   SubmitServer,
 } from "./transaction/submit.js";
+
+// ---------------------------------------------------------------------------
+// #614 — Memo-content search
+// ---------------------------------------------------------------------------
+
+export { searchByMemo } from "./search.js";
+export type { SearchQuery, SearchResult } from "./search.js";

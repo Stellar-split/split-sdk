@@ -71,3 +71,61 @@ describe("SimpleCache LRU", () => {
     expect(stats.evictions).toBe(0);
   });
 });
+
+describe("SimpleCache has()", () => {
+  it("returns true when key exists and is not expired", () => {
+    const cache = new SimpleCache<string>({ ttlMs: 10000 });
+    cache.set("key", "value");
+    expect(cache.has("key")).toBe(true);
+  });
+
+  it("returns false when key does not exist", () => {
+    const cache = new SimpleCache<string>({ ttlMs: 10000 });
+    expect(cache.has("nonexistent")).toBe(false);
+  });
+
+  it("returns false for expired key", () => {
+    const cache = new SimpleCache<string>({ ttlMs: 1 });
+    cache.set("key", "value");
+    // Wait for TTL to expire
+    const start = Date.now();
+    while (Date.now() - start < 5) {} // busy-wait ~5ms
+    expect(cache.has("key")).toBe(false);
+  });
+
+  it("returns false when cache is disabled", () => {
+    const cache = new SimpleCache<string>();
+    cache.set("key", "value");
+    expect(cache.has("key")).toBe(false);
+  });
+});
+
+describe("SimpleCache purgeExpired()", () => {
+  it("removes only expired entries", () => {
+    const cache = new SimpleCache<string>({ ttlMs: 10000 });
+    cache.set("fresh", "value");
+    cache.set("stale", "value");
+    // Manually set the stale entry to expired
+    const store = (cache as any).store as Map<string, any>;
+    const staleEntry = store.get("stale");
+    if (staleEntry) {
+      staleEntry.expiresAt = Date.now() - 1;
+    }
+    const removed = cache.purgeExpired();
+    expect(removed).toBe(1);
+    expect(cache.has("fresh")).toBe(true);
+    expect(cache.has("stale")).toBe(false);
+  });
+
+  it("returns 0 when nothing is expired", () => {
+    const cache = new SimpleCache<string>({ ttlMs: 10000 });
+    cache.set("a", "1");
+    cache.set("b", "2");
+    expect(cache.purgeExpired()).toBe(0);
+  });
+
+  it("returns 0 when cache is disabled", () => {
+    const cache = new SimpleCache<string>();
+    expect(cache.purgeExpired()).toBe(0);
+  });
+});

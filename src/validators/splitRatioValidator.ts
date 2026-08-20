@@ -11,7 +11,7 @@
  * actionable error objects.
  */
 
-import { ValidationError } from "../errors.js";
+import { StellarSplitError, ValidationError } from "../errors.js";
 import type { Recipient } from "../types.js";
 
 // ---------------------------------------------------------------------------
@@ -177,4 +177,54 @@ export function ratiosToRecipients(
     address: s.address,
     amount: amounts[i]!,
   }));
+}
+
+/**
+ * Validate that the sum of an array of bigint splits equals the expected total.
+ *
+ * @param splits - Array of bigint split amounts
+ * @param totalBasisPoints - Expected total in basis points (default: 10000n = 100%)
+ * @throws StellarSplitError with code INVALID_RECIPIENT if sum !== total
+ */
+export function validateSplitTotal(
+  splits: bigint[],
+  totalBasisPoints?: bigint,
+): void {
+  const total = totalBasisPoints ?? 10000n;
+
+  if (splits.length === 0) {
+    throw new StellarSplitError(
+      "splits must sum to 10000 basis points",
+      "INVALID_RECIPIENT",
+    );
+  }
+
+  const sum = splits.reduce((acc, s) => acc + s, 0n);
+  if (sum !== total) {
+    throw new StellarSplitError(
+      "splits must sum to 10000 basis points",
+      "INVALID_RECIPIENT",
+    );
+  }
+}
+
+/**
+ * Normalize an array of bigint amounts so they sum to exactly the given total.
+ * Distributes the rounding remainder to the last element.
+ *
+ * @param amounts - Array of bigint amounts to normalize
+ * @param total - The target total sum
+ * @returns A new array with the remainder distributed to the last element
+ */
+export function normalizeSplits(
+  amounts: bigint[],
+  total: bigint,
+): bigint[] {
+  const sum = amounts.reduce((acc, s) => acc + s, 0n);
+  if (sum === total) return [...amounts];
+
+  const remainder = total - sum;
+  const result = [...amounts];
+  result[result.length - 1] = (result[result.length - 1] ?? 0n) + remainder;
+  return result;
 }

@@ -63,6 +63,41 @@ export class SimpleCache<T> {
     return entry.value;
   }
 
+  /**
+   * Check whether a key exists and has not expired.
+   *
+   * @param key - Cache key to check
+   * @returns `true` if the key exists and is unexpired, `false` otherwise
+   */
+  has(key: string): boolean {
+    if (!this.enabled) return false;
+    const entry = this.store.get(key);
+    if (!entry) return false;
+    if (Date.now() > entry.expiresAt) {
+      this.store.delete(key);
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Remove all expired entries in a single sweep.
+   *
+   * @returns The number of entries removed
+   */
+  purgeExpired(): number {
+    if (!this.enabled) return 0;
+    const now = Date.now();
+    let removed = 0;
+    for (const [key, entry] of this.store.entries()) {
+      if (now > entry.expiresAt) {
+        this.store.delete(key);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
   set(key: string, value: T): void {
     if (!this.enabled) return;
     const method = key.split(":")[0] || key;
