@@ -1366,3 +1366,15 @@ export type {
   SubmitTransactionOptions,
   SubmitServer,
 } from "./transaction/submit.js";
+
+// ---------------------------------------------------------------------------
+// #608 — formatAddress utility for truncating Stellar addresses
+// ---------------------------------------------------------------------------
+
+export { formatAddress } from "./utils.js";
+
+// ---------------------------------------------------------------------------
+// #618 — Generic paginateArray helper for in-memory array pagination
+// ---------------------------------------------------------------------------
+
+export { paginateArray } from "./horizonPaginator.js";
