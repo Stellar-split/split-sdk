@@ -576,7 +576,6 @@ export type { WebhookRecord, WebhookReplayStore } from "./webhookReplay.js";
 export {
   createWebhookMiddleware,
   generateWebhookSignature,
-  verifyWebhookSignature,
   parseWebhookPayload,
   isValidEventType,
   isWebhookRequest,
@@ -601,6 +600,9 @@ export type {
   InvoiceCancelledData,
   InvoiceExpiredData,
 } from "./webhookMiddleware.js";
+
+// Standalone webhook signature verification (Issue #617)
+export { verifyWebhookSignature, WebhookVerificationError } from "./webhooks/verify.js";
 // ---------------------------------------------------------------------------
 // Lazy factories for heavy modules
 // ---------------------------------------------------------------------------
