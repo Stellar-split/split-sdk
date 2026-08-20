@@ -10,6 +10,7 @@
  */
 
 import { auditSplitRounding, RoundingOverflowError } from "./rounding.js";
+import { StellarSplitError } from "../errors.js";
 import type { SplitLine, AuditedSplitResult } from "../types.js";
 
 // Re-export the error so callers can import it from the calculator.
@@ -65,4 +66,61 @@ export function computeAmounts(
   splits: SplitLine[],
 ): Record<string, bigint> {
   return calculateSplitAmounts(total, splits).amounts;
+}
+
+// ---------------------------------------------------------------------------
+// formatSplitPercentage
+// ---------------------------------------------------------------------------
+
+/**
+ * Format a basis-point value as a human-readable percentage string.
+ *
+ * @param basisPoints - Value in basis points (0–10000, where 10000 = 100%).
+ * @param opts        - Optional configuration.
+ * @param opts.decimals - Number of decimal places (0–4, default 2).
+ * @returns Formatted percentage string, e.g. `"33.33%"`.
+ *
+ * @throws {StellarSplitError} When `basisPoints` is outside the valid range.
+ * @throws {RangeError} When `decimals` is outside the valid range.
+ *
+ * @example
+ * ```ts
+ * import { formatSplitPercentage } from "./calculator.js";
+ *
+ * formatSplitPercentage(3333n);           // → "33.33%"
+ * formatSplitPercentage(10000n);          // → "100.00%"
+ * formatSplitPercentage(1n);              // → "0.01%"
+ * formatSplitPercentage(3333n, { decimals: 0 }); // → "33%"
+ * ```
+ */
+export function formatSplitPercentage(
+  basisPoints: bigint,
+  opts?: { decimals?: number },
+): string {
+  if (basisPoints < 0n || basisPoints > 10000n) {
+    throw new StellarSplitError(
+      `basisPoints must be between 0 and 10000, got ${basisPoints}`,
+      "INVALID_RECIPIENT",
+    );
+  }
+
+  const decimals = opts?.decimals ?? 2;
+  if (decimals < 0 || decimals > 4) {
+    throw new RangeError(`decimals must be between 0 and 4, got ${decimals}`);
+  }
+
+  // Split into integer and fractional parts (2 fractional digits from basis points)
+  const intPart = basisPoints / 100n;
+  const fracPart = Number(basisPoints % 100n);
+
+  if (decimals === 0) {
+    return `${intPart}%`;
+  }
+
+  const fracStr = fracPart.toString().padStart(2, "0");
+  if (decimals <= 2) {
+    return `${intPart}.${fracStr.slice(0, decimals)}%`;
+  }
+  // decimals > 2: pad with trailing zeros
+  return `${intPart}.${fracStr.padEnd(decimals, "0")}%`;
 }

@@ -1366,3 +1366,9 @@ export type {
   SubmitTransactionOptions,
   SubmitServer,
 } from "./transaction/submit.js";
+
+// ---------------------------------------------------------------------------
+// #620 — formatSplitPercentage: basis-points to percentage string
+// ---------------------------------------------------------------------------
+
+export { formatSplitPercentage } from "./invoice/calculator.js";
