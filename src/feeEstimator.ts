@@ -10,6 +10,7 @@ export type { FeeSurgeConfig, FeeRecommendation, CongestionLevel } from "./feeSu
  * `./feeSurgeDetector.js`.
  */
 
+import { StellarSplitError } from "./errors.js";
 import {
   Account,
   TransactionBuilder,
@@ -21,6 +22,48 @@ export interface FeeEstimate {
   baseFee: string;
   resourceFee: string;
   total: string;
+}
+
+/** Fee stats used by {@link estimateFeeForAmount}. */
+export interface FeeStats {
+  /** Base fee (stroops per operation). */
+  baseFee: bigint;
+  /** 50th-percentile (median) fee observed (stroops per operation). */
+  p50Fee: bigint;
+  /** 99th-percentile fee observed (stroops per operation). */
+  p99Fee: bigint;
+}
+
+/**
+ * Estimate the absolute fee (in stroops) and percentage for a payment amount.
+ *
+ * The estimated fee is derived from the base fee in `feeStats` and never
+ * converted to a fractional number — it stays a `bigint` until the caller
+ * computes the percentage.
+ *
+ * @param amount - Payment amount in stroops.
+ * @param feeStats - Current on-chain fee statistics.
+ * @returns Estimated fee in stroops, the fee as a percentage of the amount,
+ *   and the total (amount + fee).
+ * @throws {StellarSplitError} with code `INVALID_RECIPIENT` when `amount` is negative.
+ */
+export function estimateFeeForAmount(
+  amount: bigint,
+  feeStats: FeeStats,
+): { feeLumens: bigint; feePercent: number; totalWithFee: bigint } {
+  if (amount < 0n) {
+    throw new StellarSplitError(
+      "Amount cannot be negative",
+      "INVALID_RECIPIENT",
+    );
+  }
+
+  const feeLumens = feeStats.baseFee;
+  const totalWithFee = amount + feeLumens;
+
+  const feePercent = amount === 0n ? 0 : (Number(feeLumens) / Number(amount)) * 100;
+
+  return { feeLumens, feePercent, totalWithFee };
 }
 
 export interface FeeEstimateError {

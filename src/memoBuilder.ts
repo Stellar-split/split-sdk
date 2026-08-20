@@ -165,3 +165,68 @@ export function isStellarSplitMemo(memo: Memo): boolean {
   const value = memo.value as string;
   return typeof value === "string" && value.startsWith(MEMO_PREFIX);
 }
+
+// ---------------------------------------------------------------------------
+// #610 — Simple invoice payment memo builder and parser
+// ---------------------------------------------------------------------------
+
+const PAYMENT_MEMO_PREFIX = "split:";
+const MAX_TEXT_MEMO_BYTES = 28;
+
+/**
+ * Build a canonical text memo string for an invoice payment.
+ *
+ * Format: `split:{invoiceId}` base case, or `split:{invoiceId}:t{tranche}`
+ * when a tranche number is provided. The result is truncated to 28 bytes
+ * (Stellar text memo limit) — the truncation avoids cutting a multi-byte UTF-8
+ * character in the middle.
+ *
+ * @param invoiceId - The invoice ID to encode.
+ * @param opts - Optional tranche number.
+ * @returns A string no longer than 28 bytes when UTF-8 encoded.
+ */
+export function buildPaymentMemo(
+  invoiceId: string,
+  opts?: { tranche?: number },
+): string {
+  let memo = opts?.tranche !== undefined
+    ? `${PAYMENT_MEMO_PREFIX}${invoiceId}:t${opts.tranche}`
+    : `${PAYMENT_MEMO_PREFIX}${invoiceId}`;
+
+  // Truncate to 28 bytes, avoiding mid-UTF-8-character cut
+  while (Buffer.byteLength(memo, "utf8") > MAX_TEXT_MEMO_BYTES) {
+    // Remove the last character (handles surrogate pairs as a unit)
+    const lastChar = memo.codePointAt(memo.length - 1);
+    memo = memo.slice(0, -(lastChar !== undefined && memo.length > 1 && memo.codePointAt(memo.length - 2)! >= 0xd800 && lastChar <= 0xdfff ? 2 : 1));
+  }
+
+  return memo;
+}
+
+/**
+ * Parse a payment memo string back into its components.
+ *
+ * @param memo - The memo string to parse.
+ * @returns An object with `invoiceId` and optional `tranche`, or `null` if the
+ *   memo does not start with the `split:` prefix.
+ */
+export function parsePaymentMemo(
+  memo: string,
+): { invoiceId: string; tranche?: number } | null {
+  if (!memo.startsWith(PAYMENT_MEMO_PREFIX)) {
+    return null;
+  }
+
+  const payload = memo.slice(PAYMENT_MEMO_PREFIX.length); // e.g. "inv_123:t1"
+
+  // Check for tranche pattern: ":t<NUMBER>" at the end
+  const trancheMatch = payload.match(/^(.+?):t(\d+)$/);
+  if (trancheMatch) {
+    return {
+      invoiceId: trancheMatch[1]!,
+      tranche: parseInt(trancheMatch[2]!, 10),
+    };
+  }
+
+  return { invoiceId: payload };
+}

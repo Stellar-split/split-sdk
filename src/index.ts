@@ -1372,3 +1372,16 @@ export type {
 // ---------------------------------------------------------------------------
 
 export { compressMetadata, decompressMetadata } from "./compression.js";
+
+// ---------------------------------------------------------------------------
+// #610 — Invoice payment memo builder and parser
+// ---------------------------------------------------------------------------
+
+export { buildPaymentMemo, parsePaymentMemo } from "./memoBuilder.js";
+
+// ---------------------------------------------------------------------------
+// #615 — Fee estimation for a payment amount
+// ---------------------------------------------------------------------------
+
+export { estimateFeeForAmount } from "./feeEstimator.js";
+export type { FeeStats } from "./feeEstimator.js";
