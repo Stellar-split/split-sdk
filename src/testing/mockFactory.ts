@@ -138,6 +138,7 @@ export function createMockSdk(overrides?: Partial<MockStellarSplitSDK>): MockSte
         token: params.token,
         deadline: params.deadline,
         funded: 0n,
+        createdAt: Math.floor(Date.now() / 1000),
         payments: [],
         status: "Pending",
       };
@@ -154,6 +155,7 @@ export function createMockSdk(overrides?: Partial<MockStellarSplitSDK>): MockSte
         clonedFrom: sourceId,
         payments: [],
         funded: 0n,
+        createdAt: Math.floor(Date.now() / 1000),
       };
       _state.invoices.set(newInvoice.id, newInvoice);
       return newInvoice.id;
@@ -175,6 +177,7 @@ export function createMockSdk(overrides?: Partial<MockStellarSplitSDK>): MockSte
           token: p.token,
           deadline: p.deadline,
           funded: 0n,
+          createdAt: Math.floor(Date.now() / 1000),
           payments: [],
           status: "Pending",
         };
@@ -193,6 +196,7 @@ export function createMockSdk(overrides?: Partial<MockStellarSplitSDK>): MockSte
         token: "native",
         deadline: Math.floor(Date.now() / 1000) + 86400,
         funded: 0n,
+        createdAt: Math.floor(Date.now() / 1000),
         payments: [],
         status: "Pending" as const,
       };

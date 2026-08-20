@@ -33,6 +33,7 @@ export function createMockInvoice(overrides: Partial<Invoice> = {}): Invoice {
     token: DEFAULT_TOKEN,
     deadline: now + 30 * SECONDS_PER_DAY,
     funded: 10_000_000n,
+    createdAt: now,
     status: "Pending",
     payments: [createMockPayment()],
     ...overrides,

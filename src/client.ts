@@ -5752,6 +5752,11 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
       cloneDepth:
         typeof raw.cloneDepth === "number" ? raw.cloneDepth : undefined,
       groupId: raw.groupId as string | undefined,
+      createdAt: typeof raw.createdAt === "number"
+        ? raw.createdAt
+        : typeof raw.created_at === "number"
+          ? raw.created_at
+          : Math.floor(Date.now() / 1000),
     };
   }
 

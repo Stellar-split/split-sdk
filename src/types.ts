@@ -283,6 +283,8 @@ export interface Invoice {
   parentInvoiceId?: string;
   /** Ordered record of status transitions applied via InvoiceStateMachine. */
   statusHistory?: TransitionRecord[];
+  /** Unix timestamp (seconds) when the invoice was created. */
+  createdAt: number;
   /** Depth in the clone chain (0 = root, 1 = cloned from root, etc.). */
   cloneDepth?: number;
   /** The address of the NFT contract used for gating, if any. */

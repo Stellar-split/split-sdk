@@ -1033,7 +1033,7 @@ export type {
   ChannelReconciliationResult,
   ChannelStateFetcher,
 } from "./channelReconciler.js";
-export { getInvoiceStats, computeInvoiceStats } from "./invoiceStats.js";
+export { getInvoiceStats, computeInvoiceStats, getInvoiceAge, getFundingVelocity } from "./invoiceStats.js";
 
 export { previewSplitRules } from "./splitPreview.js";
 
