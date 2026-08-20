@@ -63,6 +63,49 @@ export interface InvoiceFetcher {
   getInvoice(invoiceId: string): Promise<Invoice>;
 }
 
+// ---------------------------------------------------------------------------
+// Receipt registry (module-level singleton)
+// ---------------------------------------------------------------------------
+
+/**
+ * Module-level receipt registry keyed by transaction hash.
+ *
+ * Receipts registered here are retained in memory (per process) and can be
+ * looked up by their transaction hash after creation. Useful for workflow
+ * steps that need to correlate a previously generated receipt with a later
+ * transaction fingerprint.
+ */
+const receiptRegistry = new Map<string, PaymentReceipt>();
+
+/**
+ * Store a receipt in the module-level registry, keyed by `receipt.proofHash`/`txHash`.
+ * Receipts keyed by the same hash are overwritten.
+ */
+export function registerReceipt(receipt: PaymentReceipt): void {
+  const key = (receipt as PaymentReceipt & { txHash?: string }).txHash ?? receipt.proofHash;
+  receiptRegistry.set(key, receipt);
+}
+
+/**
+ * Retrieve a previously registered receipt by its transaction hash
+ * (or proof hash). Returns `null` when no receipt matches.
+ */
+export function getReceiptByTxHash(txHash: string): PaymentReceipt | null {
+  return receiptRegistry.get(txHash) ?? null;
+}
+
+/**
+ * Return all registered receipts ordered by `generatedAt` ascending.
+ */
+export function getAllReceipts(): PaymentReceipt[] {
+  return [...receiptRegistry.values()].sort((a, b) => a.generatedAt - b.generatedAt);
+}
+
+/** Clear the module-level registry. Useful for test teardown. */
+export function clearReceipts(): void {
+  receiptRegistry.clear();
+}
+
 /**
  * Compile a payment receipt synchronously from a known Invoice object.
  * Works for both completed and in-progress invoices.

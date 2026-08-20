@@ -152,4 +152,78 @@ describe("InvoiceReminderScheduler", () => {
     expect(events).toHaveLength(0);
     expect(scheduler.list()[0]!.status).toBe("expired");
   });
+
+  it("scheduleReminder returns a unique opaque reminder ID", async () => {
+    scheduler = new InvoiceReminderScheduler(() => DUE_AT);
+    const id1 = await scheduler.scheduleReminder(INVOICE_ID, 60 * 60 * 1000);
+    const id2 = await scheduler.scheduleReminder(INVOICE_ID, 30 * 60 * 1000);
+
+    expect(typeof id1).toBe("string");
+    expect(id1).not.toBe(id2);
+  });
+
+  it("cancelReminder cancels a pending reminder and prevents it from firing", async () => {
+    scheduler = new InvoiceReminderScheduler(() => DUE_AT);
+    const events: ReminderEvent[] = [];
+    scheduler.on("invoiceReminderDue", (e) => events.push(e));
+
+    const id = await scheduler.scheduleReminder(INVOICE_ID, 60 * 60 * 1000);
+
+    expect(scheduler.cancelReminder(id)).toBe(true);
+
+    vi.advanceTimersByTime(24 * 60 * 60 * 1000 + 1);
+    expect(events).toHaveLength(0);
+    expect(scheduler.list()[0]!.status).toBe("cancelled");
+  });
+
+  it("cancelReminder returns false for an unknown ID", async () => {
+    scheduler = new InvoiceReminderScheduler(() => DUE_AT);
+
+    expect(scheduler.cancelReminder("does-not-exist")).toBe(false);
+  });
+
+  it("cancelReminder returns false for an already-fired reminder", async () => {
+    scheduler = new InvoiceReminderScheduler(() => DUE_AT);
+    const events: ReminderEvent[] = [];
+    scheduler.on("invoiceReminderDue", (e) => events.push(e));
+
+    const id = await scheduler.scheduleReminder(INVOICE_ID, 60 * 60 * 1000);
+    vi.advanceTimersByTime(DUE_AT - 60 * 60 * 1000 - NOW);
+    expect(events).toHaveLength(1);
+
+    expect(scheduler.cancelReminder(id)).toBe(false);
+  });
+
+  it("getPendingReminders excludes cancelled and fired reminders", async () => {
+    scheduler = new InvoiceReminderScheduler(() => DUE_AT);
+    const keepId = await scheduler.scheduleReminder(INVOICE_ID, 60 * 60 * 1000);
+    const cancelId = await scheduler.scheduleReminder(INVOICE_ID, 30 * 60 * 1000);
+    const fireId = await scheduler.scheduleReminder(INVOICE_ID, 12 * 60 * 60 * 1000);
+
+    scheduler.cancelReminder(cancelId);
+    vi.advanceTimersByTime(DUE_AT - 12 * 60 * 60 * 1000 - NOW);
+    // fireId fired; keepId (60m before due) and cancelId (30m before due) not reached yet
+
+    const pending = scheduler.getPendingReminders();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.reminderId).toBe(keepId);
+    expect(pending[0]!.invoiceId).toBe(INVOICE_ID);
+    expect(pending[0]!.remindAt).toBe(DUE_AT - 60 * 60 * 1000);
+  });
+
+  it("clearAllReminders removes all scheduled reminders and timers", async () => {
+    scheduler = new InvoiceReminderScheduler(() => DUE_AT);
+    const events: ReminderEvent[] = [];
+    scheduler.on("invoiceReminderDue", (e) => events.push(e));
+
+    await scheduler.scheduleReminder(INVOICE_ID, 60 * 60 * 1000);
+    await scheduler.scheduleReminder(INVOICE_ID, 30 * 60 * 1000);
+
+    scheduler.clearAllReminders();
+    expect(scheduler.list()).toHaveLength(0);
+    expect(scheduler.getPendingReminders()).toHaveLength(0);
+
+    vi.advanceTimersByTime(24 * 60 * 60 * 1000 + 1);
+    expect(events).toHaveLength(0);
+  });
 });

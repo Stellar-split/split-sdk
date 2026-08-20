@@ -1,10 +1,14 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createHash } from "crypto";
 import {
   compilePaymentReceipt,
   generatePaymentReceipt,
   serializePaymentReceipt,
   deserializePaymentReceipt,
+  registerReceipt,
+  getReceiptByTxHash,
+  getAllReceipts,
+  clearReceipts,
 } from "../src/receipt.js";
 import type { Invoice, CollectionPage } from "../src/types.js";
 
@@ -135,5 +139,59 @@ describe("generatePaymentReceipt", () => {
   it("omits effectSummary when includeEffects is not set", () => {
     const receipt = compilePaymentReceipt(mockInvoice, "GPAYER_A");
     expect(receipt.effectSummary).toBeUndefined();
+  });
+});
+
+describe("receipt registry", () => {
+  beforeEach(() => {
+    clearReceipts();
+  });
+
+  it("registers and retrieves a receipt by hash", () => {
+    const receipt = compilePaymentReceipt(mockInvoice, "GPAYER_A");
+    registerReceipt(receipt);
+
+    expect(getReceiptByTxHash(receipt.proofHash)).toEqual(receipt);
+  });
+
+  it("returns null for an unknown hash", () => {
+    expect(getReceiptByTxHash("unknown-hash")).toBeNull();
+  });
+
+  it("returns all receipts ordered by generatedAt ascending", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_700_000_000_000);
+      const first = compilePaymentReceipt(mockInvoice, "GPAYER_A");
+
+      vi.setSystemTime(1_700_000_001_000);
+      const second = compilePaymentReceipt({ ...mockInvoice, id: "inv_98" }, "GPAYER_B");
+
+      vi.setSystemTime(1_700_000_000_500);
+      const third = compilePaymentReceipt({ ...mockInvoice, id: "inv_97" }, "GPAYER_C");
+
+      registerReceipt(second);
+      registerReceipt(first);
+      registerReceipt(third);
+
+      const pending = getAllReceipts();
+      expect(pending.map((r) => r.proofHash)).toEqual([
+        first.proofHash,
+        third.proofHash,
+        second.proofHash,
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clearReceipts empties the registry", () => {
+    const receipt = compilePaymentReceipt(mockInvoice, "GPAYER_A");
+    registerReceipt(receipt);
+    expect(getReceiptByTxHash(receipt.proofHash)).not.toBeNull();
+
+    clearReceipts();
+    expect(getReceiptByTxHash(receipt.proofHash)).toBeNull();
+    expect(getAllReceipts()).toEqual([]);
   });
 });
