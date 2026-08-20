@@ -274,6 +274,8 @@ export {
 } from "./confidential.js";
 
 export { Deduplicator } from "./dedup.js";
+export { generateIdempotencyKey, isKnownKey, registerKey, clearKeys } from "./dedup.js";
+export type { GenerateIdempotencyKeyParams } from "./dedup.js";
 
 export { TxQueue } from "./queue.js";
 
