@@ -2089,3 +2089,49 @@ export class ChannelExhaustedError extends StellarSplitError {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
+
+/**
+ * Canonical SDK error codes.
+ *
+ * Consumers can `switch` on these values instead of string-matching error
+ * messages, which is brittle when wording changes.
+ */
+export enum SdkErrorCode {
+  INVOICE_NOT_FOUND = "INVOICE_NOT_FOUND",
+  INSUFFICIENT_FUNDS = "INSUFFICIENT_FUNDS",
+  DEADLINE_EXPIRED = "DEADLINE_EXPIRED",
+  INVALID_RECIPIENT = "INVALID_RECIPIENT",
+  CONTRACT_REJECTED = "CONTRACT_REJECTED",
+  NETWORK_TIMEOUT = "NETWORK_TIMEOUT",
+  RATE_LIMITED = "RATE_LIMITED",
+}
+
+/**
+ * Typed SDK error carrying a stable machine-readable error code.
+ *
+ * Extends the native `Error` so `instanceof Error` checks and `stack`
+ * capture work as expected, while consumers can reliably switch on
+ * {@link SdkErrorCode}.
+ */
+export class SdkError extends Error {
+  /** Stable machine-readable error code. */
+  readonly code: SdkErrorCode;
+  /** Optional structured context for debugging or safe handling. */
+  readonly details?: unknown;
+
+  constructor(code: SdkErrorCode, message: string, details?: unknown) {
+    super(message);
+    this.name = "SdkError";
+    this.code = code;
+    this.details = details;
+    // Maintain proper prototype chain in transpiled environments
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * Type guard that narrows an unknown value to {@link SdkError}.
+ */
+export function isSdkError(err: unknown): err is SdkError {
+  return err instanceof SdkError;
+}

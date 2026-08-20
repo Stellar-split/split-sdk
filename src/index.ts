@@ -666,6 +666,7 @@ export { ContractRetryQueue } from "./contractRetryQueue.js";
 export type { ContractInvocationExecutor, ContractRetryQueueConfig } from "./contractRetryQueue.js";
 export type { ContractInvocation, ContractResult } from "./types.js";
 export { ContractRetryExhaustedError, isContractRetryExhaustedError } from "./errors.js";
+export { SdkErrorCode, SdkError, isSdkError } from "./errors.js";
 
 // Invoice batch processor with concurrency limiter
 export { InvoiceBatchProcessor } from "./invoiceBatchProcessor.js";
