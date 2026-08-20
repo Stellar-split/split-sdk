@@ -141,3 +141,74 @@ export function createCompressionResponseInterceptor(_config: CompressionConfig)
     };
   };
 }
+
+// ---------------------------------------------------------------------------
+// Metadata compression helpers (JSON + base64url round-trip)
+// ---------------------------------------------------------------------------
+
+import { StellarSplitError } from "./errors.js";
+
+const DEFAULT_MAX_METADATA_BYTES = 512;
+
+/**
+ * Serialize a metadata object to JSON and encode as base64url (no padding `=`).
+ *
+ * @param obj - Arbitrary JSON-serialisable metadata object.
+ * @param maxBytes - Maximum allowed length for the encoded string (default 512).
+ * @returns Base64url-encoded string without padding.
+ * @throws {StellarSplitError} with code `CONTRACT_REJECTED` if the encoded
+ *   string exceeds `maxBytes`.
+ */
+export function compressMetadata(
+  obj: Record<string, unknown>,
+  maxBytes: number = DEFAULT_MAX_METADATA_BYTES,
+): string {
+  const json = JSON.stringify(obj);
+  const encoded = Buffer.from(json).toString("base64url");
+  if (encoded.length > maxBytes) {
+    throw new StellarSplitError(
+      `Compressed metadata exceeds ${maxBytes} bytes (${encoded.length})`,
+      "CONTRACT_REJECTED",
+    );
+  }
+  return encoded;
+}
+
+/**
+ * Decode a base64url-encoded string and parse it back to a metadata object.
+ *
+ * @param encoded - Base64url-encoded string (padding optional).
+ * @returns The deserialised metadata object.
+ * @throws {StellarSplitError} with code `CONTRACT_REJECTED` if the input is
+ *   not valid base64url or not valid JSON.
+ */
+export function decompressMetadata(encoded: string): Record<string, unknown> {
+  // Validate that input contains only valid base64url characters (A-Z, a-z, 0-9, -, _)
+  if (!/^[A-Za-z0-9_-]+$/.test(encoded)) {
+    throw new StellarSplitError(
+      "Invalid base64url encoding: contains invalid characters",
+      "CONTRACT_REJECTED",
+    );
+  }
+  let json: string;
+  try {
+    json = Buffer.from(encoded, "base64url").toString("utf-8");
+  } catch {
+    throw new StellarSplitError(
+      "Invalid base64url encoding",
+      "CONTRACT_REJECTED",
+    );
+  }
+  try {
+    const obj = JSON.parse(json);
+    if (typeof obj !== "object" || obj === null || Array.isArray(obj)) {
+      throw new Error("Not a plain object");
+    }
+    return obj as Record<string, unknown>;
+  } catch {
+    throw new StellarSplitError(
+      "Invalid JSON in metadata",
+      "CONTRACT_REJECTED",
+    );
+  }
+}

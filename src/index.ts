@@ -1366,3 +1366,9 @@ export type {
   SubmitTransactionOptions,
   SubmitServer,
 } from "./transaction/submit.js";
+
+// ---------------------------------------------------------------------------
+// #619 — Metadata compression helpers (JSON + base64url round-trip)
+// ---------------------------------------------------------------------------
+
+export { compressMetadata, decompressMetadata } from "./compression.js";
