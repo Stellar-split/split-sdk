@@ -141,3 +141,107 @@ export class SimpleCache<T> {
     }
   }
 }
+
+/**
+ * A lightweight, generic in-memory cache with optional TTL-based entry expiry.
+ *
+ * When `ttlMs` is omitted entries never expire, preserving backward-compatible
+ * behaviour.  When supplied, `get()` and `has()` silently evict stale entries
+ * on access, and `purgeExpired()` sweeps the entire store in one pass.
+ *
+ * Usage:
+ *   const cache = new Cache<Invoice>(30_000); // 30-second TTL
+ *   cache.set("inv:1", invoice);
+ *   cache.get("inv:1"); // undefined after 30 s
+ */
+interface CacheEntry<V> {
+  value: V;
+  /** Unix ms timestamp recorded at write time. */
+  writtenAt: number;
+}
+
+export class Cache<V> {
+  private readonly store = new Map<string, CacheEntry<V>>();
+  private readonly ttlMs: number | undefined;
+
+  /**
+   * @param ttlMs  Time-to-live in milliseconds.  Omit (or pass `undefined`)
+   *               for no-expiry behaviour.
+   */
+  constructor(ttlMs?: number) {
+    this.ttlMs = ttlMs;
+  }
+
+  /**
+   * Store `value` under `key`, recording the current wall-clock time.
+   */
+  set(key: string, value: V): void {
+    this.store.set(key, { value, writtenAt: Date.now() });
+  }
+
+  /**
+   * Retrieve the value for `key`.
+   *
+   * Returns `undefined` and **deletes the entry** when the entry is expired
+   * (i.e. `Date.now() - writtenAt > ttlMs`).  Returns `undefined` for
+   * missing keys regardless of TTL configuration.
+   */
+  get(key: string): V | undefined {
+    const entry = this.store.get(key);
+    if (!entry) return undefined;
+    if (this.isExpired(entry)) {
+      this.store.delete(key);
+      return undefined;
+    }
+    return entry.value;
+  }
+
+  /**
+   * Returns `true` only when the key exists **and** is not expired.
+   * Expired entries are deleted as a side-effect.
+   */
+  has(key: string): boolean {
+    const entry = this.store.get(key);
+    if (!entry) return false;
+    if (this.isExpired(entry)) {
+      this.store.delete(key);
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Remove all entries whose TTL has elapsed in a single sweep.
+   * No-op when no TTL is configured.
+   */
+  purgeExpired(): void {
+    if (this.ttlMs === undefined) return;
+    for (const [key, entry] of this.store) {
+      if (this.isExpired(entry)) {
+        this.store.delete(key);
+      }
+    }
+  }
+
+  /** Remove a specific entry by key. */
+  delete(key: string): void {
+    this.store.delete(key);
+  }
+
+  /** Remove all entries. */
+  clear(): void {
+    this.store.clear();
+  }
+
+  /** Number of entries currently in the store (including not-yet-evicted expired ones). */
+  get size(): number {
+    return this.store.size;
+  }
+
+  // ── private helpers ──────────────────────────────────────────────────────
+
+  private isExpired(entry: CacheEntry<V>): boolean {
+    if (this.ttlMs === undefined) return false;
+    return Date.now() - entry.writtenAt > this.ttlMs;
+  }
+}
