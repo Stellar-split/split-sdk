@@ -379,7 +379,7 @@ export type { PathQuery, PathQueryResult, StrictSendPathQuery, StrictReceivePath
 export { OfferTracker } from "./offerTracker.js";
 export type { OfferTrackerConfig, OfferTrackerEventMap } from "./offerTracker.js";
 
-export { SimpleCache } from "./cache.js";
+export { SimpleCache, Cache } from "./cache.js";
 export { Recorder, createRecorder } from "./recorder.js";
 export type { SessionRecording, RecordingEntry, ReplayResult } from "./recorder.js";
 
