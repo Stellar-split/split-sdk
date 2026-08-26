@@ -1,167 +1,85 @@
 /**
- * Structured memo builder for StellarSplit invoice payments.
+ * Helpers for building and parsing Stellar transaction memos used on invoice
+ * payment transactions.
  *
- * Encodes invoice ID, split protocol version, and payer identity into a
- * canonical memo format that fits within Stellar's 28-byte text memo limit.
- *
- * Format: `SS:v{version}:{invoiceId}:{payerSuffix}`
- * - "SS:" prefix (3 bytes) identifies StellarSplit memos
- * - `v{version}` – split protocol version
- * - `{invoiceId}` – the full invoice ID
- * - `{payerSuffix}` – last 8 characters of the payer G-address
- * - Total: 3 + len(version) + 1 + len(invoiceId) + 1 + 8 ≤ 28 bytes
+ * Stellar memo text is limited to 28 bytes (UTF-8). `buildPaymentMemo`
+ * truncates at the last full character boundary that keeps the result within
+ * that limit. `parsePaymentMemo` handles truncated memos gracefully: if the
+ * tranche suffix was cut off the tranche is simply absent from the result; if
+ * the invoiceId was itself truncated the truncated value is returned.
  */
 
-import { Memo } from "@stellar/stellar-sdk";
-import type { ParsedMemo, SplitConfig } from "./types.js";
-
-/** Magic prefix identifying StellarSplit-encoded memos. */
-export const MEMO_PREFIX = "SS:";
-
-/** Maximum length of a Stellar text memo in bytes. */
-const MAX_MEMO_BYTES = 28;
-
-/** Number of trailing payer-address characters stored in the memo. */
-const PAYER_SUFFIX_LENGTH = 8;
+const MEMO_PREFIX = "split:";
+const MEMO_MAX_BYTES = 28;
 
 /**
- * Build a canonical text memo encoding invoice ID, split version, and payer
- * identity for use with {@link TransactionBuilder.addMemo}.
- *
- * @param invoiceId - The invoice ID to encode.
- * @param config - Split configuration containing the protocol version.
- * @param payerAddress - Stellar G-address of the payer.
- * @returns A {@link Memo} instance suitable for transaction attachment.
- * @throws If the encoded memo exceeds Stellar's 28-byte text memo limit.
+ * Truncate `str` so that Buffer.byteLength(result, 'utf8') <= maxBytes,
+ * never cutting in the middle of a multi-byte UTF-8 sequence.
  */
-export function buildMemo(
+function truncateToBytes(str: string, maxBytes: number): string {
+  if (Buffer.byteLength(str, "utf8") <= maxBytes) return str;
+  // Walk character-by-character (handles surrogate pairs via codePointAt)
+  let bytes = 0;
+  let i = 0;
+  while (i < str.length) {
+    const cp = str.codePointAt(i)!;
+    // Determine byte width of this code point in UTF-8
+    const charBytes = cp > 0xffff ? 4 : cp > 0x7ff ? 3 : cp > 0x7f ? 2 : 1;
+    if (bytes + charBytes > maxBytes) break;
+    bytes += charBytes;
+    i += cp > 0xffff ? 2 : 1; // surrogate pairs occupy 2 JS chars
+  }
+  return str.slice(0, i);
+}
+
+/**
+ * Build a Stellar memo string for a split payment transaction.
+ *
+ * Format: `split:{invoiceId}` or `split:{invoiceId}:t{tranche}`
+ *
+ * The result is guaranteed to be ≤ 28 bytes (UTF-8). If the full string
+ * exceeds 28 bytes it is truncated at the last full character boundary.
+ */
+export function buildPaymentMemo(
   invoiceId: string,
-  config: SplitConfig,
-  payerAddress: string,
-): Memo {
-  if (!payerAddress || payerAddress.length < PAYER_SUFFIX_LENGTH) {
-    throw new Error(
-      `Payer address must be at least ${PAYER_SUFFIX_LENGTH} characters`,
-    );
-  }
-
-  const payerSuffix = payerAddress.slice(-PAYER_SUFFIX_LENGTH);
-  const memo = `${MEMO_PREFIX}v${config.version}:${invoiceId}:${payerSuffix}`;
-
-  const encoder = new TextEncoder();
-  const bytes = encoder.encode(memo);
-  if (bytes.length > MAX_MEMO_BYTES) {
-    throw new Error(
-      `Memo exceeds ${MAX_MEMO_BYTES} bytes (${bytes.length} bytes): "${memo}"`,
-    );
-  }
-
-  return Memo.text(memo);
+  opts?: { tranche?: number }
+): string {
+  const base =
+    opts?.tranche !== undefined
+      ? `${MEMO_PREFIX}${invoiceId}:t${opts.tranche}`
+      : `${MEMO_PREFIX}${invoiceId}`;
+  return truncateToBytes(base, MEMO_MAX_BYTES);
 }
 
 /**
- * Build a {@link Memo.hash} from the structured invoice payment data.
+ * Parse a Stellar memo produced by `buildPaymentMemo`.
  *
- * Uses the first 32 bytes of the canonical UTF-8 encoding as the hash
- * memo value. Memo.hash allows up to 32 bytes and is useful when the
- * text representation would exceed the 28-byte limit.
+ * Returns `null` for any memo that does not start with the `split:` prefix.
  *
- * @param invoiceId - The invoice ID to encode.
- * @param config - Split configuration containing the protocol version.
- * @param payerAddress - Stellar G-address of the payer.
- * @returns A Memo.hash instance.
+ * Edge-case behaviour for truncated memos:
+ * - If truncation removed the entire `:t{tranche}` suffix the result has no
+ *   `tranche` field.
+ * - If truncation removed only part of the `:t{tranche}` suffix (e.g. cut
+ *   inside the digits) the tranche field is omitted and the invoiceId is
+ *   returned as-is up to the last `:t` boundary.
+ * - If truncation cut into the invoiceId itself the truncated invoiceId is
+ *   returned without a tranche.
  */
-export function buildHashMemo(
-  invoiceId: string,
-  config: SplitConfig,
-  payerAddress: string,
-): Memo {
-  const encoder = new TextEncoder();
-  const data = `${MEMO_PREFIX}v${config.version}:${invoiceId}:${payerAddress}`;
-  const encoded = encoder.encode(data);
-  // Take up to 32 bytes for the hash memo
-  const hashBuffer = new Uint8Array(32);
-  hashBuffer.set(encoded.slice(0, Math.min(encoded.length, 32)));
-  return Memo.hash(Buffer.from(hashBuffer));
-}
+export function parsePaymentMemo(
+  memo: string
+): { invoiceId: string; tranche?: number } | null {
+  if (!memo.startsWith(MEMO_PREFIX)) return null;
 
-/**
- * Build a {@link Memo.id} from a numeric invoice ID.
- *
- * Memo.id stores a uint64 identifier directly on the ledger. This is
- * the most space-efficient option when only the invoice ID is needed.
- *
- * @param invoiceId - Numeric invoice ID (must fit in uint64).
- * @returns A Memo.id instance.
- */
-export function buildIdMemo(invoiceId: string | number): Memo {
-  const id = BigInt(invoiceId);
-  return Memo.id(id.toString());
-}
+  const body = memo.slice(MEMO_PREFIX.length); // everything after "split:"
 
-/**
- * Parse a Stellar memo back into its structured components.
- *
- * Attempts to extract invoice ID, version, and payer suffix from the
- * canonical `SS:v{version}:{invoiceId}:{payerSuffix}` format.
- *
- * @param memo - The Stellar memo to parse.
- * @returns A {@link ParsedMemo} with extracted fields.
- * @throws If the memo is not a text memo or does not match the expected format.
- */
-export function parseMemo(memo: Memo): ParsedMemo {
-  if (memo.type !== "text") {
-    throw new Error(
-      `Cannot parse memo of type "${memo.type}": only text memos are supported`,
-    );
+  // Look for the tranche separator ":t" followed by digits
+  const trancheMatch = body.match(/^(.*):t(\d+)$/);
+  if (trancheMatch) {
+    const invoiceId = trancheMatch[1]!;
+    const tranche = parseInt(trancheMatch[2]!, 10);
+    return { invoiceId, tranche };
   }
 
-  const value = memo.value as string;
-  if (!value || !value.startsWith(MEMO_PREFIX)) {
-    throw new Error(
-      `Memo does not start with expected prefix "${MEMO_PREFIX}": "${value}"`,
-    );
-  }
-
-  const payload = value.slice(MEMO_PREFIX.length); // e.g. "v1:42:ABCDEFGH"
-  const versionMatch = payload.match(/^v(\d+):/);
-  if (!versionMatch) {
-    throw new Error(`Invalid memo format: missing version in "${value}"`);
-  }
-
-  const version = parseInt(versionMatch[1]!, 10);
-  const afterVersion = payload.slice(versionMatch[0].length); // e.g. "42:ABCDEFGH"
-
-  const lastColon = afterVersion.lastIndexOf(":");
-  if (lastColon < 0) {
-    throw new Error(`Invalid memo format: missing payer suffix in "${value}"`);
-  }
-
-  const invoiceId = afterVersion.slice(0, lastColon);
-  const payerId = afterVersion.slice(lastColon + 1);
-
-  if (!invoiceId) {
-    throw new Error(`Invalid memo format: empty invoice ID in "${value}"`);
-  }
-
-  if (payerId.length !== PAYER_SUFFIX_LENGTH) {
-    throw new Error(
-      `Invalid memo format: payer suffix must be ${PAYER_SUFFIX_LENGTH} characters in "${value}"`,
-    );
-  }
-
-  return { invoiceId, version, payerId };
-}
-
-/**
- * Check whether a Memo matches the StellarSplit canonical format
- * without throwing.
- *
- * @param memo - The memo to check.
- * @returns True if the memo is a text memo starting with the "SS:" prefix.
- */
-export function isStellarSplitMemo(memo: Memo): boolean {
-  if (memo.type !== "text") return false;
-  const value = memo.value as string;
-  return typeof value === "string" && value.startsWith(MEMO_PREFIX);
+  // No tranche — plain invoiceId (may be truncated, but we return it as-is)
+  return { invoiceId: body };
 }

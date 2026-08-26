@@ -8,6 +8,7 @@ import type { ExportFormat } from "./export.js";
 
 export { StellarSplitClient } from "./client.js";
 export { FinalityChecker } from "./finalityChecker.js";
+export { buildPaymentMemo, parsePaymentMemo } from "./memoBuilder.js";
 export type {
   StellarSplitClientConfig,
   NetworkConfig,
