@@ -5,7 +5,9 @@ import {
   addressesEqual,
   toMuxedAddress,
   fromMuxedAddress,
+  formatAddress,
 } from "../src/utils.js";
+import { StellarSplitError } from "../src/errors.js";
 import { Keypair } from "@stellar/stellar-sdk";
 
 describe("utils", () => {
@@ -68,10 +70,38 @@ describe("utils", () => {
       const address = validGAddress1;
       const id = 1234n;
       const muxed = toMuxedAddress(address, id);
-      
+
       const parsed = fromMuxedAddress(muxed);
       expect(parsed.address).toBe(address);
       expect(parsed.id).toBe(id);
+    });
+  });
+
+  describe("formatAddress", () => {
+    it("formats with default leading/trailing", () => {
+      expect(formatAddress("GABCDEFGHIJKLMNOPQRSTUVWXYZ")).toBe("GABCD...WXYZ");
+    });
+
+    it("formats with custom leading/trailing", () => {
+      expect(formatAddress("GABCDEFGHIJKLMNOPQRSTUVWXYZ", { leading: 2, trailing: 3 })).toBe("GA...XYZ");
+    });
+
+    it("throws SdkError with code INVALID_RECIPIENT when address is too short", () => {
+      expect(() => formatAddress("GABCDEF")).toThrow(StellarSplitError);
+      try {
+        formatAddress("GABCDEF");
+        throw new Error("expected formatAddress to throw");
+      } catch (err) {
+        expect(err).toBeInstanceOf(StellarSplitError);
+        expect((err as StellarSplitError).code).toBe("INVALID_RECIPIENT");
+      }
+    });
+
+    it("formats a full-length valid Stellar address correctly", () => {
+      const address = validGAddress1;
+      expect(address.length).toBe(56);
+      const formatted = formatAddress(address);
+      expect(formatted).toBe(`${address.slice(0, 5)}...${address.slice(-4)}`);
     });
   });
 });

@@ -352,6 +352,8 @@ export { watchContractUpgrade } from "./upgrade.js";
 
 export { calculateFee } from "./fee.js";
 
+export { formatAddress } from "./utils.js";
+
 export { resolveToken } from "./token.js";
 
 export { watchExpiry } from "./watcher.js";

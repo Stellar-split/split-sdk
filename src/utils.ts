@@ -3,6 +3,7 @@
  */
 import { Invoice } from "./types";
 import { Account, MuxedAccount, StrKey } from "@stellar/stellar-sdk";
+import { StellarSplitError } from "./errors.js";
 
 /** Number of decimal places used by Stellar token amounts (stroops). */
 const STROOPS_PER_UNIT = 10_000_000n;
@@ -85,6 +86,28 @@ export function isExpired(deadline: number): boolean {
 export function truncateAddress(address: string, chars = 4): string {
   if (address.length <= chars * 2 + 3) return address;
   return `${address.slice(0, chars)}...${address.slice(-chars)}`;
+}
+
+/**
+ * Format a Stellar address for display, e.g. "GABCD...WXYZ".
+ *
+ * @throws {StellarSplitError} with code `INVALID_RECIPIENT` if `address` is
+ *   shorter than `leading + trailing + 3`.
+ */
+export function formatAddress(
+  address: string,
+  opts?: { leading?: number; trailing?: number }
+): string {
+  const leading = opts?.leading ?? 5;
+  const trailing = opts?.trailing ?? 4;
+  if (address.length < leading + trailing + 3) {
+    throw new StellarSplitError(
+      `Address too short to format: ${address}`,
+      "INVALID_RECIPIENT",
+      { address, leading, trailing }
+    );
+  }
+  return `${address.slice(0, leading)}...${address.slice(-trailing)}`;
 }
 
 /**
