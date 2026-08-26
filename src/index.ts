@@ -204,6 +204,10 @@ export {
   isFinalityTimeoutError,
   ApprovalTimeoutError,
   isApprovalTimeoutError,
+  // New: typed SdkError / SdkErrorCode (issue #607)
+  SdkError,
+  SdkErrorCode,
+  isSdkError,
 } from "./errors.js";
 
 // Invoice metadata JSON Schema validator (issue #533)

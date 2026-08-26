@@ -2089,3 +2089,39 @@ export class ChannelExhaustedError extends StellarSplitError {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
+
+// ---------------------------------------------------------------------------
+// SdkError / SdkErrorCode (issue #607)
+//
+// A typed, machine-checkable error code paired with a generic error class,
+// so callers can switch on `err.code` instead of string-matching `.message`.
+// ---------------------------------------------------------------------------
+
+/** Machine-readable error codes carried by {@link SdkError}. */
+export enum SdkErrorCode {
+  INVOICE_NOT_FOUND = "INVOICE_NOT_FOUND",
+  INSUFFICIENT_FUNDS = "INSUFFICIENT_FUNDS",
+  DEADLINE_EXPIRED = "DEADLINE_EXPIRED",
+  INVALID_RECIPIENT = "INVALID_RECIPIENT",
+  CONTRACT_REJECTED = "CONTRACT_REJECTED",
+  NETWORK_TIMEOUT = "NETWORK_TIMEOUT",
+  RATE_LIMITED = "RATE_LIMITED",
+}
+
+/** Generic SDK error carrying a typed {@link SdkErrorCode} and optional details. */
+export class SdkError extends Error {
+  readonly code: SdkErrorCode;
+  readonly details?: unknown;
+
+  constructor(message: string, code: SdkErrorCode, details?: unknown) {
+    super(message);
+    this.name = "SdkError";
+    this.code = code;
+    this.details = details;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isSdkError(err: unknown): err is SdkError {
+  return err instanceof SdkError;
+}
