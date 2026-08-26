@@ -995,7 +995,13 @@ export type {
 // Split ratio validator
 // ---------------------------------------------------------------------------
 
-export { validateSplitRatios, validateSplitRatiosOrThrow, ratiosToRecipients } from "./validators/splitRatioValidator.js";
+export {
+  validateSplitRatios,
+  validateSplitRatiosOrThrow,
+  ratiosToRecipients,
+  validateSplitTotal,
+  normalizeSplits,
+} from "./validators/splitRatioValidator.js";
 export type {
   RecipientShare,
   SplitConfig,
