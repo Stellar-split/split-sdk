@@ -1038,6 +1038,8 @@ export type {
   ChannelStateFetcher,
 } from "./channelReconciler.js";
 export { getInvoiceStats, computeInvoiceStats } from "./invoiceStats.js";
+export { getInvoiceAge, getFundingVelocity } from "./invoiceStats.js";
+export type { InvoiceAge } from "./invoiceStats.js";
 
 export { previewSplitRules } from "./splitPreview.js";
 

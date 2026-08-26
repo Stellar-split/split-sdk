@@ -259,6 +259,19 @@ export interface Invoice {
   token: string;
   /** Unix timestamp deadline (seconds). */
   deadline: number;
+  /**
+   * When the invoice was created. Accepted as a Unix timestamp in either
+   * seconds or milliseconds; helpers such as `getInvoiceAge` and
+   * `getFundingVelocity` detect the unit automatically by magnitude (values
+   * greater than 1e12 are treated as milliseconds). `0`, negative, and
+   * non-finite values are treated as "unknown" rather than as epoch 1970.
+   *
+   * Note: `hashInvoice()` canonicalises every key present on the invoice
+   * object, so populating this field changes an invoice's `contentHash`.
+   * Recompute any stored hashes before relying on `verifyInvoice()` or
+   * `submitPayment({ expectedContentHash })` for invoices that gain it.
+   */
+  createdAt?: number;
   /** Total amount funded so far in stroops. */
   funded: bigint;
   /** Current lifecycle status. */
@@ -374,7 +387,14 @@ export interface InvoiceStats {
   totalPayers: number;
   /** Mean payment size in stroops (0 when there are no payments). */
   avgPayment: bigint;
-  /** Tokens funded per day since the first payment. */
+  /**
+   * Stroops funded per day across the payment window, i.e. the sum of payment
+   * amounts divided by the span between the first and last payment.
+   *
+   * This is deliberately different from the exported `getFundingVelocity()`,
+   * which is a lifetime average over the whole age of the invoice (`funded`
+   * since `createdAt`). Expect the two to disagree for the same invoice.
+   */
   fundingVelocity: number;
   /** Seconds from first to last payment once completed, else null. */
   timeToCompletion: number | null;
