@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   estimateStorageFootprint,
+  StorageUsageEstimator,
 } from "../src/storageUsageEstimator.js";
 
 // Derived from the implementation constants:
@@ -64,5 +65,17 @@ describe("estimateStorageFootprint", () => {
   it("throws for invoiceCount < 1", () => {
     expect(() => estimateStorageFootprint(0, {})).toThrow(RangeError);
     expect(() => estimateStorageFootprint(-1, {})).toThrow(RangeError);
+  });
+
+  it("returns a breakdown whose parts sum to totalBytes", () => {
+    const estimator = new StorageUsageEstimator();
+    estimator.registerCategory("invoices", () => 100);
+    estimator.registerCategory("events", () => 40);
+    estimator.registerCategory("cache", () => 10);
+
+    const report = estimator.estimateUsage();
+
+    expect(report.breakdown).toEqual({ invoices: 100, events: 40, cache: 10 });
+    expect(report.totalBytes).toBe(150);
   });
 });
