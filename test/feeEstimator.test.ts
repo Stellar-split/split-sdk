@@ -1,8 +1,53 @@
 import { describe, expect, it, vi } from "vitest";
-import { estimateOperationCost, type FeeEstimate } from "../src/feeEstimator.js";
+import { estimateOperationCost, estimateFeeForAmount, type FeeEstimate } from "../src/feeEstimator.js";
 import { rpc as SorobanRpc, BASE_FEE, Operation, Asset } from "@stellar/stellar-sdk";
 
-describe("feeEstimator", () => {
+describe("estimateFeeForAmount", () => {
+  it("returns the base fee when feeBps is zero", () => {
+    expect(estimateFeeForAmount(0n, { baseFee: BASE_FEE })).toBe(BASE_FEE);
+    expect(estimateFeeForAmount(123_456_789n, { baseFee: BASE_FEE })).toBe(BASE_FEE);
+  });
+
+  it("computes an exact fee for a whole-number bps using bigint", () => {
+    // 100 bps = 1% on 10_000_000 stroops (10 XLM) = 100_000 stroops.
+    const fee = estimateFeeForAmount(10_000_000n, { feeBps: 100, baseFee: 0n });
+    expect(fee).toBe(100_000n);
+  });
+
+  it("rounds up fractional bps to avoid undercharging", () => {
+    // 1 bps of 9 stroops = 0.0009 stroop -> rounds up to 1 stroop.
+    expect(estimateFeeForAmount(1_000n, { feeBps: 1, baseFee: 0n })).toBe(1n); // 0.1 stroop -> 1
+    // Exact multiples stay exact: 10_000 stroops * 1bps = 1 stroop.
+    expect(estimateFeeForAmount(10_000n, { feeBps: 1, baseFee: 0n })).toBe(1n);
+  });
+
+  it("truncates instead of rounding up when roundUp is false", () => {
+    // 1 bps of 1000 stroops = 0.1 stroop -> truncated to 0.
+    expect(estimateFeeForAmount(1000n, { feeBps: 1, baseFee: 0n, roundUp: false })).toBe(0n);
+  });
+
+  it("adds the flat base fee on top of the proportional fee", () => {
+    const fee = estimateFeeForAmount(2000n, { feeBps: 50, baseFee: 1000n });
+    // proportional = 2000 * 50 / 10000 = 10; total = 1000 + 10 = 1010.
+    expect(fee).toBe(1010n);
+  });
+
+  it("handles large amounts without precision loss", () => {
+    const huge = 123456789123456789n;
+    const fee = estimateFeeForAmount(huge, { feeBps: 250, baseFee: BASE_FEE });
+    expect(fee).toBe(BASE_FEE + (huge * 250n) / 10000n);
+  });
+
+  it("throws on negative amount", () => {
+    expect(() => estimateFeeForAmount(-1n)).toThrow(RangeError);
+  });
+
+  it("throws on negative feeBps", () => {
+    expect(() => estimateFeeForAmount(1000n, { feeBps: -1 })).toThrow(RangeError);
+  });
+});
+
+describe("estimateOperationCost", () => {
   it("returns fee estimate with base and resource fees", async () => {
     const mockServer = {
       simulateTransaction: vi.fn().mockResolvedValue({
