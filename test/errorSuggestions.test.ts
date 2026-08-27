@@ -8,7 +8,12 @@ import {
   PaymentExceedsRemainingError,
   InvoiceFrozenError,
   CoCreatorApprovalNotRequiredError,
+  SdkError,
+  SdkErrorCode,
 } from "../src/errors.js";
+
+const ACCOUNT_NOT_FOUND_SUGGESTION =
+  "The account does not exist on the Stellar network. Fund the account with a minimum XLM balance before retrying.";
 
 describe("getSuggestion — typed error classes", () => {
   it("returns suggestion for InvoiceNotFoundError", () => {
@@ -65,6 +70,35 @@ describe("getSuggestion — raw-message pattern matching", () => {
     const err = new StellarSplitError("account not found", "account not found");
     const s = getSuggestion(err);
     expect(s).toContain("does not exist on the Stellar network");
+  });
+});
+
+describe("getSuggestion — machine-readable error codes", () => {
+  it("returns the account-specific suggestion for the ACCOUNT_NOT_FOUND code", () => {
+    expect(getSuggestion("ACCOUNT_NOT_FOUND")).toBe(ACCOUNT_NOT_FOUND_SUGGESTION);
+  });
+
+  it("normalizes code casing before lookup", () => {
+    expect(getSuggestion("account_not_found")).toBe(ACCOUNT_NOT_FOUND_SUGGESTION);
+  });
+
+  it("resolves an SdkErrorCode enum value", () => {
+    expect(getSuggestion(SdkErrorCode.ACCOUNT_NOT_FOUND)).toBe(ACCOUNT_NOT_FOUND_SUGGESTION);
+  });
+
+  it("resolves an SdkError instance via its code", () => {
+    const err = new SdkError("account missing", SdkErrorCode.ACCOUNT_NOT_FOUND);
+    expect(getSuggestion(err)).toBe(ACCOUNT_NOT_FOUND_SUGGESTION);
+  });
+
+  it("does not affect other error-code suggestions", () => {
+    expect(getSuggestion("INVOICE_NOT_FOUND")).toContain("does not exist on-chain");
+    expect(getSuggestion("RATE_LIMITED")).toContain("rate limited");
+    expect(getSuggestion("INVOICE_NOT_FOUND")).not.toBe(ACCOUNT_NOT_FOUND_SUGGESTION);
+  });
+
+  it("falls back to the generic suggestion for an unknown code", () => {
+    expect(getSuggestion("NOPE_NOT_A_CODE")).toContain("unexpected error");
   });
 });
 

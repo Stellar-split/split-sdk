@@ -2100,6 +2100,7 @@ export class ChannelExhaustedError extends StellarSplitError {
 /** Machine-readable error codes carried by {@link SdkError}. */
 export enum SdkErrorCode {
   INVOICE_NOT_FOUND = "INVOICE_NOT_FOUND",
+  ACCOUNT_NOT_FOUND = "ACCOUNT_NOT_FOUND",
   INSUFFICIENT_FUNDS = "INSUFFICIENT_FUNDS",
   DEADLINE_EXPIRED = "DEADLINE_EXPIRED",
   INVALID_RECIPIENT = "INVALID_RECIPIENT",
