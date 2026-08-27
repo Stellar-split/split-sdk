@@ -42,6 +42,18 @@ const STORE_NAME = "blindingFactors";
 const DEFAULT_KEY_PREFIX = "stellarsplit:bf:";
 const SESSION_KEY_NAME = "stellarsplit:encryption_key";
 
+export const SENSITIVE_FIELDS = ["secret", "privateKey", "seed", "mnemonic"] as const;
+
+export function maskSensitive(obj: Record<string, unknown>): Record<string, unknown> {
+  const clone: Record<string, unknown> = { ...obj };
+  for (const field of SENSITIVE_FIELDS) {
+    if (field in clone) {
+      clone[field] = "[REDACTED]";
+    }
+  }
+  return clone;
+}
+
 // ---------------------------------------------------------------------------
 // Generator Point H (cached)
 // ---------------------------------------------------------------------------
