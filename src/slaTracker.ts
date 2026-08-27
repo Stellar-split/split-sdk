@@ -12,6 +12,17 @@ export interface SlaReport {
   withinSla: number;
   breached: number;
   avgTimeToFund: number;
+  p99LatencyMs: number;
+}
+
+function percentile(values: number[], percentileRank: number): number {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  const sorted = [...values].sort((a, b) => a - b);
+  const index = Math.min(sorted.length - 1, Math.ceil((percentileRank / 100) * sorted.length) - 1);
+  return sorted[index] ?? 0;
 }
 
 function getTotalOwed(invoice: Invoice): bigint {
@@ -50,7 +61,7 @@ function getTimeToFullFunding(invoice: Invoice): number | undefined {
 
 export function computeSlaReport(invoices: Invoice[], slaMs: number): SlaReport {
   if (invoices.length === 0) {
-    return { withinSla: 0, breached: 0, avgTimeToFund: 0 };
+    return { withinSla: 0, breached: 0, avgTimeToFund: 0, p99LatencyMs: 0 };
   }
 
   let withinSla = 0;
@@ -83,5 +94,10 @@ export function computeSlaReport(invoices: Invoice[], slaMs: number): SlaReport 
       ? fundingTimes.reduce((sum, t) => sum + t, 0) / fundingTimes.length
       : 0;
 
-  return { withinSla, breached, avgTimeToFund };
+  return {
+    withinSla,
+    breached,
+    avgTimeToFund,
+    p99LatencyMs: percentile(fundingTimes, 99),
+  };
 }
