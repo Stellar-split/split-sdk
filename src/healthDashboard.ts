@@ -39,6 +39,18 @@ export interface SDKHealthSnapshot extends SDKHealth {
   horizonProbe: HorizonProbeResult | null;
 }
 
+export type ServiceHealthStatus = "healthy" | "degraded" | "down";
+
+export function aggregateServiceHealth(statuses: ServiceHealthStatus[]): ServiceHealthStatus {
+  if (statuses.some((status) => status === "down")) {
+    return "down";
+  }
+  if (statuses.some((status) => status === "degraded")) {
+    return "degraded";
+  }
+  return "healthy";
+}
+
 export async function getSDKHealth(): Promise<SDKHealthSnapshot> {
   const latencyStart = Date.now();
   let rpcLatency = 0;
