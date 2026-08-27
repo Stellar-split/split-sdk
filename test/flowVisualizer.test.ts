@@ -30,4 +30,47 @@ describe("generateFlowDiagram", () => {
     expect(diagram).toContain("class recipient_1_GRECIPIENTA completed");
     expect(diagram).toContain("class recipient_2_GRECIPIENTB pending");
   });
+
+  it("renders a multi-line ASCII diagram with [label] nodes and --> edges when mode is 'ascii'", async () => {
+    const invoice: Invoice = {
+      id: "inv-1",
+      creator: "GCREATOR",
+      recipients: [
+        { address: "GRECIPIENTA", amount: 100n },
+        { address: "GRECIPIENTB", amount: 50n },
+      ],
+      token: "CUSDC",
+      deadline: 1_900_000_000,
+      funded: 120n,
+      status: "Pending",
+      payments: [{ payer: "GPAYER", amount: 120n }],
+    };
+
+    const diagram = await generateFlowDiagram("inv-1", async () => invoice, {
+      mode: "ascii",
+    });
+
+    expect(diagram.split("\n").length).toBeGreaterThan(1);
+    expect(diagram).toContain("[Creator: GCREATOR]");
+    expect(diagram).toContain("--> [Invoice inv-1]");
+    expect(diagram).toContain("--> [Recipient 1: GRECIPIENTA]  (100 / 100) completed");
+    expect(diagram).toContain("--> [Recipient 2: GRECIPIENTB]  (20 / 50) pending");
+    expect(diagram).not.toContain("flowchart LR");
+  });
+
+  it("defaults to Mermaid output when no mode is given", async () => {
+    const invoice: Invoice = {
+      id: "inv-1",
+      creator: "GCREATOR",
+      recipients: [{ address: "GRECIPIENTA", amount: 100n }],
+      token: "CUSDC",
+      deadline: 1_900_000_000,
+      funded: 100n,
+      status: "Pending",
+      payments: [{ payer: "GPAYER", amount: 100n }],
+    };
+
+    const diagram = await generateFlowDiagram("inv-1", async () => invoice);
+    expect(diagram).toContain("flowchart LR");
+  });
 });
