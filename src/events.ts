@@ -2,34 +2,48 @@ import { rpc as SorobanRpc } from "@stellar/stellar-sdk";
 import { TypedEventEmitter } from "./events/TypedEventEmitter.js";
 import type { FinalityStatus } from "./types.js";
 
-/** Type of contract event. */
+/** Event names emitted by Soroban contract activity during the invoice lifecycle. */
 export type ContractEventType = "created" | "payment" | "released" | "refunded";
 
-/** A Soroban contract event. */
+/** Normalized Soroban contract event payload returned by the SDK replay helpers. */
 export interface ContractEvent {
-  /** Event type. */
+  /** The contract event verb that was emitted on-chain. */
   type: ContractEventType;
-  /** Invoice ID associated with the event. */
+  /** The invoice identifier extracted from the event body. */
   invoiceId: string;
-  /** Event data. */
+  /** The raw event value emitted by the Soroban host. */
   data: unknown;
-  /** Ledger sequence number. */
+  /** The ledger sequence that included the event. */
   ledger: number;
-  /** Unix timestamp of the event. */
+  /** Unix timestamp, in seconds, inferred from the event metadata. */
   timestamp: number;
 }
 
+/** SDK-level events emitted as internal workflows progress. */
 export interface SDKEventMap extends Record<string, unknown> {
+  /** Emitted when a monitored stream has stopped producing data within the allowed interval. */
   streamStallDetected: { streamId: string };
+  /** Emitted after the SDK automatically reconnects or resets a stalled stream. */
   streamAutoReset: { streamId: string };
+  /** Emitted when a tracked invoice transaction reaches a finality state. */
   invoiceFinalized: { txHash: string; finality: FinalityStatus };
+  /** Emitted when an approval workflow requests a signer response. */
   approvalRequested: { signerPublicKey: string };
+  /** Emitted when a signer submits an approval for the workflow. */
   approvalReceived: { signerPublicKey: string };
+  /** Emitted when the approval workflow reaches its required signer count. */
   approvalWorkflowComplete: { signerCount: number };
 }
 
+/** Shared typed emitter for SDK lifecycle events. */
 export const sdkEvents = new TypedEventEmitter<SDKEventMap>();
 
+/**
+ * Emit a typed SDK lifecycle event to all registered listeners.
+ *
+ * @param event - The SDK event name to publish.
+ * @param payload - The strongly typed payload associated with the event name.
+ */
 export function emitSdkEvent<K extends keyof SDKEventMap>(event: K, payload: SDKEventMap[K]): void {
   sdkEvents.emit(event, payload);
 }
