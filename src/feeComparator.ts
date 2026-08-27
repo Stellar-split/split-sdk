@@ -16,6 +16,21 @@ import {
 import type { Invoice } from "./types.js";
 import { SimulationFailedError, NoReturnValueError } from "./errors.js";
 
+export interface ComparableFee {
+  amount: number;
+  asset: string;
+}
+
+export type ExchangeRateProvider = (fromAsset: string, toAsset: string) => number;
+
+export class DivisionByZeroError extends Error {
+  constructor(fromAsset: string, toAsset: string) {
+    super(`Exchange rate from ${fromAsset} to ${toAsset} cannot be zero`);
+    this.name = "DivisionByZeroError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 export interface CostEstimate {
   resourceFee: bigint;
   swapSlippage: bigint;
@@ -33,6 +48,37 @@ export interface FeeComparatorConfig {
   networkPassphrase: string;
   contractId: string;
   dexContractId?: string;
+}
+
+export function compareFees(
+  left: ComparableFee,
+  right: ComparableFee,
+  getRate: ExchangeRateProvider,
+): number {
+  const leftAmount = left.amount;
+  const rightAmount =
+    left.asset === right.asset
+      ? right.amount
+      : convertFeeAmount(right, left.asset, getRate);
+
+  if (leftAmount === rightAmount) {
+    return 0;
+  }
+
+  return leftAmount < rightAmount ? -1 : 1;
+}
+
+function convertFeeAmount(
+  fee: ComparableFee,
+  targetAsset: string,
+  getRate: ExchangeRateProvider,
+): number {
+  const rate = getRate(fee.asset, targetAsset);
+  if (rate === 0) {
+    throw new DivisionByZeroError(fee.asset, targetAsset);
+  }
+
+  return fee.amount * rate;
 }
 
 async function simulateResourceFee(
