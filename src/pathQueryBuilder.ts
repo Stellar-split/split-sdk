@@ -44,6 +44,36 @@ export interface PathQueryBuilderConfig {
   maxEntries?: number;
 }
 
+export interface PathQueryStringOptions {
+  sourceAssetType?: "native" | "credit_alphanum4" | "credit_alphanum12";
+  [key: string]: string | number | boolean | undefined;
+}
+
+export function buildPathQuery(options: PathQueryStringOptions): string {
+  if (
+    options.sourceAssetType !== undefined &&
+    !["native", "credit_alphanum4", "credit_alphanum12"].includes(options.sourceAssetType)
+  ) {
+    throw new InvalidPathQueryError(`Invalid source asset type: ${options.sourceAssetType}`);
+  }
+
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(options)) {
+    if (value === undefined) {
+      continue;
+    }
+
+    if (key === "sourceAssetType") {
+      params.append("source_asset_type", String(value));
+      continue;
+    }
+
+    params.append(key, String(value));
+  }
+
+  return params.toString();
+}
+
 /**
  * Assembles validated `PathQuery` objects and executes them against Horizon,
  * caching results by query parameters within a configurable TTL.
