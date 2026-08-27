@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateDependencyGraph } from "../src/dependencyGraphValidator.js";
+import { MissingNodeError, validateDependencyGraph } from "../src/dependencyGraphValidator.js";
 import type { Invoice } from "../src/types.js";
 
 function inv(id: string, prerequisites: string[] = []): Invoice {
@@ -41,17 +41,14 @@ describe("validateDependencyGraph", () => {
     expect(flat).toContain("B");
   });
 
-  it("warns on dangling prerequisite references without failing", () => {
-    const result = validateDependencyGraph([inv("A", ["MISSING"])]);
-    expect(result.valid).toBe(true);
-    expect(result.cycles).toHaveLength(0);
-    expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toMatch(/MISSING/);
+  it("throws when a graph references a missing node", () => {
+    expect(() => validateDependencyGraph([inv("A", ["MISSING"])])).toThrow(MissingNodeError);
   });
 
   it("handles invoices with no prerequisites", () => {
     const result = validateDependencyGraph([inv("X"), inv("Y"), inv("Z")]);
     expect(result.valid).toBe(true);
     expect(result.cycles).toHaveLength(0);
+    expect(result.warnings).toHaveLength(0);
   });
 });
