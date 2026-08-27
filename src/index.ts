@@ -496,7 +496,7 @@ export { getSuggestion } from "./errorSuggestions.js";
 // XDR Decoder — structured logging of Stellar XDR
 // ---------------------------------------------------------------------------
 
-export { decodeXDR } from "./xdrDecoder.js";
+export { decodeXDR, decode, decodeInt128 } from "./xdrDecoder.js";
 export { decodeTransactionResult } from "./txResultDecoder.js";
 
 // ---------------------------------------------------------------------------
@@ -1012,7 +1012,7 @@ export type {
 // Trustline checker
 // ---------------------------------------------------------------------------
 
-export { checkTrustlines, checkSingleTrustline } from "./trustlineChecker.js";
+export { checkTrustlines, checkSingleTrustline, checkTrustlinesBatch } from "./trustlineChecker.js";
 export type { TrustlineEntry, TrustlineCheckResult } from "./trustlineChecker.js";
 
 // ---------------------------------------------------------------------------
