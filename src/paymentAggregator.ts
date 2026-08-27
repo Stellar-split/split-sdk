@@ -1,5 +1,6 @@
 import { createHash } from "crypto";
 import type { Invoice, Payment } from "./types.js";
+import { groupBy } from "./utils.js";
 
 export type PaymentLedger = Payment & { ledger: number };
 
@@ -223,16 +224,20 @@ export class PaymentAggregator {
 
   private recompute(): void {
     let totalFunded = this.baseFunded;
-    const payerBreakdown = new Map<string, bigint>();
     let lastLedger = 0;
 
     for (const payment of this.payments) {
       totalFunded += payment.amount;
-      payerBreakdown.set(
-        payment.payer,
-        (payerBreakdown.get(payment.payer) ?? 0n) + payment.amount
-      );
       lastLedger = Math.max(lastLedger, payment.ledger);
+    }
+
+    const payerBreakdown = new Map<string, bigint>();
+    const groupedPayments = groupBy(this.payments, "payer");
+    for (const [payer, payments] of Object.entries(groupedPayments)) {
+      payerBreakdown.set(
+        payer,
+        payments.reduce((sum, payment) => sum + payment.amount, 0n),
+      );
     }
 
     this.totalFunded = totalFunded;

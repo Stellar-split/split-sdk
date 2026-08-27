@@ -30,6 +30,18 @@ export function parseAmount(value: string): bigint {
   return BigInt(whole) * STROOPS_PER_UNIT + BigInt(fracPadded);
 }
 
+export function groupBy<T extends Record<string, unknown>>(
+  array: T[],
+  key: keyof T,
+): Record<string, T[]> {
+  return array.reduce<Record<string, T[]>>((groups, item) => {
+    const groupKey = String(item[key]);
+    groups[groupKey] ??= [];
+    groups[groupKey].push(item);
+    return groups;
+  }, {});
+}
+
 /**
  * Validate a Stellar public key (G... address).
  *
