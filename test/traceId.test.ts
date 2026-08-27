@@ -1,8 +1,41 @@
-import { describe, it, expect, vi } from "vitest";
-import { TraceIdManager, globalTraceIdManager } from "../src/traceId.js";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { TraceIdManager, globalTraceIdManager, generateTraceId } from "../src/traceId.js";
 
 const UUID_V4_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+describe("generateTraceId", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("produces UUID v4 formatted IDs", () => {
+    expect(generateTraceId()).toMatch(UUID_V4_RE);
+  });
+
+  it("produces unique IDs across many calls", () => {
+    const ids = new Set(Array.from({ length: 1000 }, () => generateTraceId()));
+    expect(ids.size).toBe(1000);
+  });
+
+  it("uses crypto.randomUUID when available", () => {
+    const randomUUID = vi.fn(() => "11111111-1111-4111-8111-111111111111");
+    vi.stubGlobal("crypto", { randomUUID });
+    expect(generateTraceId()).toBe("11111111-1111-4111-8111-111111111111");
+    expect(randomUUID).toHaveBeenCalledOnce();
+  });
+
+  it("falls back to a Math.random UUID v4 when crypto.randomUUID is absent", () => {
+    vi.stubGlobal("crypto", {});
+    const id = generateTraceId();
+    expect(id).toMatch(UUID_V4_RE);
+  });
+
+  it("falls back when crypto itself is undefined (Node < 19)", () => {
+    vi.stubGlobal("crypto", undefined);
+    expect(generateTraceId()).toMatch(UUID_V4_RE);
+  });
+});
 
 describe("TraceIdManager", () => {
   it("generates UUID v4 by default", () => {

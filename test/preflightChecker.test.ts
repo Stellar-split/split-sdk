@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { checkPayerReadiness } from "../src/preflightChecker.js";
+import { checkPayerReadiness, runPreflight } from "../src/preflightChecker.js";
+import { PreflightError } from "../src/errors.js";
 
 function makeServer(balances: object[] | null) {
   return {
@@ -73,5 +74,51 @@ describe("checkPayerReadiness", () => {
     const result = await checkPayerReadiness(server as never, "GPAYER", REQUIRED, "native");
     expect(result.ready).toBe(true);
     expect(result.reason).toBeUndefined();
+  });
+});
+
+describe("runPreflight", () => {
+  const RPC_URL = "https://rpc.example.org";
+
+  it("resolves when the endpoint responds to the HEAD probe", async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 200 }));
+    await expect(
+      runPreflight({ rpcUrl: RPC_URL, fetchImpl: fetchImpl as never }),
+    ).resolves.toBeUndefined();
+
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toBe(RPC_URL);
+    expect((init as RequestInit).method).toBe("HEAD");
+  });
+
+  it("treats any HTTP response (including 4xx) as reachable", async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 405 }));
+    await expect(
+      runPreflight({ rpcUrl: RPC_URL, fetchImpl: fetchImpl as never }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("throws PreflightError with the URL and reason when the endpoint is unreachable", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError("fetch failed: ECONNREFUSED");
+    });
+    const err = await runPreflight({ rpcUrl: RPC_URL, fetchImpl: fetchImpl as never }).catch(
+      (e) => e,
+    );
+    expect(err).toBeInstanceOf(PreflightError);
+    expect(err.url).toBe(RPC_URL);
+    expect(err.reason).toContain("ECONNREFUSED");
+  });
+
+  it("throws PreflightError when the probe exceeds the configured timeout", async () => {
+    // Never settles: the timeout in withTimeout must win the race.
+    const fetchImpl = vi.fn(() => new Promise<Response>(() => {}));
+    const err = await runPreflight({
+      rpcUrl: RPC_URL,
+      timeoutMs: 20,
+      fetchImpl: fetchImpl as never,
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(PreflightError);
+    expect(err.reason).toContain("20ms");
   });
 });
