@@ -20,9 +20,12 @@ export type RateOracleFn<TRate> = (from: string, to: string) => Promise<TRate>;
 export interface RateCacheConfig {
   /** Time-to-live for a cached rate, in milliseconds. Default: 60_000 (60s). */
   ttlMs?: number;
+  /** Maximum number of cached pairs retained before the oldest entry is evicted. */
+  maxSize?: number;
 }
 
 const DEFAULT_TTL_MS = 60_000;
+const DEFAULT_MAX_SIZE = Number.POSITIVE_INFINITY;
 
 function cacheKey(from: string, to: string): string {
   return `${from}:${to}`;
@@ -41,17 +44,24 @@ export class RateCache<TRate = number> {
   private readonly store = new Map<string, RateCacheEntry<TRate>>();
   private readonly oracle: RateOracleFn<TRate>;
   private readonly ttlMs: number;
+  private readonly maxSize: number;
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
   private _running = false;
 
   constructor(oracle: RateOracleFn<TRate>, config: RateCacheConfig = {}) {
     this.oracle = oracle;
     this.ttlMs = config.ttlMs ?? DEFAULT_TTL_MS;
+    this.maxSize = config.maxSize ?? DEFAULT_MAX_SIZE;
   }
 
   /** Whether background refresh is currently running. */
   get running(): boolean {
     return this._running;
+  }
+
+  /** Current number of cached asset pairs. */
+  get size(): number {
+    return this.store.size;
   }
 
   /**
@@ -68,6 +78,7 @@ export class RateCache<TRate = number> {
 
     const rate = await this.oracle(from, to);
     this.store.set(key, { rate, fetchedAt: Date.now() });
+    this.evictOverflow();
     return rate;
   }
 
@@ -110,9 +121,24 @@ export class RateCache<TRate = number> {
       try {
         const rate = await this.oracle(from, to);
         this.store.set(key, { rate, fetchedAt: Date.now() });
+        this.evictOverflow();
       } catch {
         // Best-effort background refresh; keep the stale entry until the next attempt.
       }
+    }
+  }
+
+  private evictOverflow(): void {
+    if (this.maxSize === Number.POSITIVE_INFINITY) {
+      return;
+    }
+
+    while (this.store.size > this.maxSize) {
+      const oldestKey = this.store.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      this.store.delete(oldestKey);
     }
   }
 }
