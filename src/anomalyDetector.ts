@@ -35,6 +35,8 @@ export interface AnomalyDetectorOptions {
    * Triggers HIGH_AMOUNT_VARIANCE when exceeded. Default: 0.8
    */
   maxAmountVariance?: number;
+  /** Threshold for classifying an anomaly score as alert. Must be in the range (0, 1]. */
+  sensitivityThreshold?: number;
   /** Override the time source (Unix seconds). Inject in tests to control time. */
   now?: () => number;
 }
@@ -60,6 +62,7 @@ export class AnomalyDetector {
   private readonly maxRapidCycles: number;
   private readonly rapidCycleSeconds: number;
   private readonly maxAmountVariance: number;
+  private readonly sensitivityThreshold: number;
   private readonly now: () => number;
 
   private payments: TimedPayment[] = [];
@@ -73,7 +76,15 @@ export class AnomalyDetector {
     this.maxRapidCycles = options.maxRapidCycles ?? 3;
     this.rapidCycleSeconds = options.rapidCycleSeconds ?? 300;
     this.maxAmountVariance = options.maxAmountVariance ?? 0.8;
+    this.sensitivityThreshold = options.sensitivityThreshold ?? 0.8;
+    if (this.sensitivityThreshold <= 0 || this.sensitivityThreshold > 1) {
+      throw new RangeError("sensitivityThreshold must be in the range (0, 1]");
+    }
     this.now = options.now ?? (() => Math.floor(Date.now() / 1000));
+  }
+
+  classifyScore(score: number): "alert" | "normal" {
+    return score > this.sensitivityThreshold ? "alert" : "normal";
   }
 
   /**

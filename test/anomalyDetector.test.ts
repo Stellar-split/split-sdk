@@ -30,6 +30,22 @@ const CREATOR = "GCREATOR00000000000000000000000000000000000000000000000000";
 const PAYER = "GPAYER000000000000000000000000000000000000000000000000000";
 const OTHER = "GOTHER0000000000000000000000000000000000000000000000000000";
 
+describe("classifyScore", () => {
+  it("treats scores equal to the threshold as normal", () => {
+    const detector = new AnomalyDetector({ sensitivityThreshold: 0.5 });
+    expect(detector.classifyScore(0.5)).toBe("normal");
+  });
+
+  it("treats scores above the threshold as alert", () => {
+    const detector = new AnomalyDetector({ sensitivityThreshold: 0.5 });
+    expect(detector.classifyScore(0.5001)).toBe("alert");
+  });
+
+  it("throws for thresholds outside (0, 1]", () => {
+    expect(() => new AnomalyDetector({ sensitivityThreshold: 0 })).toThrow(RangeError);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // HIGH_FREQUENCY
 // ---------------------------------------------------------------------------
