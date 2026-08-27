@@ -136,6 +136,41 @@ export interface InvoiceVersionTrackerOptions {
   store?: VersionStore;
 }
 
+export type VersionVector = Record<string, number>;
+
+export class ConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConflictError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function detectVersionConflict(
+  current: VersionVector,
+  incoming: VersionVector,
+): void {
+  let incomingDominates = false;
+  let currentDominates = false;
+
+  for (const actor of new Set([...Object.keys(current), ...Object.keys(incoming)])) {
+    const currentValue = current[actor] ?? 0;
+    const incomingValue = incoming[actor] ?? 0;
+
+    if (incomingValue > currentValue) {
+      incomingDominates = true;
+    }
+
+    if (currentValue > incomingValue) {
+      currentDominates = true;
+    }
+  }
+
+  if (incomingDominates && currentDominates) {
+    throw new ConflictError("Diverged version vectors detected");
+  }
+}
+
 /**
  * Tracks the full version history of invoices, storing an ordered sequence of
  * immutable snapshots that can be diffed between any two versions.
