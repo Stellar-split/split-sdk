@@ -374,6 +374,8 @@ export interface InvoiceStats {
   totalPayers: number;
   /** Mean payment size in stroops (0 when there are no payments). */
   avgPayment: bigint;
+  /** Median payment size in stroops (0 when there are no payments). */
+  medianAmount: bigint;
   /** Tokens funded per day since the first payment. */
   fundingVelocity: number;
   /** Seconds from first to last payment once completed, else null. */

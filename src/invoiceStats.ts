@@ -8,6 +8,27 @@ interface InvoiceStatsClient {
 const SECONDS_PER_DAY = 86_400;
 
 /**
+ * Median of a list of stroop amounts, computed with a sort (no dependencies).
+ *
+ * Returns 0 for an empty list. For an even-length list the two middle values
+ * are averaged with integer (truncating) division, matching how `avgPayment`
+ * handles the fractional stroop.
+ *
+ * @param amounts - Unsorted payment amounts in stroops.
+ * @returns The median amount in stroops.
+ */
+function medianOf(amounts: bigint[]): bigint {
+  if (amounts.length === 0) return 0n;
+
+  const sorted = [...amounts].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const mid = sorted.length >> 1;
+
+  return sorted.length % 2 === 1
+    ? sorted[mid]
+    : (sorted[mid - 1] + sorted[mid]) / 2n;
+}
+
+/**
  * Compute rich analytics for an invoice purely from its payment history.
  *
  * This performs no RPC calls of its own — it derives everything from the
@@ -24,6 +45,8 @@ export function computeInvoiceStats(invoice: Invoice): InvoiceStats {
   const totalFunded = payments.reduce((sum, p) => sum + p.amount, 0n);
   const avgPayment =
     payments.length === 0 ? 0n : totalFunded / BigInt(payments.length);
+
+  const medianAmount = medianOf(payments.map((p) => p.amount));
 
   const timestamps = payments
     .map((p) => p.timestamp)
@@ -58,6 +81,7 @@ export function computeInvoiceStats(invoice: Invoice): InvoiceStats {
   return {
     totalPayers,
     avgPayment,
+    medianAmount,
     fundingVelocity,
     timeToCompletion,
     completionBps,
