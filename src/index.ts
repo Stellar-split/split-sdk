@@ -277,7 +277,14 @@ export {
   buildRevealTransactionFromStorage,
 } from "./confidential.js";
 
-export { Deduplicator } from "./dedup.js";
+export {
+  Deduplicator,
+  generateIdempotencyKey,
+  isKnownKey,
+  registerKey,
+  clearKeys,
+} from "./dedup.js";
+export type { IdempotencyParams } from "./dedup.js";
 
 export { TxQueue } from "./queue.js";
 
