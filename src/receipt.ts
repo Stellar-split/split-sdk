@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import { Horizon } from "@stellar/stellar-sdk";
 import type { DecodedTransactionResult, Invoice, Payment } from "./types.js";
+import type { PaymentReceipt as ChainPaymentReceipt } from "./types/receipts.js";
 import { PayerAddressRequiredError } from "./errors.js";
 import { decodeTransactionResult } from "./txResultDecoder.js";
 
@@ -306,4 +307,52 @@ function _buildReceiptObject(data: {
       return json;
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Local receipt registry — module-level singleton, hash-based lookup.
+// Uses the chain PaymentReceipt type from src/types/receipts.ts which carries
+// a txHash field.  The compiled-summary PaymentReceipt defined above does not
+// participate in this registry.
+// ---------------------------------------------------------------------------
+
+const _receiptRegistry = new Map<string, ChainPaymentReceipt>();
+
+/**
+ * Store a receipt in the module-level registry, keyed by its `txHash`.
+ * Calling this again with the same `txHash` will overwrite the previous entry.
+ *
+ * @param receipt - The chain payment receipt to store.
+ */
+export function registerReceipt(receipt: ChainPaymentReceipt): void {
+  _receiptRegistry.set(receipt.txHash, receipt);
+}
+
+/**
+ * Retrieve a previously registered receipt by transaction hash.
+ *
+ * @param txHash - The transaction hash to look up.
+ * @returns The stored receipt, or `null` if none exists for that hash.
+ */
+export function getReceiptByTxHash(txHash: string): ChainPaymentReceipt | null {
+  return _receiptRegistry.get(txHash) ?? null;
+}
+
+/**
+ * Return all registered receipts sorted by `timestamp` ascending.
+ *
+ * @returns A new array of receipts in chronological order.
+ */
+export function getAllReceipts(): ChainPaymentReceipt[] {
+  return Array.from(_receiptRegistry.values()).sort(
+    (a, b) => a.timestamp - b.timestamp,
+  );
+}
+
+/**
+ * Remove all entries from the registry.
+ * Intended for test teardown — use with care in production code.
+ */
+export function clearReceipts(): void {
+  _receiptRegistry.clear();
 }
