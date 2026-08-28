@@ -578,11 +578,17 @@ export {
 } from "./webhookReplay.js";
 export type { WebhookRecord, WebhookReplayStore } from "./webhookReplay.js";
 
+// Webhook verification utilities
+export {
+  verifyWebhookSignature,
+  WebhookVerificationError,
+  assertWebhookSignature,
+} from "./webhooks/verify.js";
+
 // Webhook middleware for receiving and verifying incoming webhooks
 export {
   createWebhookMiddleware,
   generateWebhookSignature,
-  verifyWebhookSignature,
   parseWebhookPayload,
   isValidEventType,
   isWebhookRequest,
