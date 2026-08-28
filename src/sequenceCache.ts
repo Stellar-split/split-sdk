@@ -14,14 +14,46 @@ import { SequenceCacheError } from "./errors.js";
 // Types
 // ---------------------------------------------------------------------------
 
+export type CacheState = 'valid' | 'invalidated' | 'refreshing';
+
+export class StateTransitionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StateTransitionError';
+  }
+}
+
 /** Per-account cached sequence state. */
-interface SequenceEntry {
+export class SequenceEntry {
   /** The last-known on-chain sequence number (as a bigint). */
   base: bigint;
   /** How many local increments have been applied on top of `base`. */
   offset: number;
   /** Unix-ms timestamp when the entry was last refreshed from Horizon. */
   fetchedAt: number;
+
+  private _state: CacheState;
+
+  constructor(base: bigint, offset: number, fetchedAt: number, initialState: CacheState = 'valid') {
+    this.base = base;
+    this.offset = offset;
+    this.fetchedAt = fetchedAt;
+    this._state = initialState;
+  }
+
+  get state(): CacheState {
+    return this._state;
+  }
+
+  transition(newState: CacheState): void {
+    if (this._state === 'valid' && newState === 'refreshing') {
+      throw new StateTransitionError("Invalid transition: valid to refreshing without first going through invalidated");
+    }
+    if (this._state === 'invalidated' && newState === 'valid') {
+      throw new StateTransitionError("Invalid transition: invalidated to valid without refreshing");
+    }
+    this._state = newState;
+  }
 }
 
 /** Configuration for {@link SequenceCache}. */
@@ -83,6 +115,8 @@ export class SequenceCache {
 
     if (!entry) {
       entry = await this.fetchAndCache(accountId);
+    } else if (entry.state === 'invalidated') {
+      entry = await this.fetchAndCache(accountId, entry);
     }
 
     // Advance local counter
@@ -101,7 +135,7 @@ export class SequenceCache {
    */
   peekSequence(accountId: string): bigint | undefined {
     const entry = this.entries.get(`seq:${accountId}`);
-    if (!entry) return undefined;
+    if (!entry || entry.state === 'invalidated') return undefined;
     return entry.base + BigInt(entry.offset);
   }
 
@@ -110,9 +144,26 @@ export class SequenceCache {
    * Call this after detecting a `SEQUENCE_NUMBER_TOO_OLD` submission error.
    */
   async invalidate(accountId: string): Promise<void> {
-    this.entries.invalidate(`seq:${accountId}`);
-    // Pre-warm: fetch fresh value immediately so the next getSequence is fast
-    await this.fetchAndCache(accountId);
+    const entry = this.entries.get(`seq:${accountId}`);
+    if (entry) {
+      if (entry.state === 'valid') {
+        entry.transition('invalidated');
+      }
+      await this.fetchAndCache(accountId, entry);
+    } else {
+      await this.fetchAndCache(accountId);
+    }
+  }
+
+  /**
+   * Refresh the on-chain sequence number for `accountId`.
+   */
+  async refresh(accountId: string): Promise<void> {
+    const entry = this.entries.get(`seq:${accountId}`);
+    if (entry && entry.state === 'valid') {
+      entry.transition('invalidated');
+    }
+    await this.fetchAndCache(accountId, entry);
   }
 
   /**
@@ -144,14 +195,27 @@ export class SequenceCache {
   /**
    * Fetch the current on-chain sequence number and cache it with offset 0.
    */
-  private async fetchAndCache(accountId: string): Promise<SequenceEntry> {
+  private async fetchAndCache(accountId: string, existingEntry?: SequenceEntry): Promise<SequenceEntry> {
+    if (existingEntry) {
+      if (existingEntry.state === 'valid') {
+        existingEntry.transition('invalidated');
+      }
+      if (existingEntry.state === 'invalidated') {
+        existingEntry.transition('refreshing');
+      }
+    }
+    
     try {
       const account = await this.server.loadAccount(accountId);
       const base = BigInt(account.sequenceNumber());
-      const entry: SequenceEntry = { base, offset: 1, fetchedAt: Date.now() };
+      const entry = new SequenceEntry(base, 1, Date.now(), 'valid');
       this.entries.set(`seq:${accountId}`, entry);
       return entry;
     } catch (err) {
+      if (existingEntry && existingEntry.state === 'refreshing') {
+        // revert to invalidated if fetch fails
+        existingEntry.transition('invalidated');
+      }
       throw new SequenceCacheError(
         `Failed to fetch sequence for ${accountId}: ${err instanceof Error ? err.message : String(err)}`,
         accountId,
