@@ -12,6 +12,7 @@ import {
   TransactionBuilder,
   xdr,
   FeeBumpTransaction,
+  Keypair,
 } from "@stellar/stellar-sdk";
 import { InvalidTransactionTypeError } from "./errors.js";
 import { checkPayerReadiness } from "./preflightChecker.js";
@@ -70,7 +71,7 @@ export function buildFeeBump(
 
   // Build the fee bump from the inner transaction
   const feeBumpTx = TransactionBuilder.buildFeeBumpTransaction(
-    feeSource,
+    Keypair.fromPublicKey(feeSource),
     effectiveFee,
     innerTx,
     networkPassphrase,

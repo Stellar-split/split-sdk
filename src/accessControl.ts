@@ -10,6 +10,15 @@ export interface AsyncAclStore {
   check(resourceId: string, address: string): Promise<boolean>;
 }
 
+export interface AclManagerOptions {
+  cacheTtlMs?: number;
+}
+
+interface CacheEntry {
+  value: boolean;
+  expiresAt: number;
+}
+
 class InMemoryAclStore implements AsyncAclStore {
   private grants = new Map<string, Set<string>>();
 
@@ -36,9 +45,12 @@ class InMemoryAclStore implements AsyncAclStore {
  */
 export class AclManager {
   private readonly store: AsyncAclStore;
+  private readonly cacheTtlMs: number;
+  private readonly cache = new Map<string, CacheEntry>();
 
-  constructor(store?: AsyncAclStore) {
+  constructor(store?: AsyncAclStore, options: AclManagerOptions = {}) {
     this.store = store ?? new InMemoryAclStore();
+    this.cacheTtlMs = options.cacheTtlMs ?? 60_000;
   }
 
   /**
@@ -49,6 +61,7 @@ export class AclManager {
    */
   async grant(resourceId: string, address: string): Promise<void> {
     await this.store.grant(resourceId, address);
+    this.invalidateCache(address);
   }
 
   /**
@@ -59,6 +72,7 @@ export class AclManager {
    */
   async revoke(resourceId: string, address: string): Promise<void> {
     await this.store.revoke(resourceId, address);
+    this.invalidateCache(address);
   }
 
   /**
@@ -69,6 +83,29 @@ export class AclManager {
    * @returns True if access is granted
    */
   async check(resourceId: string, address: string): Promise<boolean> {
-    return this.store.check(resourceId, address);
+    const key = this.cacheKey(resourceId, address);
+    const cached = this.cache.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value;
+    }
+
+    const allowed = await this.store.check(resourceId, address);
+    this.cache.set(key, {
+      value: allowed,
+      expiresAt: Date.now() + this.cacheTtlMs,
+    });
+    return allowed;
+  }
+
+  invalidateCache(principal: string): void {
+    for (const key of this.cache.keys()) {
+      if (key.endsWith(`:${principal}`)) {
+        this.cache.delete(key);
+      }
+    }
+  }
+
+  private cacheKey(resourceId: string, address: string): string {
+    return `${resourceId}:${address}`;
   }
 }

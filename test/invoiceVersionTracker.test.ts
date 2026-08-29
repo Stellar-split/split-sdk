@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
+  ConflictError,
   InvoiceVersionTracker,
   InMemoryVersionStore,
+  detectVersionConflict,
 } from "../src/invoiceVersionTracker.js";
 import type { InvoiceVersion } from "../src/invoiceVersionTracker.js";
 import type { Invoice } from "../src/types.js";
@@ -270,5 +272,34 @@ describe("InvoiceVersionTracker", () => {
       expect(appendSpy).toHaveBeenCalledTimes(1);
       expect(getAllSpy).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("detectVersionConflict", () => {
+  it("throws when version vectors diverge", () => {
+    expect(() =>
+      detectVersionConflict(
+        { alice: 2, bob: 1 },
+        { alice: 1, bob: 2 },
+      ),
+    ).toThrow(ConflictError);
+  });
+
+  it("does not throw when one vector strictly dominates", () => {
+    expect(() =>
+      detectVersionConflict(
+        { alice: 1, bob: 1 },
+        { alice: 2, bob: 1 },
+      ),
+    ).not.toThrow();
+  });
+
+  it("does not throw for identical vectors", () => {
+    expect(() =>
+      detectVersionConflict(
+        { alice: 2, bob: 1 },
+        { alice: 2, bob: 1 },
+      ),
+    ).not.toThrow();
   });
 });

@@ -16,6 +16,20 @@ import { UnknownSplitError } from "./errors.js";
 import { TypedEventEmitter } from "./events/TypedEventEmitter.js";
 import type { SplitLeg, SplitLegState, SplitRollbackCheckpoint } from "./types.js";
 
+export class RollbackTimeoutError extends Error {
+  constructor(splitId: string) {
+    super(`Rollback timed out for split ${splitId}`);
+    this.name = "RollbackTimeoutError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export interface RollbackTimeoutOptions {
+  timeoutMs: number;
+  execute: () => Promise<void>;
+  cleanup?: () => Promise<void> | void;
+}
+
 /** Event payloads emitted by {@link RollbackCoordinator}. */
 export interface SplitRollbackEventMap {
   splitRollbackInitiated: { splitId: string; incomplete: SplitLeg[] };
@@ -108,6 +122,29 @@ export class RollbackCoordinator extends TypedEventEmitter<SplitRollbackEventMap
     return this.checkpoints.get(splitId);
   }
 
+  async initiateRollbackWithTimeout(
+    splitId: string,
+    options: RollbackTimeoutOptions,
+  ): Promise<SplitRollbackRecord> {
+    const record = this.initiateRollback(splitId);
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new RollbackTimeoutError(splitId)), options.timeoutMs);
+    });
+
+    try {
+      await Promise.race([options.execute(), timeoutPromise]);
+      return record;
+    } catch (error) {
+      if (!(error instanceof RollbackTimeoutError)) {
+        throw error;
+      }
+
+      await this.cleanupTimedOutRollback(splitId, options.cleanup);
+      throw error;
+    }
+  }
+
   private getCheckpoint(splitId: string): SplitRollbackCheckpoint {
     const checkpoint = this.checkpoints.get(splitId);
     if (!checkpoint) throw new UnknownSplitError(splitId);
@@ -119,5 +156,23 @@ export class RollbackCoordinator extends TypedEventEmitter<SplitRollbackEventMap
     const leg = checkpoint.legs[legIndex];
     if (!leg) throw new UnknownSplitError(`${splitId}[${legIndex}]`);
     leg.state = state;
+  }
+
+  private async cleanupTimedOutRollback(
+    splitId: string,
+    cleanup?: () => Promise<void> | void,
+  ): Promise<void> {
+    this.rollbackRecords.delete(splitId);
+    this.checkpoints.delete(splitId);
+
+    if (!cleanup) {
+      return;
+    }
+
+    try {
+      await cleanup();
+    } catch (error) {
+      console.error("Rollback cleanup failed", error);
+    }
   }
 }

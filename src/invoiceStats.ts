@@ -7,6 +7,123 @@ interface InvoiceStatsClient {
 
 const SECONDS_PER_DAY = 86_400;
 
+const MS_PER_SECOND = 1_000;
+const MS_PER_MINUTE = 60 * MS_PER_SECOND;
+const MS_PER_HOUR = 60 * MS_PER_MINUTE;
+const MS_PER_DAY = 24 * MS_PER_HOUR;
+
+/**
+ * Any epoch value above this magnitude is already expressed in milliseconds.
+ *
+ * `1e12` ms is 2001-09-09, while `1e12` seconds is the year 33658 — so the
+ * threshold unambiguously separates second- and millisecond-based timestamps
+ * for every realistic invoice.
+ */
+const MS_DETECTION_THRESHOLD = 1e12;
+
+/**
+ * Normalise a `createdAt` value to epoch milliseconds.
+ *
+ * Accepts either Unix seconds or milliseconds and auto-detects the unit by
+ * magnitude: values greater than 1e12 are treated as milliseconds, everything
+ * else is treated as seconds.
+ *
+ * Non-positive values are rejected rather than interpreted: `0` is the default
+ * a Soroban `u64` decoder (or a partially populated payload) produces for an
+ * unset field, and treating it as epoch 1970 would report a ~20,000-day age
+ * instead of "unknown".
+ *
+ * @param timestamp - Epoch value in seconds or milliseconds.
+ * @returns Epoch milliseconds, or `null` when the input is not a finite,
+ *          positive number.
+ */
+function toEpochMs(timestamp: number | undefined): number | null {
+  if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) return null;
+  if (timestamp <= 0) return null;
+  return timestamp > MS_DETECTION_THRESHOLD
+    ? timestamp
+    : timestamp * MS_PER_SECOND;
+}
+
+/**
+ * Milliseconds elapsed since `invoice.createdAt`, clamped at 0.
+ *
+ * Returns `null` when the invoice carries no usable `createdAt` (absent, or a
+ * non-positive / non-finite sentinel).
+ */
+function elapsedMsSinceCreation(invoice: Invoice): number | null {
+  const createdMs = toEpochMs(invoice.createdAt);
+  if (createdMs === null) return null;
+  const elapsed = Date.now() - createdMs;
+  return elapsed > 0 ? elapsed : 0;
+}
+
+/** How old an invoice is, split into whole days, hours, and minutes. */
+export interface InvoiceAge {
+  /** Whole days elapsed since creation. */
+  days: number;
+  /** Whole hours remaining after `days` (0–23). */
+  hours: number;
+  /** Whole minutes remaining after `days` and `hours` (0–59). */
+  minutes: number;
+}
+
+/**
+ * Compute how long ago an invoice was created.
+ *
+ * The result is a calendar-style breakdown: `hours` is the remainder after
+ * whole `days`, and `minutes` is the remainder after whole `hours`. Uses
+ * `Date.now()` internally and performs no network calls.
+ *
+ * `invoice.createdAt` may be a Unix timestamp in seconds or in milliseconds —
+ * the unit is detected automatically by magnitude (`> 1e12` means ms). Invoices
+ * with no usable `createdAt` (absent, `0`, or negative), or with a `createdAt`
+ * in the future, report a zero age.
+ *
+ * @param invoice - The invoice to measure.
+ * @returns The elapsed age as {@link InvoiceAge}.
+ */
+export function getInvoiceAge(invoice: Invoice): InvoiceAge {
+  const elapsed = elapsedMsSinceCreation(invoice) ?? 0;
+
+  return {
+    days: Math.floor(elapsed / MS_PER_DAY),
+    hours: Math.floor((elapsed % MS_PER_DAY) / MS_PER_HOUR),
+    minutes: Math.floor((elapsed % MS_PER_HOUR) / MS_PER_MINUTE),
+  };
+}
+
+/**
+ * Compute how fast an invoice is being funded since it was created.
+ *
+ * Derived purely from `invoice.funded` and `invoice.createdAt` — no network
+ * calls. `createdAt` may be in seconds or milliseconds (auto-detected by
+ * magnitude, `> 1e12` means ms).
+ *
+ * The returned rate is in the same base units as `invoice.funded` — stroops per
+ * day, **not** USDC per day. Divide by `10_000_000` before displaying a USDC
+ * figure.
+ *
+ * Not to be confused with {@link InvoiceStats.fundingVelocity} returned by
+ * {@link computeInvoiceStats}: that one is a payment-window rate (sum of
+ * payment amounts over the span between the first and last payment), whereas
+ * this is a lifetime average over the whole age of the invoice. The two
+ * deliberately differ for the same invoice.
+ *
+ * Returns `0` when the invoice has no usable `createdAt` (absent, `0`, or
+ * negative) or when `createdAt` falls within the same second as `Date.now()`,
+ * which guards against dividing by a zero (or negative) age.
+ *
+ * @param invoice - The invoice to measure.
+ * @returns Stroops funded per day since creation, or `0` for a zero age.
+ */
+export function getFundingVelocity(invoice: Invoice): number {
+  const elapsed = elapsedMsSinceCreation(invoice);
+  if (elapsed === null || elapsed < MS_PER_SECOND) return 0;
+
+  return Number(invoice.funded) / (elapsed / MS_PER_DAY);
+}
+
 /**
  * Median of a list of stroop amounts, computed with a sort (no dependencies).
  *

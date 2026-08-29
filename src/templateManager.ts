@@ -62,6 +62,26 @@ function writeBrowserStore(store: Record<string, InvoiceTemplate>): void {
 }
 
 // ---------------------------------------------------------------------------
+// Version history (in-memory; no persistence layer)
+// ---------------------------------------------------------------------------
+
+/**
+ * A single versioned snapshot of a template's content.
+ */
+export interface TemplateVersion {
+  /** Monotonically increasing version number, starting at 1. */
+  version: number;
+  /** The template content at this version. */
+  content: string;
+}
+
+/**
+ * In-memory store mapping template ID → ordered list of {@link TemplateVersion}s.
+ * Index 0 holds v1, index N-1 holds the latest version.
+ */
+const _versionHistory = new Map<string, TemplateVersion[]>();
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -101,4 +121,63 @@ export function deleteTemplate(name: string): void {
     delete store[name];
     writeNodeStore(store);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Versioned template API
+// ---------------------------------------------------------------------------
+
+/**
+ * Update a template's content.
+ *
+ * - The new content is stored as the next version (version 1 on first call).
+ * - All previous versions are retained in {@link _versionHistory} so they can
+ *   be retrieved via {@link getTemplate}.
+ * - Version numbers are integers starting at 1 and increment by 1 on every
+ *   call regardless of whether the content actually changed.
+ *
+ * @param id      - Unique template identifier.
+ * @param content - New template content string.
+ * @returns The new version number assigned to this content.
+ */
+export function updateTemplate(id: string, content: string): number {
+  const history = _versionHistory.get(id) ?? [];
+  const nextVersion = history.length + 1;
+  history.push({ version: nextVersion, content });
+  _versionHistory.set(id, history);
+  return nextVersion;
+}
+
+/**
+ * Retrieve a template's content by ID and optional version.
+ *
+ * @param id      - Unique template identifier.
+ * @param version - Specific version to retrieve.  When omitted (or 0), the
+ *                  latest version is returned.
+ * @returns The {@link TemplateVersion} for the requested version, or `null` if
+ *          the template does not exist or the version is out of range.
+ */
+export function getTemplate(id: string, version?: number): TemplateVersion | null {
+  const history = _versionHistory.get(id);
+  if (!history || history.length === 0) return null;
+
+  if (!version) {
+    // Return the latest version when no version is specified.
+    return history[history.length - 1];
+  }
+
+  // Versions are 1-indexed; array is 0-indexed.
+  const entry = history[version - 1];
+  return entry ?? null;
+}
+
+/**
+ * Retrieve the full version history for a template.
+ *
+ * @param id - Unique template identifier.
+ * @returns Ordered list of {@link TemplateVersion}s (oldest first), or an
+ *          empty array when the template has no recorded history.
+ */
+export function getTemplateHistory(id: string): TemplateVersion[] {
+  return _versionHistory.get(id) ?? [];
 }

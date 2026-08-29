@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { TimeoutManager, withTimeout, RequestTimeoutError } from "../src/timeout.js";
+import { TimeoutManager, withTimeout, withTimeoutOrThrow, RequestTimeoutError } from "../src/timeout.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -40,10 +40,10 @@ describe("TimeoutManager", () => {
 describe("withTimeout", () => {
   it("resolves when operation completes within timeout", async () => {
     const result = await withTimeout(async () => "ok", 1_000, "test");
-    expect(result).toBe("ok");
+    expect(result).toEqual({ ok: true, value: "ok" });
   });
 
-  it("throws RequestTimeoutError when operation exceeds timeout", async () => {
+  it("returns a timeout result when operation exceeds timeout", async () => {
     vi.useFakeTimers();
 
     const slow = new Promise<never>(() => { /* never resolves */ });
@@ -51,11 +51,14 @@ describe("withTimeout", () => {
 
     vi.advanceTimersByTime(150);
 
-    await expect(race).rejects.toThrow(RequestTimeoutError);
-    await expect(race).rejects.toMatchObject({ method: "slowMethod", timeoutMs: 100 });
+    await expect(race).resolves.toMatchObject({
+      ok: false,
+      reason: "timeout",
+      error: expect.objectContaining({ method: "slowMethod", timeoutMs: 100 }),
+    });
   });
 
-  it("aborts and throws correctly; error has method and timeoutMs", async () => {
+  it("surfaces timeout metadata in the result union", async () => {
     vi.useFakeTimers();
 
     const race = withTimeout(
@@ -65,19 +68,33 @@ describe("withTimeout", () => {
     );
     vi.advanceTimersByTime(100);
 
-    const err = await race.catch((e) => e);
-    expect(err).toBeInstanceOf(RequestTimeoutError);
-    expect(err.method).toBe("getLeaderboard");
-    expect(err.timeoutMs).toBe(50);
-    expect(err.code).toBe("REQUEST_TIMEOUT");
+    const result = await race;
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("Expected timeout result");
+    }
+    expect(result.error).toBeInstanceOf(RequestTimeoutError);
+    expect(result.error).toMatchObject({ method: "getLeaderboard", timeoutMs: 50, code: "REQUEST_TIMEOUT" });
   });
 
   it("clears the timer when operation resolves fast", async () => {
     vi.useFakeTimers();
     const result = await withTimeout(async () => 42, 5_000, "fast");
-    expect(result).toBe(42);
+    expect(result).toEqual({ ok: true, value: 42 });
     // No dangling timer — fake timers would expose it if cleanup failed
     vi.runAllTimers();
+  });
+});
+
+describe("withTimeoutOrThrow", () => {
+  it("preserves the throwing behavior for existing callers", async () => {
+    vi.useFakeTimers();
+
+    const slow = new Promise<never>(() => undefined);
+    const race = withTimeoutOrThrow(() => slow, 100, "slowMethod");
+    vi.advanceTimersByTime(150);
+
+    await expect(race).rejects.toThrow(RequestTimeoutError);
   });
 });
 

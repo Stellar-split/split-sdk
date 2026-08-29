@@ -29,6 +29,7 @@ describe("buildFeeBump", () => {
     const feeBumpTx = buildFeeBump(innerTx, feeSource, BASE_FEE, networkPassphrase);
 
     expect(feeBumpTx).toBeDefined();
+    expect(feeBumpTx.feeSource).toBe(feeSource);
     const xdr = feeBumpToXDR(feeBumpTx);
     expect(xdr).toBeTruthy();
     expect(typeof xdr).toBe("string");
@@ -62,6 +63,7 @@ describe("buildFeeBump", () => {
     const feeBumpTx = buildFeeBump(innerTx, feeSource, BASE_FEE, networkPassphrase);
 
     const xdr = feeBumpToXDR(feeBumpTx);
+    expect(feeBumpTx.feeSource).toBe(feeSource);
     expect(xdr).toBeTruthy();
 
     // Verify the inner transaction is accessible in the fee bump

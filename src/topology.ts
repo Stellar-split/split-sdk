@@ -4,7 +4,8 @@ import { DiscoveryFetchError } from "./errors.js";
 const DEFAULT_DISCOVERY_URL = "https://horizon.stellar.org/network_info";
 
 /**
- * Fetch the Stellar node list and benchmark each endpoint by latency.
+ * Fetch the Stellar RPC node list from a discovery endpoint and benchmark each
+ * endpoint by latency before returning the sorted health view.
  *
  * @param discoveryUrl - URL that returns a JSON array of RPC node URLs.
  *                       Defaults to the public Horizon network_info endpoint.
@@ -19,6 +20,12 @@ export async function discoverRPCNodes(
 }
 
 async function fetchNodeList(discoveryUrl: string): Promise<string[]> {
+  /**
+   * Load candidate RPC node URLs from a supported discovery payload.
+   *
+   * @param discoveryUrl - Endpoint returning either a raw string array or an object with node arrays.
+   * @returns Normalized list of string RPC URLs.
+   */
   const res = await fetch(discoveryUrl);
   if (!res.ok) throw new DiscoveryFetchError(res.status, res.statusText);
   const data: unknown = await res.json();
@@ -38,6 +45,12 @@ async function fetchNodeList(discoveryUrl: string): Promise<string[]> {
 }
 
 async function pingNode(url: string): Promise<RPCNode> {
+  /**
+   * Measure one node's responsiveness and health by timing a simple GET request.
+   *
+   * @param url - RPC endpoint URL to probe.
+   * @returns Node metadata with latency and health flags.
+   */
   const start = Date.now();
   try {
     const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(5000) });

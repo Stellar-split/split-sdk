@@ -245,6 +245,54 @@ function decodeLedgerEntry(
 }
 
 // ---------------------------------------------------------------------------
+// Scalar decoders
+// ---------------------------------------------------------------------------
+
+/**
+ * Decode a raw 16-byte INT128 XDR value into a signed `BigInt`.
+ *
+ * An XDR `Int128Parts` is encoded as a 64-bit signed high word followed by a
+ * 64-bit unsigned low word (big-endian). The high word must be treated as
+ * *signed* so that negative values round-trip correctly -- treating it as
+ * unsigned causes negative values to decode as large positive numbers.
+ *
+ * @param buffer - 16-byte big-endian buffer containing the encoded INT128.
+ * @returns The decoded signed `BigInt`.
+ */
+export function decodeInt128(buffer: Buffer): bigint {
+  if (buffer.length !== 16) {
+    throw new Error(`INT128 buffer must be exactly 16 bytes, got ${buffer.length}`);
+  }
+
+  const hi = buffer.readBigInt64BE(0); // signed high 64 bits
+  const lo = buffer.readBigUInt64BE(8); // unsigned low 64 bits
+
+  // BigInt shifts/bitwise-ops operate on an infinite-precision two's
+  // complement representation, so combining a signed high word with an
+  // unsigned low word this way correctly preserves the sign of the result.
+  return (hi << 64n) | lo;
+}
+
+/**
+ * Decode a raw XDR scalar value of the given type from a buffer.
+ *
+ * Currently supports `"INT128"`; additional scalar types can be added here
+ * as needed.
+ *
+ * @param type   - The XDR scalar type to decode.
+ * @param buffer - Raw bytes for the value.
+ */
+export function decode(type: "INT128", buffer: Buffer): bigint;
+export function decode(type: string, buffer: Buffer): bigint {
+  switch (type) {
+    case "INT128":
+      return decodeInt128(buffer);
+    default:
+      throw new Error(`Unsupported scalar decode type: ${type}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 

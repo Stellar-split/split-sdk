@@ -37,6 +37,9 @@ export class BatchedRpcClient {
     windowMs = 10,
     maxBatchSize = 20,
   ) {
+    if (maxBatchSize === 0) {
+      throw new RangeError("maxBatchSize must not be 0");
+    }
     this._fetchers = fetchers;
     this._windowMs = windowMs;
     this._maxBatchSize = maxBatchSize;
@@ -135,14 +138,15 @@ export class BatchedRpcClient {
 /** @deprecated Use BatchedRpcClient instead */
 export interface BatcherConfig {
   windowMs: number;
-  maxBatchSize: number;
+  /** Maximum items per batch. Defaults to unlimited (Infinity) when omitted. */
+  maxBatchSize?: number;
 }
 
 /** @deprecated Use BatchedRpcClient instead */
 export class RequestBatcher {
   private readonly _inner: BatchedRpcClient;
 
-  constructor(config: BatcherConfig = { windowMs: 10, maxBatchSize: 20 }) {
+  constructor(config: BatcherConfig = { windowMs: 10, maxBatchSize: Infinity }) {
     const stub: BatchFetchers = {
       fetchInvoice: async (id) => ({
         id,
@@ -157,7 +161,11 @@ export class RequestBatcher {
       fetchPaymentHistory: async () => [],
       fetchInvoiceExt: async () => ({ parentInvoiceId: null, cloneDepth: 0 }),
     };
-    this._inner = new BatchedRpcClient(stub, config.windowMs, config.maxBatchSize);
+    this._inner = new BatchedRpcClient(
+      stub,
+      config.windowMs,
+      config.maxBatchSize ?? Infinity,
+    );
   }
 
   async getInvoice(invoiceId: string): Promise<Invoice> {

@@ -8,6 +8,7 @@ import type { ExportFormat } from "./export.js";
 
 export { StellarSplitClient } from "./client.js";
 export { FinalityChecker } from "./finalityChecker.js";
+export { buildPaymentMemo, parsePaymentMemo } from "./memoBuilder.js";
 export type {
   StellarSplitClientConfig,
   NetworkConfig,
@@ -94,6 +95,7 @@ export {
   Sep41AdapterError,
   TrancheProgressError,
   RefundGraceError,
+  PreflightError,
   ChannelReconciliationError,
   SequenceCacheError,
   SequenceNumberTooOldError,
@@ -156,6 +158,7 @@ export {
   isSep41AdapterError,
   isTrancheProgressError,
   isRefundGraceError,
+  isPreflightError,
   isChannelReconciliationError,
   isSequenceCacheError,
   isSequenceNumberTooOldError,
@@ -474,7 +477,7 @@ export { TimeoutManager, withTimeout, EscalationManager, RequestTimeoutError as 
 export type { TimeoutConfig, EscalationEvent, EscalationCallback } from "./timeout.js";
 
 // Trace IDs (Issue #2)
-export { TraceIdManager, globalTraceIdManager } from "./traceId.js";
+export { TraceIdManager, globalTraceIdManager, generateTraceId } from "./traceId.js";
 export type { TraceIdGenerator } from "./traceId.js";
 
 // Injectable RpcClient (Issue #3)
@@ -484,8 +487,8 @@ export type { RpcClient } from "./rpcClient.js";
 export { negotiateVersion, SDK_CONTRACT_VERSION } from "./version.js";
 export type { VersionInfo } from "./types.js";
 
-export { checkPayerReadiness, checkInvoiceExpiry, checkSponsorReserve, checkRecipientFlags } from "./preflightChecker.js";
-export type { PayerReadinessResult, PayerReadinessReason, InvoiceExpiryResult, InvoiceExpiryReason, SponsorReserveCheck, RecipientFlagsCheck } from "./preflightChecker.js";
+export { checkPayerReadiness, checkInvoiceExpiry, checkSponsorReserve, checkRecipientFlags, runPreflight } from "./preflightChecker.js";
+export type { PayerReadinessResult, PayerReadinessReason, InvoiceExpiryResult, InvoiceExpiryReason, SponsorReserveCheck, RecipientFlagsCheck, RunPreflightOptions } from "./preflightChecker.js";
 
 export { inspectFlags, hasAnyRestrictiveFlag } from "./accountFlagsInspector.js";
 export type { AccountFlagSet } from "./types.js";
@@ -496,7 +499,7 @@ export { getSuggestion } from "./errorSuggestions.js";
 // XDR Decoder — structured logging of Stellar XDR
 // ---------------------------------------------------------------------------
 
-export { decodeXDR } from "./xdrDecoder.js";
+export { decodeXDR, decode, decodeInt128 } from "./xdrDecoder.js";
 export { decodeTransactionResult } from "./txResultDecoder.js";
 
 // ---------------------------------------------------------------------------
@@ -644,6 +647,11 @@ export {
   serializePaymentReceipt,
   deserializePaymentReceipt,
   finalizePaymentReceipt,
+  // Local receipt registry (hash-based lookup)
+  registerReceipt,
+  getReceiptByTxHash,
+  getAllReceipts,
+  clearReceipts,
 } from "./receipt.js";
 export type {
   PaymentReceipt,
@@ -995,7 +1003,13 @@ export type {
 // Split ratio validator
 // ---------------------------------------------------------------------------
 
-export { validateSplitRatios, validateSplitRatiosOrThrow, ratiosToRecipients } from "./validators/splitRatioValidator.js";
+export {
+  validateSplitRatios,
+  validateSplitRatiosOrThrow,
+  ratiosToRecipients,
+  validateSplitTotal,
+  normalizeSplits,
+} from "./validators/splitRatioValidator.js";
 export type {
   RecipientShare,
   SplitConfig,
@@ -1006,7 +1020,7 @@ export type {
 // Trustline checker
 // ---------------------------------------------------------------------------
 
-export { checkTrustlines, checkSingleTrustline } from "./trustlineChecker.js";
+export { checkTrustlines, checkSingleTrustline, checkTrustlinesBatch } from "./trustlineChecker.js";
 export type { TrustlineEntry, TrustlineCheckResult } from "./trustlineChecker.js";
 
 // ---------------------------------------------------------------------------
@@ -1040,6 +1054,8 @@ export type {
   ChannelStateFetcher,
 } from "./channelReconciler.js";
 export { getInvoiceStats, computeInvoiceStats } from "./invoiceStats.js";
+export { getInvoiceAge, getFundingVelocity } from "./invoiceStats.js";
+export type { InvoiceAge } from "./invoiceStats.js";
 
 export { previewSplitRules } from "./splitPreview.js";
 

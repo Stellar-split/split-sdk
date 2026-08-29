@@ -237,6 +237,20 @@ describe("executeWithRetry", () => {
     expect(onRetry).toHaveBeenNthCalledWith(2, 2, err, expect.any(Number));
   });
 
+  it("uses retryIf to block retries for selected errors", async () => {
+    const err = new ValidationError("bad input");
+    const fn = vi.fn().mockRejectedValue(err);
+
+    await expect(
+      executeWithRetry(fn, {
+        ...defaultOptions,
+        retryIf: (error) => !(error instanceof ValidationError),
+      }),
+    ).rejects.toThrow(ValidationError);
+
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
   it("respects per-method maxAttempts override", async () => {
     const err = new Error("network timeout");
     const fn = vi.fn().mockRejectedValue(err);
