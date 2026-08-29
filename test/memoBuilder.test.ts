@@ -30,6 +30,25 @@ describe("buildPaymentMemo", () => {
     expect(Buffer.from(result, "utf8").toString("utf8")).toBe(result);
   });
 
+  it("does not split 4-byte emoji code points on truncation", () => {
+    // "split:" = 6 bytes. 28 - 6 = 22 bytes remaining.
+    // Each 🚀 is 4 bytes. 22 // 4 = 5 rockets = 20 bytes (total 26 bytes).
+    const rocketId = "🚀".repeat(7); // 7 * 4 = 28 bytes (+ 6 = 34 bytes)
+    const result = buildPaymentMemo(rocketId);
+    expect(Buffer.byteLength(result, "utf8")).toBeLessThanOrEqual(28);
+    expect(result).toBe("split:" + "🚀".repeat(5));
+    expect(Buffer.from(result, "utf8").toString("utf8")).toBe(result);
+  });
+
+  it("handles tranche index 0 correctly", () => {
+    const result = buildPaymentMemo("inv-001", { tranche: 0 });
+    expect(result).toBe("split:inv-001:t0");
+    expect(parsePaymentMemo(result)).toEqual({
+      invoiceId: "inv-001",
+      tranche: 0,
+    });
+  });
+
   it("tranche suffix is included when it fits within 28 bytes", () => {
     const result = buildPaymentMemo("short", { tranche: 5 });
     expect(result).toBe("split:short:t5");
