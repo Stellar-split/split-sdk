@@ -62,4 +62,41 @@ describe("AclManager", () => {
     expect(await manager.check(resourceId, address1)).toBe(false);
     expect(await manager.check(resourceId, address2)).toBe(true);
   });
+
+  it("caches permission checks per resource and principal until ttl expiry", async () => {
+    vi.useFakeTimers();
+    const mockStore: AsyncAclStore = {
+      grant: vi.fn().mockResolvedValue(undefined),
+      revoke: vi.fn().mockResolvedValue(undefined),
+      check: vi.fn().mockResolvedValue(true),
+    };
+
+    const manager = new AclManager(mockStore, { cacheTtlMs: 100 });
+
+    await manager.check("invoice-001", "GAAA");
+    await manager.check("invoice-001", "GAAA");
+    expect(mockStore.check).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(101);
+    await manager.check("invoice-001", "GAAA");
+    expect(mockStore.check).toHaveBeenCalledTimes(2);
+
+    vi.useRealTimers();
+  });
+
+  it("invalidates cached entries for a principal", async () => {
+    const mockStore: AsyncAclStore = {
+      grant: vi.fn().mockResolvedValue(undefined),
+      revoke: vi.fn().mockResolvedValue(undefined),
+      check: vi.fn().mockResolvedValue(true),
+    };
+
+    const manager = new AclManager(mockStore);
+
+    await manager.check("invoice-001", "GAAA");
+    manager.invalidateCache("GAAA");
+    await manager.check("invoice-001", "GAAA");
+
+    expect(mockStore.check).toHaveBeenCalledTimes(2);
+  });
 });
