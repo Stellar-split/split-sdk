@@ -176,3 +176,109 @@ describe("AdaptiveThrottle", () => {
     expect(throttle.getStats().penalized).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Exponential backoff (getBackoffMultiplier + maxBackoffMs)
+// ---------------------------------------------------------------------------
+
+import { DEFAULT_MAX_BACKOFF_MS } from "../src/throttle/AdaptiveThrottle.js";
+
+describe("exponential backoff", () => {
+  it("DEFAULT_MAX_BACKOFF_MS is 60 000", () => {
+    expect(DEFAULT_MAX_BACKOFF_MS).toBe(60_000);
+  });
+
+  it("getBackoffMultiplier() returns 1 with no breaches", () => {
+    const throttle = new AdaptiveThrottle();
+    expect(throttle.getBackoffMultiplier()).toBe(1);
+  });
+
+  it("getBackoffMultiplier() doubles after each consecutive breach", () => {
+    vi.useFakeTimers();
+    let now = 0;
+    const throttle = new AdaptiveThrottle({ now: () => now, penaltyDurationMs: 1_000, maxBackoffMs: 60_000 });
+    throttle.update({ limit: 10, remaining: 10, resetAt: now + 1_000 });
+
+    throttle.recordRateLimited(); // breach 1 → multiplier = 1 (2^0)
+    expect(throttle.getBackoffMultiplier()).toBe(1);
+
+    throttle.recordRateLimited(); // breach 2 → multiplier = 2 (2^1)
+    expect(throttle.getBackoffMultiplier()).toBe(2);
+
+    throttle.recordRateLimited(); // breach 3 → multiplier = 4 (2^2)
+    expect(throttle.getBackoffMultiplier()).toBe(4);
+
+    vi.useRealTimers();
+  });
+
+  it("effective window doubles with each breach", async () => {
+    vi.useFakeTimers();
+    let now = 0;
+    const base = 1_000;
+    const throttle = new AdaptiveThrottle({ now: () => now, penaltyDurationMs: base, maxBackoffMs: 60_000 });
+    throttle.update({ limit: 10, remaining: 0, resetAt: now + base });
+
+    // First breach → 1 000 ms window
+    throttle.recordRateLimited();
+    expect(throttle.getStats().penalized).toBe(true);
+
+    now += base - 1;
+    await vi.advanceTimersByTimeAsync(base - 1);
+    expect(throttle.getStats().penalized).toBe(true);
+
+    now += 1;
+    await vi.advanceTimersByTimeAsync(1);
+    expect(throttle.getStats().penalized).toBe(false);
+
+    // Second breach → 2 000 ms window
+    throttle.recordRateLimited();
+    now += base; // only 1 000ms of 2 000ms elapsed
+    await vi.advanceTimersByTimeAsync(base);
+    expect(throttle.getStats().penalized).toBe(true);
+
+    now += base;
+    await vi.advanceTimersByTimeAsync(base);
+    expect(throttle.getStats().penalized).toBe(false);
+
+    vi.useRealTimers();
+  });
+
+  it("backoff is capped at maxBackoffMs", () => {
+    vi.useFakeTimers();
+    let now = 0;
+    const throttle = new AdaptiveThrottle({ now: () => now, penaltyDurationMs: 1_000, maxBackoffMs: 4_000 });
+    throttle.update({ limit: 5, remaining: 5, resetAt: now + 1_000 });
+
+    // 5 breaches: 1000, 2000, 4000, (cap)4000, (cap)4000
+    for (let i = 0; i < 5; i++) throttle.recordRateLimited();
+
+    // multiplier should be capped: maxBackoffMs / penaltyDurationMs = 4
+    expect(throttle.getBackoffMultiplier()).toBe(4);
+
+    vi.useRealTimers();
+  });
+
+  it("backoff resets after a full window with no breach", async () => {
+    vi.useFakeTimers();
+    let now = 0;
+    const base = 1_000;
+    const throttle = new AdaptiveThrottle({ now: () => now, penaltyDurationMs: base, maxBackoffMs: 60_000 });
+    throttle.update({ limit: 10, remaining: 10, resetAt: now + base });
+
+    // Two breaches → multiplier 2
+    throttle.recordRateLimited();
+    throttle.recordRateLimited();
+    expect(throttle.getBackoffMultiplier()).toBe(2);
+
+    // Let penalty expire
+    now += base * 2 + 1;
+    await vi.advanceTimersByTimeAsync(base * 2 + 1);
+    expect(throttle.getStats().penalized).toBe(false);
+
+    // Calling update() after a full window with no breach resets the counter
+    throttle.update({ limit: 10, remaining: 10, resetAt: now + base });
+    expect(throttle.getBackoffMultiplier()).toBe(1);
+
+    vi.useRealTimers();
+  });
+});
