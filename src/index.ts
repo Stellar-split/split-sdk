@@ -647,6 +647,11 @@ export {
   serializePaymentReceipt,
   deserializePaymentReceipt,
   finalizePaymentReceipt,
+  // Local receipt registry (hash-based lookup)
+  registerReceipt,
+  getReceiptByTxHash,
+  getAllReceipts,
+  clearReceipts,
 } from "./receipt.js";
 export type {
   PaymentReceipt,
