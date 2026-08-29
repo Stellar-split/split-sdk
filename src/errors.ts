@@ -808,6 +808,22 @@ export class RefundGraceError extends StellarSplitError {
   }
 }
 
+/** Thrown when a preflight check fails before the SDK attempts contract calls. */
+export class PreflightError extends StellarSplitError {
+  /** The endpoint URL the failing check targeted. */
+  readonly url: string;
+  /** Human-readable reason the check failed. */
+  readonly reason: string;
+
+  constructor(url: string, reason: string) {
+    super(`Preflight check failed for ${url}: ${reason}`, "PREFLIGHT_ERROR", { url, reason });
+    this.name = "PreflightError";
+    this.url = url;
+    this.reason = reason;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Thrown when submitting a WaterfallPlan with an unsatisfied tier and `allowPartial` was not set. */
 export class WaterfallInsufficientFundsError extends StellarSplitError {
   readonly invoiceId: string;
@@ -1282,6 +1298,10 @@ export function isTrancheProgressError(err: unknown): err is TrancheProgressErro
 
 export function isRefundGraceError(err: unknown): err is RefundGraceError {
   return err instanceof RefundGraceError;
+}
+
+export function isPreflightError(err: unknown): err is PreflightError {
+  return err instanceof PreflightError;
 }
 
 export function isChannelReconciliationError(err: unknown): err is ChannelReconciliationError {

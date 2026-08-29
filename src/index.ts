@@ -95,6 +95,7 @@ export {
   Sep41AdapterError,
   TrancheProgressError,
   RefundGraceError,
+  PreflightError,
   ChannelReconciliationError,
   SequenceCacheError,
   SequenceNumberTooOldError,
@@ -157,6 +158,7 @@ export {
   isSep41AdapterError,
   isTrancheProgressError,
   isRefundGraceError,
+  isPreflightError,
   isChannelReconciliationError,
   isSequenceCacheError,
   isSequenceNumberTooOldError,
@@ -475,7 +477,7 @@ export { TimeoutManager, withTimeout, EscalationManager, RequestTimeoutError as 
 export type { TimeoutConfig, EscalationEvent, EscalationCallback } from "./timeout.js";
 
 // Trace IDs (Issue #2)
-export { TraceIdManager, globalTraceIdManager } from "./traceId.js";
+export { TraceIdManager, globalTraceIdManager, generateTraceId } from "./traceId.js";
 export type { TraceIdGenerator } from "./traceId.js";
 
 // Injectable RpcClient (Issue #3)
@@ -485,8 +487,8 @@ export type { RpcClient } from "./rpcClient.js";
 export { negotiateVersion, SDK_CONTRACT_VERSION } from "./version.js";
 export type { VersionInfo } from "./types.js";
 
-export { checkPayerReadiness, checkInvoiceExpiry, checkSponsorReserve, checkRecipientFlags } from "./preflightChecker.js";
-export type { PayerReadinessResult, PayerReadinessReason, InvoiceExpiryResult, InvoiceExpiryReason, SponsorReserveCheck, RecipientFlagsCheck } from "./preflightChecker.js";
+export { checkPayerReadiness, checkInvoiceExpiry, checkSponsorReserve, checkRecipientFlags, runPreflight } from "./preflightChecker.js";
+export type { PayerReadinessResult, PayerReadinessReason, InvoiceExpiryResult, InvoiceExpiryReason, SponsorReserveCheck, RecipientFlagsCheck, RunPreflightOptions } from "./preflightChecker.js";
 
 export { inspectFlags, hasAnyRestrictiveFlag } from "./accountFlagsInspector.js";
 export type { AccountFlagSet } from "./types.js";
