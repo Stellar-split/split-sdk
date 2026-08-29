@@ -16,6 +16,11 @@ export interface PaymentReceipt {
   ledger: number;
   /** Unix timestamp (milliseconds). */
   timestamp: number;
+  /**
+   * Network fee paid for this transaction, in stroops (1 XLM = 10,000,000 stroops).
+   * Optional for backward compatibility with existing serialised receipts.
+   */
+  networkFeeStroops?: number;
 }
 
 /** One SHA-256-linked entry in a {@link ReceiptChain}. */

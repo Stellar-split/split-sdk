@@ -44,6 +44,15 @@ export interface SplitConfig {
    * dealing with imprecise user input).
    */
   tolerance?: number;
+  /**
+   * Minimum share ratio per recipient, expressed as a percentage (e.g. 0.01
+   * means 0.01 %). Any recipient whose ratio falls below this threshold
+   * fails validation because the resulting dust payment would be rejected
+   * by Stellar's minimum balance check.
+   *
+   * Defaults to `0.01` (0.01 %). Set to `0` to disable the minimum check.
+   */
+  minRatioPercent?: number;
 }
 
 /** Structured validation result returned by {@link validateSplitRatios}. */
@@ -66,8 +75,9 @@ export interface SplitRatioValidationResult {
  * 1. At least one share is provided.
  * 2. No share is negative.
  * 3. No share is zero.
- * 4. No duplicate recipient addresses.
- * 5. Shares sum to 1.0 (± tolerance).
+ * 4. No recipient ratio is below `minRatioPercent` (default 0.01 %).
+ * 5. No duplicate recipient addresses.
+ * 6. Shares sum to 1.0 (± tolerance).
  *
  * @param config - The split configuration to validate.
  * @returns A structured result with `valid` and `errors` fields.
@@ -100,7 +110,20 @@ export function validateSplitRatios(
     }
   }
 
-  // 3. Duplicate address check
+  // 3. Minimum ratio check
+  const minRatioPercent = config.minRatioPercent ?? 0.01;
+  if (minRatioPercent > 0) {
+    const minShareFraction = minRatioPercent / 100;
+    for (const share of config.shares) {
+      if (share.share > 0 && share.share < minShareFraction) {
+        errors.push(
+          `Recipient ${share.address} has a ratio of ${(share.share * 100).toPrecision(4)}% which is below the minimum ${minRatioPercent}%. Increase the recipient's share or set minRatioPercent to 0 to disable this check.`,
+        );
+      }
+    }
+  }
+
+  // 4. Duplicate address check
   const seen = new Set<string>();
   for (const share of config.shares) {
     if (seen.has(share.address)) {
