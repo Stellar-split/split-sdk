@@ -12,6 +12,30 @@ import { UnsupportedLineItemAssetError } from "./errors.js";
 
 /** Fixed-point scale used for conversion rates (1e18 = 1.0). */
 const RATE_SCALE = 1_000_000_000_000_000_000n;
+const STROOPS_PER_UNIT = 10_000_000n;
+const STROOPS_PER_CENT = STROOPS_PER_UNIT / 100n;
+
+/**
+ * Normalize a decimal asset amount to a 2-decimal string using integer stroop
+ * arithmetic and half-up cent rounding.
+ */
+export function normalize(amount: number | string): string {
+  const stroops = decimalToStroops(amount);
+  const roundedCents = (stroops + STROOPS_PER_CENT / 2n) / STROOPS_PER_CENT;
+  const whole = roundedCents / 100n;
+  const cents = roundedCents % 100n;
+
+  return `${whole}.${cents.toString().padStart(2, "0")}`;
+}
+
+function decimalToStroops(amount: number | string): bigint {
+  const value = typeof amount === "number" ? amount.toFixed(7) : amount.trim();
+  const negative = value.startsWith("-");
+  const normalized = negative ? value.slice(1) : value;
+  const [whole = "0", fraction = ""] = normalized.split(".");
+  const stroops = BigInt(whole) * STROOPS_PER_UNIT + BigInt(fraction.padEnd(7, "0").slice(0, 7) || "0");
+  return negative ? -stroops : stroops;
+}
 
 /**
  * Normalise a set of line items to a single settlement asset.

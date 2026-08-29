@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { normalizeLineItems } from "../src/lineItemNormalizer.js";
+import { normalize, normalizeLineItems } from "../src/lineItemNormalizer.js";
 import { UnsupportedLineItemAssetError } from "../src/errors.js";
 import type { InvoiceLineItem } from "../src/types.js";
 import type { PriceOracle } from "../src/priceOracle.js";
@@ -95,5 +95,16 @@ describe("normalizeLineItems", () => {
 
     expect(result.items[0]!.originalAmount).toBe(8_000_000n);
     expect(result.total).toBe(8_000_000n);
+  });
+});
+
+describe("normalize", () => {
+  it("rounds through stroops before formatting to 2 decimals", () => {
+    expect(normalize("0.0000001")).toBe("0.00");
+    expect(normalize("0.0000005")).toBe("0.00");
+  });
+
+  it("rounds half-up at the cent boundary", () => {
+    expect(normalize("0.005")).toBe("0.01");
   });
 });
