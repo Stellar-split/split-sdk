@@ -1380,3 +1380,10 @@ export type {
   SubmitTransactionOptions,
   SubmitServer,
 } from "./transaction/submit.js";
+
+// ---------------------------------------------------------------------------
+// #619 — compressMetadata / decompressMetadata
+// JSON + base64url round-trip helpers for compact invoice metadata storage
+// ---------------------------------------------------------------------------
+
+export { compressMetadata, decompressMetadata } from "./compression.js";
