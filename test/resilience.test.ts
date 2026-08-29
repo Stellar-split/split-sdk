@@ -222,6 +222,32 @@ describe("ResilientRpcClient", () => {
     expect(result).toEqual({ accountId: expect.any(Function) });
   });
 
+  it("hedges to the secondary client after the configured delay", async () => {
+    const primary = createMockRpc();
+    const secondary = createMockRpc();
+    primary.getAccount = vi.fn(
+      () => new Promise((resolve) => setTimeout(() => resolve({ accountId: () => "GPRIMARY" }), 50)),
+    );
+    secondary.getAccount = vi.fn(
+      () => new Promise((resolve) => setTimeout(() => resolve({ accountId: () => "GSECONDARY" }), 5)),
+    );
+
+    const resilient = new ResilientRpcClient(
+      primary,
+      { maxRetries: 1, baseDelayMs: 10, maxDelayMs: 100, jitter: false, hedgeAfterMs: 10 },
+      undefined,
+      secondary,
+    );
+
+    const promise = resilient.getAccount("GABC");
+    await vi.advanceTimersByTimeAsync(15);
+    const result = await promise;
+
+    expect(primary.getAccount).toHaveBeenCalledWith("GABC");
+    expect(secondary.getAccount).toHaveBeenCalledWith("GABC");
+    expect(result).toEqual({ accountId: expect.any(Function) });
+  });
+
   it("retries on transient errors with exponential backoff", async () => {
     const mock = createMockRpc();
     const timeoutErr = new Error("network timeout");

@@ -28,6 +28,32 @@ export interface StorageEstimationResult {
   estimatedRentStroops: number;
 }
 
+export interface StorageReport {
+  totalBytes: number;
+  breakdown: Record<string, number>;
+}
+
+export class StorageUsageEstimator {
+  private readonly categories = new Map<string, () => number>();
+
+  registerCategory(name: string, estimateFn: () => number): void {
+    this.categories.set(name, estimateFn);
+  }
+
+  estimateUsage(): StorageReport {
+    const breakdown: Record<string, number> = {};
+    let totalBytes = 0;
+
+    for (const [name, estimateFn] of this.categories) {
+      const bytes = estimateFn();
+      breakdown[name] = bytes;
+      totalBytes += bytes;
+    }
+
+    return { totalBytes, breakdown };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Soroban / Stellar type-size constants
 // ---------------------------------------------------------------------------

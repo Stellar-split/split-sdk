@@ -1,5 +1,16 @@
 import type { Invoice } from "./types.js";
 
+export class MissingNodeError extends Error {
+  readonly missingNodeIds: string[];
+
+  constructor(missingNodeIds: string[]) {
+    super(`Missing dependency nodes: ${missingNodeIds.join(", ")}`);
+    this.name = "MissingNodeError";
+    this.missingNodeIds = missingNodeIds;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 export interface ValidationResult {
   valid: boolean;
   cycles: string[][];
@@ -15,12 +26,14 @@ export function validateDependencyGraph(invoices: Invoice[]): ValidationResult {
   // adjacency: id -> prerequisite ids that exist
   const adj = new Map<string, string[]>();
   const warnings: string[] = [];
+  const missingNodeIds = new Set<string>();
 
   for (const inv of invoices) {
     const deps: string[] = [];
     for (const pre of inv.prerequisites ?? []) {
       if (!ids.has(pre)) {
         warnings.push(`Invoice "${inv.id}" references unknown prerequisite "${pre}"`);
+        missingNodeIds.add(pre);
       } else {
         deps.push(pre);
       }
@@ -53,6 +66,10 @@ export function validateDependencyGraph(invoices: Invoice[]): ValidationResult {
 
   for (const id of ids) {
     if (!visited.has(id)) dfs(id, []);
+  }
+
+  if (missingNodeIds.size > 0) {
+    throw new MissingNodeError(Array.from(missingNodeIds));
   }
 
   return { valid: cycles.length === 0, cycles, warnings };

@@ -30,63 +30,29 @@ export interface FeeEstimateError {
   total: string;
 }
 
-/** Options accepted by {@link estimateFeeForAmount}. */
-export interface AmountFeeEstimateOptions {
-  /**
-   * Protocol fee in basis points (100 bps = 1%). Applied proportionally to
-   * `amount`. Defaults to `0`.
-   */
-  feeBps?: number;
-
-  /**
-   * Flat base fee, in stroops, added on top of the proportional fee.
-   * Defaults to the Stellar network {@link BASE_FEE}.
-   */
-  baseFee?: bigint;
-
-  /**
-   * When `true` the proportional fee is rounded **up** to the nearest stroop
-   * so the estimate never undercharges due to fractional bps. Defaults to
-   * `true`.
-   */
-  roundUp?: boolean;
+export interface FeeEstimationStrategy<TParams = unknown> {
+  estimate(params: TParams): number;
 }
 
-/**
- * Estimate the fee for a given `amount` using exact `bigint` arithmetic.
- *
- * The fee is computed as:
- *
- *     fee = baseFee + ceil(amount * feeBps / 10_000)
- *
- * with `roundUp` controlling whether the proportional term is rounded up or
- * simply truncated. All arithmetic is performed on `bigint` stroops, so there
- * is no floating-point rounding or precision loss.
- *
- * @param amount - Gross amount in stroops; must be non-negative.
- * @param options - {@link AmountFeeEstimateOptions} controlling the fee.
- * @returns The estimated fee in stroops, always a non-negative `bigint`.
- * @throws {RangeError} if `amount` or `feeBps` is negative.
- */
-export function estimateFeeForAmount(
-  amount: bigint,
-  options: AmountFeeEstimateOptions = {}
-): bigint {
-  const { feeBps = 0, baseFee = BigInt(BASE_FEE), roundUp = true } = options;
+export const SigningAlgorithmRegistry = new Map<string, never>();
 
-  if (amount < 0n) {
-    throw new RangeError("amount must be non-negative");
+const feeStrategyRegistry = new Map<string, FeeEstimationStrategy<any>>([
+  ["fixed", { estimate: (params: { fee: number }) => params.fee }],
+  ["percentile", { estimate: (params: { samples: number[]; percentile: number }) => {
+    const sorted = [...params.samples].sort((a, b) => a - b);
+    if (sorted.length === 0) return 0;
+    const index = Math.min(sorted.length - 1, Math.floor((params.percentile / 100) * sorted.length));
+    return sorted[index] ?? 0;
+  } }],
+  ["surge", { estimate: (params: { baseFee: number; multiplier: number }) => params.baseFee * params.multiplier }],
+]);
+
+export function estimateFee(type: string, params: unknown): number {
+  const strategy = feeStrategyRegistry.get(type);
+  if (!strategy) {
+    throw new RangeError(`Unknown fee estimation strategy: ${type}`);
   }
-  if (feeBps < 0) {
-    throw new RangeError("feeBps must be non-negative");
-  }
-
-  const proportionalBps = amount * BigInt(feeBps);
-  const proportional = roundUp
-    ? (proportionalBps + 9_999n) / 10_000n
-    : proportionalBps / 10_000n;
-
-  return baseFee + proportional;
+  return strategy.estimate(params);
 }
 
 /**

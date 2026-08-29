@@ -1,6 +1,8 @@
 import { rpc as SorobanRpc, Horizon } from "@stellar/stellar-sdk";
 import { inspectFlags } from "./accountFlagsInspector.js";
 import type { AccountFlagSet } from "./types.js";
+import { withTimeout, RequestTimeoutError } from "./timeout.js";
+import { PreflightError } from "./errors.js";
 
 export type PayerReadinessReason =
   | "account_not_found"
@@ -329,4 +331,61 @@ export async function checkTrustlineAuthRequirement(
   const account = await server.loadAccount(issuer);
   const authRequired = (account as unknown as { flags: { auth_required: boolean } }).flags.auth_required === true;
   return { authRequired };
+}
+
+// ---------------------------------------------------------------------------
+// RPC Endpoint Reachability Check
+// ---------------------------------------------------------------------------
+
+/** Default timeout (ms) for the RPC reachability probe. */
+const DEFAULT_PREFLIGHT_TIMEOUT_MS = 3_000;
+
+/** Options for {@link runPreflight}. */
+export interface RunPreflightOptions {
+  /** RPC endpoint URL to probe for reachability. */
+  rpcUrl: string;
+  /** Probe timeout in milliseconds. Defaults to 3000. */
+  timeoutMs?: number;
+  /**
+   * `fetch` implementation to use for the probe. Defaults to the global
+   * `fetch`. Provided mainly for testing and non-standard runtimes.
+   */
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * Verify the configured RPC endpoint is reachable before the SDK attempts
+ * contract calls, surfacing network problems with a clear error rather than a
+ * cryptic downstream timeout.
+ *
+ * Performs a lightweight HTTP `HEAD` request against `rpcUrl`. Any HTTP
+ * response (including 4xx / 405) counts as reachable — this checks
+ * connectivity, not method support. A connection failure, DNS error, or a
+ * probe that exceeds `timeoutMs` throws a {@link PreflightError} carrying the
+ * URL and the underlying reason.
+ *
+ * @throws {PreflightError} When the endpoint cannot be reached.
+ */
+export async function runPreflight(options: RunPreflightOptions): Promise<void> {
+  const { rpcUrl } = options;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PREFLIGHT_TIMEOUT_MS;
+  const fetchImpl = options.fetchImpl ?? globalThis.fetch;
+
+  if (typeof fetchImpl !== "function") {
+    throw new PreflightError(rpcUrl, "no fetch implementation available in this runtime");
+  }
+
+  try {
+    await withTimeout(
+      (signal) => fetchImpl(rpcUrl, { method: "HEAD", signal }),
+      timeoutMs,
+      "runPreflight",
+    );
+  } catch (error) {
+    if (error instanceof RequestTimeoutError) {
+      throw new PreflightError(rpcUrl, `endpoint did not respond within ${timeoutMs}ms`);
+    }
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new PreflightError(rpcUrl, reason);
+  }
 }

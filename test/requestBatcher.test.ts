@@ -208,6 +208,11 @@ describe("BatchedRpcClient", () => {
     batcher.clear();
   });
 
+  it("throws RangeError when maxBatchSize is 0", () => {
+    const { fetchers } = makeFetchers();
+    expect(() => new BatchedRpcClient(fetchers, 10, 0)).toThrow(RangeError);
+  });
+
   it("overflow of exactly maxBatchSize triggers immediate flush (no timer needed)", async () => {
     const flushOrder: string[] = [];
     const fetchers: BatchFetchers = {

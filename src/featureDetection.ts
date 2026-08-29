@@ -157,3 +157,26 @@ export async function detectContractFeatures(
 
   return features;
 }
+
+// === Fee-bump support
+
+/**
+ * Fee-bump transactions (CAP-0015) were introduced in Stellar protocol
+ * version 13. Networks on an older base protocol cannot process them.
+ */
+export const FEE_BUMP_MIN_PROTOCOL_VERSION = 13;
+
+/** Minimal network info needed to decide fee-bump availability. */
+export interface FeeBumpNetworkInfo {
+  /** The network's current base protocol version. */
+  protocolVersion: number;
+}
+
+/**
+ * Determine whether a network supports fee-bump transactions, based on its
+ * base protocol version. No network calls are made; pass a network info object
+ * (e.g. from Horizon's root endpoint or an RPC `getNetwork` response).
+ */
+export function detectFeeBumpSupport(networkInfo: FeeBumpNetworkInfo): boolean {
+  return networkInfo.protocolVersion >= FEE_BUMP_MIN_PROTOCOL_VERSION;
+}

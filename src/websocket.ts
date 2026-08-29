@@ -11,6 +11,7 @@ export interface TransportEventMap {
   'transport:connected': { type: 'websocket' };
   'transport:disconnected': { type: 'websocket'; reason?: string };
   'transport:reconnecting': { attempt: number; maxAttempts: number };
+  'connection_failed': { maxAttempts: number };
 }
 
 export type TransportFallbackCallback = (event: { from: 'websocket'; to: 'http' }) => void;
@@ -37,16 +38,19 @@ export class WebSocketTransport {
   private _disconnectListeners: Array<(reason?: string) => void> = [];
   private _reconnectListeners: Array<(attempt: number, max: number) => void> = [];
   private _connectListeners: Array<() => void> = [];
+  private _connectionFailedListeners: Array<(maxAttempts: number) => void> = [];
   private _rpcUrl: string;
   private _wsUrl: string;
   private _stopped = false;
   private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private _wsFactory: (() => WebSocket) | null = null;
+  private _maxReconnectAttempts: number;
 
-  constructor(rpcUrl: string, wsUrl?: string, wsFactory?: () => WebSocket) {
+  constructor(rpcUrl: string, wsUrl?: string, wsFactory?: () => WebSocket, maxReconnectAttempts = WS_MAX_RECONNECT_ATTEMPTS) {
     this._rpcUrl = rpcUrl;
     this._wsUrl = wsUrl ?? rpcUrlToWsUrl(rpcUrl);
     this._wsFactory = wsFactory ?? null;
+    this._maxReconnectAttempts = maxReconnectAttempts;
   }
 
   private _getWebSocket(): WebSocket {
@@ -121,7 +125,8 @@ export class WebSocketTransport {
 
     this._reconnectAttempts++;
 
-    if (this._reconnectAttempts > WS_MAX_RECONNECT_ATTEMPTS) {
+    if (this._reconnectAttempts > this._maxReconnectAttempts) {
+      this._emitConnectionFailed();
       this._emitFallback();
       return;
     }
@@ -132,7 +137,7 @@ export class WebSocketTransport {
     );
 
     for (const cb of this._reconnectListeners) {
-      try { cb(this._reconnectAttempts, WS_MAX_RECONNECT_ATTEMPTS); } catch { }
+      try { cb(this._reconnectAttempts, this._maxReconnectAttempts); } catch { }
     }
 
     this._reconnectTimer = setTimeout(() => {
@@ -141,12 +146,18 @@ export class WebSocketTransport {
   }
 
   private _handleConnectionFailure(): void {
-    this._reconnectAttempts++;
-    if (this._reconnectAttempts > WS_MAX_RECONNECT_ATTEMPTS) {
+    if (this._reconnectAttempts >= this._maxReconnectAttempts) {
+      this._emitConnectionFailed();
       this._emitFallback();
       return;
     }
     this._scheduleReconnect();
+  }
+
+  private _emitConnectionFailed(): void {
+    for (const cb of this._connectionFailedListeners) {
+      try { cb(this._maxReconnectAttempts); } catch { }
+    }
   }
 
   private _emitFallback(): void {
@@ -171,6 +182,10 @@ export class WebSocketTransport {
 
   onConnect(cb: () => void): void {
     this._connectListeners.push(cb);
+  }
+
+  onConnectionFailed(cb: (maxAttempts: number) => void): void {
+    this._connectionFailedListeners.push(cb);
   }
 
   subscribe(invoiceId: string, handler: (event: unknown) => void): void {

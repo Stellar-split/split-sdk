@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   detectContractFeatures,
   clearFeatureCache,
+  detectFeeBumpSupport,
 } from "../src/featureDetection.js";
 import type { ContractFeatures } from "../src/types.js";
 
@@ -172,5 +173,17 @@ describe("detectContractFeatures", () => {
     expect(features.templates).toBe(false);
     // archival (5th, odd = ok) -> true
     expect(features.archival).toBe(true);
+  });
+});
+
+describe("detectFeeBumpSupport", () => {
+  it("returns true for a network whose base protocol supports fee bumps", () => {
+    expect(detectFeeBumpSupport({ protocolVersion: 13 })).toBe(true);
+    expect(detectFeeBumpSupport({ protocolVersion: 21 })).toBe(true);
+  });
+
+  it("returns false for a network on a protocol older than fee-bump support", () => {
+    expect(detectFeeBumpSupport({ protocolVersion: 12 })).toBe(false);
+    expect(detectFeeBumpSupport({ protocolVersion: 10 })).toBe(false);
   });
 });

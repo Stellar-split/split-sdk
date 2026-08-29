@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { estimateOperationCost, estimateFeeForAmount, type FeeEstimate } from "../src/feeEstimator.js";
+import { estimateFee, estimateOperationCost, type FeeEstimate } from "../src/feeEstimator.js";
 import { rpc as SorobanRpc, BASE_FEE, Operation, Asset } from "@stellar/stellar-sdk";
 
 describe("estimateFeeForAmount", () => {
@@ -119,5 +119,17 @@ describe("estimateOperationCost", () => {
 
     expect(result).toHaveProperty("error");
     expect(result).toHaveProperty("baseFee", BASE_FEE.toString());
+  });
+
+  it("estimates fees via a registered fixed strategy", () => {
+    expect(estimateFee("fixed", { fee: 123 })).toBe(123);
+  });
+
+  it("estimates fees via a percentile strategy", () => {
+    expect(estimateFee("percentile", { samples: [100, 200, 300], percentile: 95 })).toBe(300);
+  });
+
+  it("estimates fees via a surge strategy", () => {
+    expect(estimateFee("surge", { baseFee: 100, multiplier: 2 })).toBe(200);
   });
 });

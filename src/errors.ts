@@ -3,6 +3,17 @@
  *
  * Maps known Soroban contract panic messages to structured subclasses
  * so callers can handle specific failure cases with instanceof checks.
+ *
+ * @example
+ * ```ts
+ * try {
+ *   await client.pay(invoiceId, amount);
+ * } catch (error) {
+ *   if (error instanceof StellarSplitError) {
+ *     console.error(error.code, error.context);
+ *   }
+ * }
+ * ```
  */
 
 /** Base class for all StellarSplit SDK errors. */
@@ -32,6 +43,7 @@ export class StellarSplitError extends Error {
 
 /** Thrown when the requested invoice does not exist on-chain. */
 export class InvoiceNotFoundError extends StellarSplitError {
+  /** Invoice identifier that could not be located. */
   readonly invoiceId: string;
 
   constructor(invoiceId: string, raw?: string) {
@@ -44,6 +56,7 @@ export class InvoiceNotFoundError extends StellarSplitError {
 
 /** Thrown when an operation requires the invoice to be Pending but it is not. */
 export class InvoiceNotPendingError extends StellarSplitError {
+  /** Invoice identifier that is not currently pending. */
   readonly invoiceId: string;
 
   constructor(invoiceId: string, raw?: string) {
@@ -61,6 +74,7 @@ export class InvoiceNotPendingError extends StellarSplitError {
 
 /** Thrown when a transaction is attempted after the invoice deadline has passed. */
 export class DeadlinePassedError extends StellarSplitError {
+  /** Invoice identifier whose deadline has passed. */
   readonly invoiceId: string;
 
   constructor(invoiceId: string, raw?: string) {
@@ -78,8 +92,11 @@ export class DeadlinePassedError extends StellarSplitError {
 
 /** Thrown when a payment amount exceeds the remaining unfunded balance. */
 export class InsufficientBalanceError extends StellarSplitError {
+  /** Invoice identifier being funded. */
   readonly invoiceId: string;
+  /** Requested payment amount. */
   readonly amount: bigint;
+  /** Remaining amount available to fund. */
   readonly remaining: bigint;
 
   constructor(invoiceId: string, amount: bigint = 0n, remaining: bigint = 0n, raw?: string) {
@@ -808,6 +825,22 @@ export class RefundGraceError extends StellarSplitError {
   }
 }
 
+/** Thrown when a preflight check fails before the SDK attempts contract calls. */
+export class PreflightError extends StellarSplitError {
+  /** The endpoint URL the failing check targeted. */
+  readonly url: string;
+  /** Human-readable reason the check failed. */
+  readonly reason: string;
+
+  constructor(url: string, reason: string) {
+    super(`Preflight check failed for ${url}: ${reason}`, "PREFLIGHT_ERROR", { url, reason });
+    this.name = "PreflightError";
+    this.url = url;
+    this.reason = reason;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Thrown when submitting a WaterfallPlan with an unsatisfied tier and `allowPartial` was not set. */
 export class WaterfallInsufficientFundsError extends StellarSplitError {
   readonly invoiceId: string;
@@ -1282,6 +1315,10 @@ export function isTrancheProgressError(err: unknown): err is TrancheProgressErro
 
 export function isRefundGraceError(err: unknown): err is RefundGraceError {
   return err instanceof RefundGraceError;
+}
+
+export function isPreflightError(err: unknown): err is PreflightError {
+  return err instanceof PreflightError;
 }
 
 export function isChannelReconciliationError(err: unknown): err is ChannelReconciliationError {
@@ -2100,6 +2137,7 @@ export class ChannelExhaustedError extends StellarSplitError {
 /** Machine-readable error codes carried by {@link SdkError}. */
 export enum SdkErrorCode {
   INVOICE_NOT_FOUND = "INVOICE_NOT_FOUND",
+  ACCOUNT_NOT_FOUND = "ACCOUNT_NOT_FOUND",
   INSUFFICIENT_FUNDS = "INSUFFICIENT_FUNDS",
   DEADLINE_EXPIRED = "DEADLINE_EXPIRED",
   INVALID_RECIPIENT = "INVALID_RECIPIENT",

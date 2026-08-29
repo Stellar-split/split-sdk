@@ -21,10 +21,55 @@ const KNOWN_NETWORKS = [
   "Soroban Future Network ; October 2024",
 ];
 
+const KNOWN_CONFIG_KEYS = new Set([
+  "rpcUrl",
+  "networkPassphrase",
+  "contractId",
+  "adapter",
+  "container",
+  "signingKeypair",
+  "retry",
+  "maxRetries",
+  "horizonUrl",
+  "sponsorAccount",
+  "cache",
+  "hooks",
+  "idempotency",
+  "timeout",
+  "degradation",
+  "rateLimit",
+  "telemetry",
+  "traceIdGenerator",
+]);
+
+export class UnknownConfigKeyError extends StellarSplitError {
+  readonly unknownKeys: string[];
+
+  constructor(unknownKeys: string[]) {
+    super(
+      `Unknown configuration keys: ${unknownKeys.join(", ")}`,
+      "UNKNOWN_CONFIG_KEY",
+      { unknownKeys },
+    );
+    this.name = "UnknownConfigKeyError";
+    this.unknownKeys = unknownKeys;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 export function validateClientConfig(
   config: StellarSplitClientConfig
 ): ConfigValidation {
   const errors: ConfigValidationErrorType[] = [];
+  const unknownKeys = Object.keys(config).filter((key) => !KNOWN_CONFIG_KEYS.has(key));
+
+  if (unknownKeys.length > 0) {
+    errors.push({
+      field: unknownKeys.join(","),
+      message: `Unknown top-level config keys: ${unknownKeys.join(", ")}`,
+      severity: "error",
+    });
+  }
 
   if (!config.rpcUrl) {
     errors.push({
@@ -235,6 +280,11 @@ export function validateClientConfig(
 export function validateOrThrow(config: StellarSplitClientConfig): void {
   const validation = validateClientConfig(config);
 
+  const unknownKeys = Object.keys(config).filter((key) => !KNOWN_CONFIG_KEYS.has(key));
+  if (unknownKeys.length > 0) {
+    throw new UnknownConfigKeyError(unknownKeys);
+  }
+
   if (!validation.valid) {
     const errorMessages = validation.errors
       .filter((e) => e.severity === "error")
@@ -259,6 +309,10 @@ export function validateOrThrow(config: StellarSplitClientConfig): void {
 
     throw new InvalidConfigError(parts.join("\n"), validation.errors);
   }
+}
+
+export function validateConfig(config: StellarSplitClientConfig): void {
+  validateOrThrow(config);
 }
 
 export class InvalidConfigError extends StellarSplitError {

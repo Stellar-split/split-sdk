@@ -47,7 +47,23 @@ export class NotificationCenter extends EventEmitter {
     this._watchers.delete(invoiceId);
   }
 
+  /**
+   * Register a listener for an event, deduplicating by referential equality.
+   * Registering the same callback reference for the same event twice is a
+   * no-op on the second call, preventing duplicate notification deliveries.
+   */
   on(event: NotificationEvent, listener: (...args: unknown[]) => void): this {
+    if (this.listeners(event).includes(listener)) {
+      return this;
+    }
     return super.on(event, listener);
+  }
+
+  /**
+   * Returns the number of distinct (deduplicated) subscribers registered
+   * for the given event type.
+   */
+  getSubscriberCount(eventType: NotificationEvent): number {
+    return this.listenerCount(eventType);
   }
 }

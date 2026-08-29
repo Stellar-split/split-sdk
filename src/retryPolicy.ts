@@ -10,6 +10,7 @@ export interface RetryOptions {
   baseDelayMs: number;
   maxDelayMs: number;
   onRetry?: (attempt: number, error: unknown, delayMs: number) => void;
+  retryIf?: (error: Error) => boolean;
 }
 
 export type PerMethodRetryOptions = Partial<RetryOptions>;
@@ -47,6 +48,7 @@ export async function executeWithRetry<T>(
   const baseDelayMs = methodOverride?.baseDelayMs ?? options.baseDelayMs;
   const maxDelayMs = methodOverride?.maxDelayMs ?? options.maxDelayMs;
   const onRetry = methodOverride?.onRetry ?? options.onRetry;
+  const retryIf = methodOverride?.retryIf ?? options.retryIf;
 
   let lastError: unknown;
   let attemptsExhausted = false;
@@ -59,6 +61,7 @@ export async function executeWithRetry<T>(
 
       const isLast = attempt === maxAttempts - 1;
       if (!isRetryable(error)) break;
+      if (error instanceof Error && retryIf && !retryIf(error)) break;
       if (isLast) {
         attemptsExhausted = true;
         break;

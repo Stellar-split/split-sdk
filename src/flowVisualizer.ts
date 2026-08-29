@@ -3,6 +3,13 @@ import { InvoiceFlowFetcherNotRegisteredError } from "./errors.js";
 
 export type InvoiceFlowFetcher = (invoiceId: string) => Promise<Invoice>;
 
+export type FlowDiagramMode = "mermaid" | "ascii";
+
+export interface FlowDiagramOptions {
+  /** Output format. Defaults to "mermaid" (unchanged legacy behavior). */
+  mode?: FlowDiagramMode;
+}
+
 let invoiceFlowFetcher: InvoiceFlowFetcher | null = null;
 
 export function registerInvoiceFlowFetcher(fetcher: InvoiceFlowFetcher): void {
@@ -37,7 +44,8 @@ function allocatePayments(recipients: Recipient[], funded: bigint): Map<string, 
 
 export async function generateFlowDiagram(
   invoiceId: string,
-  getInvoice?: InvoiceFlowFetcher
+  getInvoice?: InvoiceFlowFetcher,
+  options?: FlowDiagramOptions
 ): Promise<string> {
   const fetcher = getInvoice ?? invoiceFlowFetcher;
   if (!fetcher) {
@@ -45,11 +53,20 @@ export async function generateFlowDiagram(
   }
 
   const invoice = await fetcher(invoiceId);
-  const creatorId = nodeId("creator", invoice.creator);
-  const invoiceNodeId = nodeId("invoice", invoice.id);
   const totalPaid = invoice.payments.reduce((sum, payment) => sum + payment.amount, 0n);
   const funded = totalPaid > invoice.funded ? totalPaid : invoice.funded;
   const allocations = allocatePayments(invoice.recipients, funded);
+
+  if (options?.mode === "ascii") {
+    return renderAsciiDiagram(invoice, allocations);
+  }
+
+  return renderMermaidDiagram(invoice, allocations);
+}
+
+function renderMermaidDiagram(invoice: Invoice, allocations: Map<string, bigint>): string {
+  const creatorId = nodeId("creator", invoice.creator);
+  const invoiceNodeId = nodeId("invoice", invoice.id);
   const lines = [
     "flowchart LR",
     `  ${creatorId}["Creator: ${nodeLabel(invoice.creator)}"]`,
@@ -82,6 +99,25 @@ export async function generateFlowDiagram(
   }
   if (pendingNodes.length > 0) {
     lines.push(`  class ${pendingNodes.join(",")} pending`);
+  }
+
+  return lines.join("\n");
+}
+
+// === ASCII rendering
+
+function renderAsciiDiagram(invoice: Invoice, allocations: Map<string, bigint>): string {
+  const lines = [
+    `[Creator: ${invoice.creator}]`,
+    `  --> [Invoice ${invoice.id}]`,
+  ];
+
+  for (const [index, recipient] of invoice.recipients.entries()) {
+    const paid = allocations.get(recipient.address) ?? 0n;
+    const status = paid >= recipient.amount ? "completed" : "pending";
+    lines.push(
+      `        --> [Recipient ${index + 1}: ${recipient.address}]  (${amountLabel(paid)} / ${amountLabel(recipient.amount)}) ${status}`
+    );
   }
 
   return lines.join("\n");

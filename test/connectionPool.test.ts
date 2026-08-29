@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ConnectionPool,
   DEFAULT_IDLE_TIMEOUT_MS,
@@ -220,6 +220,58 @@ describe("ConnectionPool (issue #360)", () => {
     expect(pool.isDisposed).toBe(true);
     expect(() => pool.select()).toThrow();
     expect(() => pool.acquire()).toThrow();
+  });
+
+  it("recycles a returned connection once its own idle timer fires (issue #684)", () => {
+    vi.useFakeTimers();
+    try {
+      const pool = new ConnectionPool({
+        rpcUrl: "https://soroban-testnet.stellar.org",
+        poolSize: 1,
+        idleTimeoutMs: 100,
+      });
+
+      const lease = pool.acquire();
+      const before = lease.server;
+      lease.release();
+
+      expect(pool.getStats().recycledCount).toBe(0);
+
+      // Advance past idleTimeoutMs without ever calling select()/acquire()
+      // again — the timer armed on release() must fire on its own.
+      vi.advanceTimersByTime(150);
+
+      expect(pool.getStats().recycledCount).toBe(1);
+      const after = pool.select();
+      expect(after).not.toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not recycle a connection reused before its idle timer fires", () => {
+    vi.useFakeTimers();
+    try {
+      const pool = new ConnectionPool({
+        rpcUrl: "https://soroban-testnet.stellar.org",
+        poolSize: 1,
+        idleTimeoutMs: 100,
+      });
+
+      const lease = pool.acquire();
+      lease.release();
+
+      vi.advanceTimersByTime(50);
+      // Reuse the slot before the idle timer fires.
+      const lease2 = pool.acquire();
+      lease2.release();
+
+      vi.advanceTimersByTime(50);
+      // Only 50ms idle since the second release — should not have recycled.
+      expect(pool.getStats().recycledCount).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("accepts the legacy positional constructor signature", () => {

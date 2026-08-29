@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Invoice, Payment } from "../src/types.js";
 import { PaymentAggregator } from "../src/paymentAggregator.js";
 import type { PaymentSnapshot, PaymentSummary } from "../src/paymentAggregator.js";
+import { groupBy } from "../src/utils.js";
 
 function createInvoice(overrides: Partial<Invoice> = {}): Invoice {
   return {
@@ -122,5 +123,20 @@ describe("PaymentAggregator", () => {
 
     expect(aggregator.totalFunded).toBe(200n);
     expect(aggregator.percentFunded).toBe(100);
+  });
+
+  it("uses shared groupBy behavior for payer aggregation", () => {
+    const grouped = groupBy(
+      [
+        createPayment({ payer: "payer-a", ledger: 1 }),
+        createPayment({ payer: "payer-a", ledger: 2 }),
+        createPayment({ payer: "payer-b", ledger: 3 }),
+      ],
+      "payer",
+    );
+
+    expect(Object.keys(grouped)).toEqual(["payer-a", "payer-b"]);
+    expect(grouped["payer-a"]).toHaveLength(2);
+    expect(grouped["payer-b"]).toHaveLength(1);
   });
 });
