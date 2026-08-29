@@ -9,7 +9,7 @@
  * trustlines established.
  */
 
-import { Horizon } from "@stellar/stellar-sdk";
+import { Asset, Horizon } from "@stellar/stellar-sdk";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -115,4 +115,56 @@ export async function checkTrustlines(
     allReady: entries.every((e) => e.hasTrustline),
     entries,
   };
+}
+
+/**
+ * Check whether a single account has established trustlines for multiple
+ * assets in a single Horizon account fetch.
+ *
+ * Unlike {@link checkTrustlines}, which checks N recipients against a single
+ * asset, this checks a single account against N assets — making exactly one
+ * Horizon `loadAccount` call regardless of how many assets are supplied.
+ *
+ * @param server    - Horizon server instance.
+ * @param accountId - Stellar address whose trustlines should be checked.
+ * @param assets    - Assets to check (native assets are always considered trusted).
+ * @returns A map from each asset to whether the account has a trustline for it.
+ */
+export async function checkTrustlinesBatch(
+  server: Horizon.Server,
+  accountId: string,
+  assets: Asset[],
+): Promise<Map<Asset, boolean>> {
+  const result = new Map<Asset, boolean>();
+
+  let balances: Horizon.HorizonApi.BalanceLine[] = [];
+  try {
+    const account = await server.loadAccount(accountId);
+    balances = account.balances;
+  } catch {
+    // Account not found or RPC error -- every non-native asset is untrusted.
+    for (const asset of assets) {
+      result.set(asset, asset.isNative());
+    }
+    return result;
+  }
+
+  for (const asset of assets) {
+    if (asset.isNative()) {
+      result.set(asset, true);
+      continue;
+    }
+
+    const hasTrustline = balances.some(
+      (b) =>
+        b.asset_type !== "native" &&
+        b.asset_type !== "liquidity_pool_shares" &&
+        (b as Horizon.HorizonApi.BalanceLineAsset).asset_code === asset.getCode() &&
+        (b as Horizon.HorizonApi.BalanceLineAsset).asset_issuer === asset.getIssuer(),
+    );
+
+    result.set(asset, hasTrustline);
+  }
+
+  return result;
 }
