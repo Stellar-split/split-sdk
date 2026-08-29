@@ -1388,6 +1388,16 @@ export interface ReminderEvent {
   dueAt: number;
 }
 
+/** Pending reminder descriptor returned by getPendingReminders. */
+export interface PendingReminder {
+  /** Unique identifier of the scheduled reminder. */
+  reminderId: string;
+  /** Invoice the reminder is associated with. */
+  invoiceId: string;
+  /** Unix timestamp (milliseconds) when the reminder is scheduled to fire. */
+  remindAt: number;
+}
+
 // ---------------------------------------------------------------------------
 // XDR Decoder Types
 // ---------------------------------------------------------------------------

@@ -792,14 +792,27 @@ export type {
 export { ScheduledPaymentManager } from "./scheduler.js";
 export type { ScheduledPayment } from "./scheduler.js";
 
-export { InvoiceReminderScheduler, DEFAULT_GRACE_PERIOD_MS } from "./invoiceReminderScheduler.js";
+export {
+  InvoiceReminderScheduler,
+  DEFAULT_GRACE_PERIOD_MS,
+  scheduleReminder,
+  cancelReminder,
+  getPendingReminders,
+  clearAllReminders,
+} from "./invoiceReminderScheduler.js";
 export type {
   InvoiceReminderSchedulerEventMap,
   InvoiceDueAtResolver,
   InvoiceReminderSchedulerOptions,
+  ScheduleReminderOptions,
 } from "./invoiceReminderScheduler.js";
 export { loadReminderSchedules, saveReminderSchedules } from "./snapshot.js";
-export type { ReminderSchedule, ReminderEvent, ReminderStatus } from "./types.js";
+export type {
+  ReminderSchedule,
+  ReminderEvent,
+  ReminderStatus,
+  PendingReminder,
+} from "./types.js";
 
 export { compileFilter, applyFilter, FilterIndex } from "./invoiceFilter.js";
 export type { FilterCriteria, CompiledFilter } from "./invoiceFilter.js";

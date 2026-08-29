@@ -17,7 +17,9 @@
 import { randomUUID } from "crypto";
 import { TypedEventEmitter } from "./events/TypedEventEmitter.js";
 import { loadReminderSchedules, saveReminderSchedules } from "./snapshot.js";
-import type { ReminderSchedule, ReminderEvent } from "./types.js";
+import type { ReminderSchedule, ReminderEvent, PendingReminder } from "./types.js";
+
+export type { PendingReminder };
 
 /** Events emitted by {@link InvoiceReminderScheduler}. */
 export interface InvoiceReminderSchedulerEventMap {
@@ -118,6 +120,47 @@ export class InvoiceReminderScheduler extends TypedEventEmitter<InvoiceReminderS
     this._persist();
   }
 
+  /**
+   * Cancel a specific reminder by its unique reminderId.
+   *
+   * @param reminderId - Unique ID of the reminder to cancel
+   * @returns true if the reminder was pending and successfully cancelled;
+   *          false if the ID is unknown or already fired.
+   */
+  cancelReminder(reminderId: string): boolean {
+    const entry = this.schedules.find((s) => s.id === reminderId);
+    if (!entry || entry.status !== "pending") return false;
+    const timer = this.timers.get(reminderId);
+    if (timer !== undefined) clearTimeout(timer);
+    this.timers.delete(reminderId);
+    entry.status = "cancelled";
+    this._persist();
+    return true;
+  }
+
+  /**
+   * Return all not-yet-fired, not-cancelled reminders for this scheduler instance.
+   */
+  getPendingReminders(): PendingReminder[] {
+    return this.schedules
+      .filter((s) => s.status === "pending")
+      .map((s) => ({
+        reminderId: s.id,
+        invoiceId: s.invoiceId,
+        remindAt: s.fireAt,
+      }));
+  }
+
+  /**
+   * Clear all pending reminders, stopping all timers and clearing persisted state.
+   */
+  clearAllReminders(): void {
+    for (const timer of this.timers.values()) clearTimeout(timer);
+    this.timers.clear();
+    this.schedules = [];
+    this._persist();
+  }
+
   /** Return the current set of reminder schedules (all invoices, all statuses). */
   list(): ReminderSchedule[] {
     return [...this.schedules];
@@ -172,4 +215,131 @@ export class InvoiceReminderScheduler extends TypedEventEmitter<InvoiceReminderS
   private _persist(): void {
     saveReminderSchedules(this.schedules);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Standalone / Direct Module-Level Reminder API
+// ---------------------------------------------------------------------------
+
+/** Options for scheduling a reminder. */
+export interface ScheduleReminderOptions {
+  invoiceId: string;
+  remindAt: number;
+  callback?: () => void | Promise<void>;
+}
+
+interface StandaloneReminderEntry {
+  reminderId: string;
+  invoiceId: string;
+  remindAt: number;
+  status: "pending" | "fired" | "cancelled";
+  timer?: ReturnType<typeof setTimeout>;
+  callback?: () => void | Promise<void>;
+}
+
+const activeStandaloneReminders = new Map<string, StandaloneReminderEntry>();
+
+/**
+ * Schedules a reminder to fire at `remindAt` (Unix timestamp in milliseconds).
+ *
+ * @param invoiceIdOrOptions - Invoice identifier or an options object
+ * @param remindAt - Unix timestamp (ms) when the reminder should fire
+ * @param callback - Optional callback executed when the reminder fires
+ * @returns reminderId - Opaque unique identifier for the reminder
+ */
+export function scheduleReminder(
+  invoiceIdOrOptions: string | ScheduleReminderOptions,
+  remindAt?: number,
+  callback?: () => void | Promise<void>,
+): string {
+  let invoiceId: string;
+  let targetRemindAt: number;
+  let targetCallback: (() => void | Promise<void>) | undefined;
+
+  if (typeof invoiceIdOrOptions === "object" && invoiceIdOrOptions !== null) {
+    invoiceId = invoiceIdOrOptions.invoiceId;
+    targetRemindAt = invoiceIdOrOptions.remindAt;
+    targetCallback = invoiceIdOrOptions.callback;
+  } else {
+    invoiceId = invoiceIdOrOptions;
+    targetRemindAt = remindAt!;
+    targetCallback = callback;
+  }
+
+  const reminderId = randomUUID();
+  const delayMs = Math.max(0, targetRemindAt - Date.now());
+
+  const entry: StandaloneReminderEntry = {
+    reminderId,
+    invoiceId,
+    remindAt: targetRemindAt,
+    status: "pending",
+    callback: targetCallback,
+  };
+
+  const timer = setTimeout(async () => {
+    if (entry.status !== "pending") return;
+    entry.status = "fired";
+    entry.timer = undefined;
+    if (entry.callback) {
+      try {
+        await entry.callback();
+      } catch {
+        /* prevent unhandled rejection from bubbling to timer loop */
+      }
+    }
+  }, delayMs);
+
+  entry.timer = timer;
+  activeStandaloneReminders.set(reminderId, entry);
+  return reminderId;
+}
+
+/**
+ * Cancels a reminder by its reminderId.
+ *
+ * @param reminderId - Unique ID of the reminder to cancel
+ * @returns true if reminder was pending and cancelled; false if unknown or already fired
+ */
+export function cancelReminder(reminderId: string): boolean {
+  const entry = activeStandaloneReminders.get(reminderId);
+  if (!entry || entry.status !== "pending") {
+    return false;
+  }
+  if (entry.timer !== undefined) {
+    clearTimeout(entry.timer);
+    entry.timer = undefined;
+  }
+  entry.status = "cancelled";
+  return true;
+}
+
+/**
+ * Returns all not-yet-fired, not-cancelled reminders.
+ */
+export function getPendingReminders(): PendingReminder[] {
+  const pending: PendingReminder[] = [];
+  for (const entry of activeStandaloneReminders.values()) {
+    if (entry.status === "pending") {
+      pending.push({
+        reminderId: entry.reminderId,
+        invoiceId: entry.invoiceId,
+        remindAt: entry.remindAt,
+      });
+    }
+  }
+  return pending;
+}
+
+/**
+ * Cancels all pending reminders and clears scheduler state (for test teardown).
+ */
+export function clearAllReminders(): void {
+  for (const entry of activeStandaloneReminders.values()) {
+    if (entry.timer !== undefined) {
+      clearTimeout(entry.timer);
+      entry.timer = undefined;
+    }
+  }
+  activeStandaloneReminders.clear();
 }
