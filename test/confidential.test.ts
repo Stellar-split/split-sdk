@@ -16,6 +16,8 @@ import "fake-indexeddb/auto";
 import {
   generateCommitment,
   verifyCommitment,
+  maskSensitive,
+  SENSITIVE_FIELDS,
   storeBlindingFactor,
   loadBlindingFactor,
   deleteBlindingFactor,
@@ -118,6 +120,30 @@ describe("Pedersen Commitment Generation", () => {
     const result = generateCommitment(1000n);
     // Compressed point prefix is 0x02 or 0x03
     expect([0x02, 0x03]).toContain(result.commitment[0]);
+  });
+});
+
+describe("maskSensitive", () => {
+  it("redacts known sensitive fields without mutating the original object", () => {
+    const input = {
+      secret: "s1",
+      privateKey: "p1",
+      seed: "seed words",
+      mnemonic: "twelve words",
+      safe: "visible",
+    };
+
+    const output = maskSensitive(input);
+
+    expect(output).toEqual({
+      secret: "[REDACTED]",
+      privateKey: "[REDACTED]",
+      seed: "[REDACTED]",
+      mnemonic: "[REDACTED]",
+      safe: "visible",
+    });
+    expect(input.secret).toBe("s1");
+    expect(SENSITIVE_FIELDS).toContain("privateKey");
   });
 });
 

@@ -35,6 +35,8 @@ export interface RetryConfig {
   maxDelayMs: number;
   /** Whether to add random jitter to the delay. Default: true */
   jitter: boolean;
+  /** Delay after which the same request is sent to a secondary client, if configured. */
+  hedgeAfterMs?: number;
 }
 
 export const DEFAULT_RETRY_CONFIG: RetryConfig = {
@@ -104,6 +106,7 @@ export interface ResilientRpcClientEvents {
  */
 export class ResilientRpcClient extends EventEmitter {
   private readonly _inner: any;
+  private readonly _secondaryInner?: any;
   private readonly _retryConfig: RetryConfig;
   private readonly _circuitBreaker: CircuitBreaker;
 
@@ -111,9 +114,11 @@ export class ResilientRpcClient extends EventEmitter {
     inner: any,
     retryConfig?: Partial<RetryConfig>,
     circuitBreakerConfig?: Partial<CircuitBreakerConfig>,
+    secondaryInner?: any,
   ) {
     super();
     this._inner = inner;
+    this._secondaryInner = secondaryInner;
     this._retryConfig = { ...DEFAULT_RETRY_CONFIG, ...retryConfig };
     this._circuitBreaker = new CircuitBreaker(circuitBreakerConfig);
 
@@ -175,9 +180,24 @@ export class ResilientRpcClient extends EventEmitter {
 
   private _call(method: string, args: unknown[]): Promise<unknown> {
     return this._executeWithResilience(
-      () => (this._inner[method] as (...a: unknown[]) => Promise<unknown>)(...args),
+      () => this._invoke(method, args),
       method,
     );
+  }
+
+  private _invoke(method: string, args: unknown[]): Promise<unknown> {
+    if (!this._secondaryInner || !this._retryConfig.hedgeAfterMs || this._retryConfig.hedgeAfterMs <= 0) {
+      return (this._inner[method] as (...a: unknown[]) => Promise<unknown>)(...args);
+    }
+
+    const primary = (this._inner[method] as (...a: unknown[]) => Promise<unknown>)(...args);
+    const secondary = new Promise<unknown>((resolve, reject) => {
+      setTimeout(() => {
+        void (this._secondaryInner[method] as (...a: unknown[]) => Promise<unknown>)(...args).then(resolve, reject);
+      }, this._retryConfig.hedgeAfterMs);
+    });
+
+    return Promise.any([primary, secondary]);
   }
 
   private async _executeWithResilience<T>(
