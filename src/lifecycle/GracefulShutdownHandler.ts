@@ -17,6 +17,7 @@
  * other internal resources.
  */
 
+import { EventEmitter } from "events";
 import type { StellarSplitClient } from "../client.js";
 import { ShutdownInProgressError } from "../errors.js";
 
@@ -26,8 +27,17 @@ export type TimeoutAction = "force" | "error";
 /** Configuration for graceful shutdown behavior. */
 export interface ShutdownOptions {
   /**
+   * Maximum time (ms) to wait for in-flight operations to complete before
+   * the shutdown is considered timed out. Alias for `drainTimeoutMs`.
+   * Default: 10 000ms (10 seconds).
+   */
+  timeoutMs?: number;
+
+  /**
    * Maximum time (ms) to wait for in-flight requests to complete before
-   * taking the timeout action. Default: 30 000ms (30 seconds).
+   * taking the timeout action. Default: 10 000ms (10 seconds).
+   * When both `timeoutMs` and `drainTimeoutMs` are provided, `timeoutMs`
+   * takes precedence.
    */
   drainTimeoutMs?: number;
 
@@ -59,8 +69,8 @@ export class ShutdownTimeoutError extends Error {
   }
 }
 
-const DEFAULT_OPTIONS: Required<ShutdownOptions> = {
-  drainTimeoutMs: 30_000,
+const DEFAULT_OPTIONS: Required<Omit<ShutdownOptions, "timeoutMs">> & { drainTimeoutMs: number } = {
+  drainTimeoutMs: 10_000,
   signals: ["SIGTERM", "SIGINT"],
   onTimeout: "force",
 };
@@ -69,18 +79,30 @@ const DEFAULT_OPTIONS: Required<ShutdownOptions> = {
  * Manages the graceful shutdown lifecycle for a {@link StellarSplitClient}.
  * Holds a reference to the client and the signal listeners so they can be
  * properly removed when {@link deregister} is called.
+ *
+ * Emits:
+ * - `"shutdownTimedOut"` — fired when in-flight operations do not complete
+ *   within `timeoutMs` (alias `drainTimeoutMs`). Callers that want forced
+ *   process exit should listen for this event and call `process.exit(1)`.
  */
-class ShutdownHandlerInstance {
+class ShutdownHandlerInstance extends EventEmitter {
   private readonly client: StellarSplitClient;
-  private readonly options: Required<ShutdownOptions>;
+  private readonly options: Required<Omit<ShutdownOptions, "timeoutMs">> & { drainTimeoutMs: number };
   private readonly signalListeners = new Map<NodeJS.Signals, () => void>();
   private shutdownPromise: Promise<void> | null = null;
   private shutdownResolve: (() => void) | null = null;
   private shutdownReject: ((err: Error) => void) | null = null;
 
   constructor(client: StellarSplitClient, options: ShutdownOptions = {}) {
+    super();
     this.client = client;
-    this.options = { ...DEFAULT_OPTIONS, ...options };
+    // `timeoutMs` takes precedence over `drainTimeoutMs`
+    const resolvedTimeout = options.timeoutMs ?? options.drainTimeoutMs ?? DEFAULT_OPTIONS.drainTimeoutMs;
+    this.options = {
+      ...DEFAULT_OPTIONS,
+      ...options,
+      drainTimeoutMs: resolvedTimeout,
+    };
   }
 
   /**
@@ -135,13 +157,19 @@ class ShutdownHandlerInstance {
       // (2) Await in-flight requests up to drainTimeoutMs
       const drainResult = await this._drainWithTimeout();
 
-      if (!drainResult.completed && this.options.onTimeout === "error") {
-        const err = new ShutdownTimeoutError(
-          drainResult.pendingRequests,
-          this.options.drainTimeoutMs,
-        );
-        this.shutdownReject?.(err);
-        return;
+      if (!drainResult.completed) {
+        // Emit the timeout event so callers can react (e.g. process.exit(1))
+        this.emit("shutdownTimedOut", drainResult.pendingRequests);
+
+        if (this.options.onTimeout === "error") {
+          const err = new ShutdownTimeoutError(
+            drainResult.pendingRequests,
+            this.options.drainTimeoutMs,
+          );
+          this.shutdownReject?.(err);
+          return;
+        }
+        // onTimeout === "force": fall through and finalize anyway
       }
 
       // (3) Tear down subscriptions, connection pool, and other resources
@@ -180,6 +208,10 @@ class ShutdownHandlerInstance {
  * {@link StellarSplitClient}. When the configured OS signals are received,
  * the handler stops accepting new writes, drains in-flight requests,
  * and tears down SDK resources before resolving a shutdown promise.
+ *
+ * The handler emits a `"shutdownTimedOut"` event when in-flight operations
+ * do not complete within `timeoutMs`. Callers that want a forced exit should
+ * listen for this event and call `process.exit(1)`.
  */
 export class GracefulShutdownHandler {
   /**
