@@ -30,6 +30,31 @@ export interface FeeEstimateError {
   total: string;
 }
 
+export interface FeeEstimationStrategy<TParams = unknown> {
+  estimate(params: TParams): number;
+}
+
+export const SigningAlgorithmRegistry = new Map<string, never>();
+
+const feeStrategyRegistry = new Map<string, FeeEstimationStrategy<any>>([
+  ["fixed", { estimate: (params: { fee: number }) => params.fee }],
+  ["percentile", { estimate: (params: { samples: number[]; percentile: number }) => {
+    const sorted = [...params.samples].sort((a, b) => a - b);
+    if (sorted.length === 0) return 0;
+    const index = Math.min(sorted.length - 1, Math.floor((params.percentile / 100) * sorted.length));
+    return sorted[index] ?? 0;
+  } }],
+  ["surge", { estimate: (params: { baseFee: number; multiplier: number }) => params.baseFee * params.multiplier }],
+]);
+
+export function estimateFee(type: string, params: unknown): number {
+  const strategy = feeStrategyRegistry.get(type);
+  if (!strategy) {
+    throw new RangeError(`Unknown fee estimation strategy: ${type}`);
+  }
+  return strategy.estimate(params);
+}
+
 /**
  * Estimate operation cost by simulating it.
  *

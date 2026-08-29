@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { Keypair, StrKey } from "@stellar/stellar-sdk";
 import {
   validateClientConfig,
+  validateConfig,
   validateOrThrow,
   InvalidConfigError,
+  UnknownConfigKeyError,
 } from "../src/configValidator.js";
 import type { StellarSplitClientConfig } from "../src/client.js";
 import { Keypair } from "@stellar/stellar-sdk";
@@ -160,6 +162,16 @@ describe("validateClientConfig", () => {
     expect(result.valid).toBe(false);
     expect(result.errors.some((e) => e.field === "adapter")).toBe(true);
   });
+
+  it("catches unknown top-level config keys", () => {
+    const config = validConfig() as StellarSplitClientConfig & { rpcUrll?: string };
+    config.rpcUrll = "https://typo.example.com";
+
+    const result = validateClientConfig(config);
+
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.message.includes("Unknown top-level config keys"))).toBe(true);
+  });
 });
 
 describe("validateOrThrow", () => {
@@ -182,5 +194,12 @@ describe("validateOrThrow", () => {
 
     expect(() => validateOrThrow(config)).toThrow(/rpcUrl/);
     expect(() => validateOrThrow(config2)).toThrow(/rpcUrl/);
+  });
+
+  it("throws UnknownConfigKeyError for typo keys", () => {
+    const config = validConfig() as StellarSplitClientConfig & { rpcUrll?: string };
+    config.rpcUrll = "https://typo.example.com";
+
+    expect(() => validateConfig(config)).toThrow(UnknownConfigKeyError);
   });
 });
