@@ -207,6 +207,78 @@ describe("RecipientBalancePreCheck — minimum_reserve", () => {
     expect(hint).toBeDefined();
     expect(hint).toMatch(/1\.5/);
   });
+
+  it("uses default skipThresholdXlm of 10 when not specified", async () => {
+    // reserve = 2 XLM; balance = 12 XLM (exactly reserve + 10 XLM threshold)
+    // Should trigger fast-path
+    loadAccountSpy.mockResolvedValue(
+      makeAccount({ subentryCount: 2, xlmBalance: "12.0000000" }) as any,
+    );
+
+    const debugSpy = vi.spyOn(console, "debug");
+    const checker = new RecipientBalancePreCheck();
+    const [result] = await checker.run([ADDR_VALID]);
+
+    const reserveCheck = result!.checks.find((c) => c.name === "minimum_reserve");
+    expect(reserveCheck!.passed).toBe(true);
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Fast-path skip"),
+    );
+    debugSpy.mockRestore();
+  });
+
+  it("skips detailed validation when balance exceeds reserve + skipThreshold", async () => {
+    // reserve = 2 XLM; balance = 15 XLM; threshold = 5 XLM
+    // 15 >= 2 + 5, so should trigger fast-path
+    loadAccountSpy.mockResolvedValue(
+      makeAccount({ subentryCount: 2, xlmBalance: "15.0000000" }) as any,
+    );
+
+    const debugSpy = vi.spyOn(console, "debug");
+    const checker = new RecipientBalancePreCheck({ skipThresholdXlm: 5 });
+    const [result] = await checker.run([ADDR_VALID]);
+
+    const reserveCheck = result!.checks.find((c) => c.name === "minimum_reserve");
+    expect(reserveCheck!.passed).toBe(true);
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.stringContaining("threshold 5"),
+    );
+    debugSpy.mockRestore();
+  });
+
+  it("respects custom skipThresholdXlm option", async () => {
+    // reserve = 2 XLM; balance = 11 XLM; threshold = 10 XLM
+    // 11 < 2 + 10, so should NOT trigger fast-path
+    loadAccountSpy.mockResolvedValue(
+      makeAccount({ subentryCount: 2, xlmBalance: "11.0000000" }) as any,
+    );
+
+    const debugSpy = vi.spyOn(console, "debug");
+    const checker = new RecipientBalancePreCheck({ skipThresholdXlm: 10 });
+    const [result] = await checker.run([ADDR_VALID]);
+
+    const reserveCheck = result!.checks.find((c) => c.name === "minimum_reserve");
+    expect(reserveCheck!.passed).toBe(true);
+    expect(debugSpy).not.toHaveBeenCalled();
+    debugSpy.mockRestore();
+  });
+
+  it("does not skip when balance is only slightly above reserve", async () => {
+    // reserve = 2 XLM; balance = 2.5 XLM; default threshold = 10 XLM
+    // 2.5 < 2 + 10, so should NOT trigger fast-path
+    loadAccountSpy.mockResolvedValue(
+      makeAccount({ subentryCount: 2, xlmBalance: "2.5000000" }) as any,
+    );
+
+    const debugSpy = vi.spyOn(console, "debug");
+    const checker = new RecipientBalancePreCheck();
+    const [result] = await checker.run([ADDR_VALID]);
+
+    const reserveCheck = result!.checks.find((c) => c.name === "minimum_reserve");
+    expect(reserveCheck!.passed).toBe(true);
+    expect(debugSpy).not.toHaveBeenCalled();
+    debugSpy.mockRestore();
+  });
 });
 
 describe("RecipientBalancePreCheck — fully valid recipient", () => {

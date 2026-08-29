@@ -59,6 +59,13 @@ export interface RecipientPreCheckOptions {
    * Override in tests / for testnet usage.
    */
   horizonUrl?: string;
+  /**
+   * XLM amount threshold above the minimum reserve.
+   * When native balance exceeds minimumReserveXlm + skipThresholdXlm,
+   * the minimum_reserve check passes immediately without detailed validation.
+   * Defaults to 10 XLM.
+   */
+  skipThresholdXlm?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -187,24 +194,38 @@ async function checkRecipient(
   if (nativeBalance) {
     const balanceXlm = parseFloat(nativeBalance.balance);
     const reserveXlm = minimumReserveXlm(account.subentry_count);
-    const shortfallXlm = reserveXlm - balanceXlm;
+    const skipThreshold = options.skipThresholdXlm ?? 10;
 
-    if (shortfallXlm <= 0) {
+    // Fast-path: if balance is well above reserve, skip detailed validation
+    if (balanceXlm >= reserveXlm + skipThreshold) {
+      console.debug(
+        `[RecipientBalancePreCheck] Fast-path skip for ${recipient}: balance ${balanceXlm.toFixed(7)} XLM >= reserve ${reserveXlm.toFixed(7)} XLM + threshold ${skipThreshold} XLM`,
+      );
       checks.push({
         name: "minimum_reserve",
         passed: true,
         detail: `XLM balance (${balanceXlm.toFixed(7)} XLM) satisfies minimum reserve (${reserveXlm.toFixed(7)} XLM).`,
       });
     } else {
-      const shortfallStroops = BigInt(Math.ceil(shortfallXlm * Number(XLM_STROOPS)));
-      checks.push({
-        name: "minimum_reserve",
-        passed: false,
-        detail: `XLM balance (${balanceXlm.toFixed(7)} XLM) is below the minimum reserve (${reserveXlm.toFixed(7)} XLM). Shortfall: ${shortfallXlm.toFixed(7)} XLM (${shortfallStroops} stroops).`,
-      });
-      remediations.push(
-        `Send at least ${shortfallXlm.toFixed(7)} XLM (${shortfallStroops} stroops) to account ${recipient} to satisfy the minimum reserve requirement.`,
-      );
+      const shortfallXlm = reserveXlm - balanceXlm;
+
+      if (shortfallXlm <= 0) {
+        checks.push({
+          name: "minimum_reserve",
+          passed: true,
+          detail: `XLM balance (${balanceXlm.toFixed(7)} XLM) satisfies minimum reserve (${reserveXlm.toFixed(7)} XLM).`,
+        });
+      } else {
+        const shortfallStroops = BigInt(Math.ceil(shortfallXlm * Number(XLM_STROOPS)));
+        checks.push({
+          name: "minimum_reserve",
+          passed: false,
+          detail: `XLM balance (${balanceXlm.toFixed(7)} XLM) is below the minimum reserve (${reserveXlm.toFixed(7)} XLM). Shortfall: ${shortfallXlm.toFixed(7)} XLM (${shortfallStroops} stroops).`,
+        });
+        remediations.push(
+          `Send at least ${shortfallXlm.toFixed(7)} XLM (${shortfallStroops} stroops) to account ${recipient} to satisfy the minimum reserve requirement.`,
+        );
+      }
     }
   } else {
     // Should not happen for a funded account, but guard defensively.
