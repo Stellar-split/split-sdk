@@ -60,3 +60,42 @@ export class InvoiceMetadataValidator {
     return { valid: false, errors };
   }
 }
+
+/** Maximum allowed length for custom metadata keys. */
+export const MAX_METADATA_KEY_LENGTH = 64;
+
+/**
+ * Validate that all custom metadata keys are within the allowed length.
+ *
+ * @param customKeys - Record of custom metadata key-value pairs.
+ * @returns An object with `valid` boolean and optional `error` message.
+ */
+export function validateMetadataKeys(
+  customKeys: Record<string, unknown> | undefined
+): { valid: boolean; error?: string } {
+  if (!customKeys) return { valid: true };
+
+  for (const key of Object.keys(customKeys)) {
+    if (key.length > MAX_METADATA_KEY_LENGTH) {
+      return {
+        valid: false,
+        error: `Custom metadata key "${key}" exceeds maximum length of ${MAX_METADATA_KEY_LENGTH} characters (got ${key.length})`,
+      };
+    }
+
+    const value = customKeys[key];
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const nested = value as Record<string, unknown>;
+      for (const nestedKey of Object.keys(nested)) {
+        if (nestedKey.length > MAX_METADATA_KEY_LENGTH) {
+          return {
+            valid: false,
+            error: `Custom metadata key "${nestedKey}" exceeds maximum length of ${MAX_METADATA_KEY_LENGTH} characters (got ${nestedKey.length})`,
+          };
+        }
+      }
+    }
+  }
+
+  return { valid: true };
+}
