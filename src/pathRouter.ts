@@ -39,6 +39,15 @@ export interface PathResult {
   destinationAmount: bigint;
   /** Amount sent from the source (in the source asset's base unit). */
   sourceAmount: bigint;
+  /** Flag indicating if the path was found using the fallback threshold. */
+  usedFallback?: boolean;
+}
+
+export interface FindPathParams {
+  sourceAsset: Asset;
+  destinationAsset: Asset;
+  threshold: bigint;
+  fallbackSlippagePct?: number;
 }
 
 /** Parameters for pathfinding. */
@@ -182,6 +191,47 @@ export class PathRouter {
         `Failed to find strict-send path: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  /**
+   * Find a path using a primary threshold, with an optional fallback.
+   */
+  async findPath(params: FindPathParams): Promise<PathResult> {
+    const sourceAssetType = assetType(params.sourceAsset);
+    const destAssetType = assetType(params.destinationAsset);
+
+    const trySend = async (amount: bigint) => {
+      const query = this.queryBuilder.forStrictSend({
+        sourceAsset: params.sourceAsset,
+        sourceAmount: amount,
+        destinationAssets: [params.destinationAsset],
+      });
+      return await this.queryBuilder.execute(query);
+    };
+
+    let results = await trySend(params.threshold);
+    let usedFallback = false;
+
+    if (results.length === 0 && params.fallbackSlippagePct !== undefined) {
+      const pct = params.fallbackSlippagePct;
+      const multiplier = 1 + pct / 100;
+      const fallbackAmount = BigInt(Math.floor(Number(params.threshold) * multiplier));
+      
+      results = await trySend(fallbackAmount);
+      usedFallback = true;
+    }
+
+    if (results.length === 0) {
+      throw new PathNotFoundError(sourceAssetType, destAssetType, params.threshold);
+    }
+
+    const best = results[0]!;
+    return {
+      path: best.path,
+      destinationAmount: best.destinationAmount,
+      sourceAmount: best.sourceAmount,
+      ...(usedFallback ? { usedFallback: true } : {})
+    };
   }
 
   /**
