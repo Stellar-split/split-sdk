@@ -56,6 +56,7 @@ describe("slaTracker", () => {
     expect(report.withinSla).toBe(0);
     expect(report.breached).toBe(0);
     expect(report.avgTimeToFund).toBe(0);
+    expect(report.p99LatencyMs).toBe(0);
   });
 
   it("excludes invoices with zero payments from time-to-fund averages", () => {
@@ -119,5 +120,6 @@ describe("slaTracker", () => {
     // Time to fund = (3000 - 1000) * 1000 = 2_000_000ms
     expect(report.withinSla).toBe(1);
     expect(report.avgTimeToFund).toBe(2_000_000);
+    expect(report.p99LatencyMs).toBe(2_000_000);
   });
 });
