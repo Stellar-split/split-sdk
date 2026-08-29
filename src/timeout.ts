@@ -32,6 +32,10 @@ export class RequestTimeoutError extends Error {
   }
 }
 
+export type TimeoutResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; reason: "timeout" | "error"; error?: Error };
+
 const KNOWN_METHODS = [
   "getInvoice",
   "createInvoice",
@@ -94,7 +98,7 @@ export async function withTimeout<T>(
   fn: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
   method: string
-): Promise<T> {
+): Promise<TimeoutResult<T>> {
   const controller = new AbortController();
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
@@ -106,10 +110,36 @@ export async function withTimeout<T>(
   });
 
   try {
-    return await Promise.race([fn(controller.signal), timeoutPromise]);
+    const value = await Promise.race([fn(controller.signal), timeoutPromise]);
+    return { ok: true, value };
+  } catch (error) {
+    if (error instanceof RequestTimeoutError) {
+      return { ok: false, reason: "timeout", error };
+    }
+    return {
+      ok: false,
+      reason: "error",
+      error: error instanceof Error ? error : new Error(String(error)),
+    };
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+/**
+ * @deprecated Use withTimeout() and inspect the TimeoutResult union.
+ */
+export async function withTimeoutOrThrow<T>(
+  fn: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  method: string
+): Promise<T> {
+  const result = await withTimeout(fn, timeoutMs, method);
+  if (result.ok) {
+    return result.value;
+  }
+
+  throw result.error ?? new Error(`withTimeoutOrThrow failed for ${method}`);
 }
 
 // ---------------------------------------------------------------------------

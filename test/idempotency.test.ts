@@ -58,12 +58,22 @@ describe("IdempotencyManager", () => {
   });
 
   it("evicts expired entries", () => {
-    const shortManager = new IdempotencyManager({ ttlMs: -1 });
+    const shortManager = new IdempotencyManager({ keyTtlMs: -1 });
     const key = shortManager.generateKey("GABC", "op-xdr-1");
     shortManager.tryClaim(key, { txHash: "hash-1" });
 
     const result = shortManager.getResult(key);
     expect(result).toBeNull();
+  });
+
+  it("treats an expired key as a new request", () => {
+    const shortManager = new IdempotencyManager({ keyTtlMs: -1 });
+    const key = shortManager.generateKey("GABC", "op-xdr-1");
+
+    shortManager.tryClaim(key, { txHash: "hash-1" });
+    const second = shortManager.tryClaim(key, { txHash: "hash-2" });
+
+    expect(second.duplicate).toBe(false);
   });
 
   it("evicts oldest entry when at max capacity", () => {

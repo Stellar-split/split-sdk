@@ -11,10 +11,63 @@ export interface DegradationConfig {
   enabled: boolean;
 }
 
+export interface ServiceDegradationConfig {
+  failureThreshold: number;
+  recoveryWindowMs: number;
+  now?: () => number;
+}
+
+export type ServiceState = "healthy" | "degraded";
+
 interface PendingEntry {
   fn: () => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
+}
+
+export class ServiceDegradationTracker {
+  private readonly failureThreshold: number;
+  private readonly recoveryWindowMs: number;
+  private readonly now: () => number;
+  private failureCount = 0;
+  private degradedAt: number | null = null;
+
+  constructor(config: ServiceDegradationConfig) {
+    this.failureThreshold = config.failureThreshold;
+    this.recoveryWindowMs = config.recoveryWindowMs;
+    this.now = config.now ?? Date.now;
+  }
+
+  recordFailure(): void {
+    this.refreshState();
+    this.failureCount++;
+    if (this.failureCount >= this.failureThreshold && this.degradedAt === null) {
+      this.degradedAt = this.now();
+    }
+  }
+
+  recordSuccess(): void {
+    this.refreshState();
+    if (this.degradedAt === null) {
+      this.failureCount = 0;
+    }
+  }
+
+  getState(): ServiceState {
+    this.refreshState();
+    return this.degradedAt === null ? "healthy" : "degraded";
+  }
+
+  private refreshState(): void {
+    if (this.degradedAt === null) {
+      return;
+    }
+
+    if (this.now() - this.degradedAt >= this.recoveryWindowMs) {
+      this.degradedAt = null;
+      this.failureCount = 0;
+    }
+  }
 }
 
 export class DegradationManager {

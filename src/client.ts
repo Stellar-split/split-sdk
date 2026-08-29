@@ -266,7 +266,7 @@ import type {
 import { Asset } from "@stellar/stellar-sdk";
 import { rolloverInvoice as _rolloverInvoice } from "./invoiceRollover.js";
 import { BatchedRpcClient } from "./requestBatcher.js";
-import { TimeoutManager, withTimeout } from "./timeout.js";
+import { TimeoutManager, withTimeoutOrThrow } from "./timeout.js";
 import type { TimeoutConfig } from "./timeout.js";
 import { RequestTimeoutError } from "./errors.js";
 import { TraceIdManager } from "./traceId.js";
@@ -1485,7 +1485,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
       opts?.timeout ?? this._timeoutManager?.resolveTimeout(method);
 
     if (timeoutMs !== undefined) {
-      return withTimeout(() => run(), timeoutMs, method);
+      return withTimeoutOrThrow(() => run(), timeoutMs, method);
     }
     return run();
   }

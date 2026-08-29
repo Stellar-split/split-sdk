@@ -3,6 +3,8 @@ import { createHash } from "crypto";
 export interface IdempotencyConfig {
   /** Duration (ms) to remember completed keys. Default: 300_000 (5 min). */
   ttlMs?: number;
+  /** Preferred alias for ttlMs. Defaults to 24 hours when neither value is provided. */
+  keyTtlMs?: number;
   /** Max entries in the key store before evicting oldest. Default: 10_000. */
   maxEntries?: number;
 }
@@ -18,7 +20,7 @@ export class IdempotencyManager {
   private readonly maxEntries: number;
 
   constructor(config?: IdempotencyConfig) {
-    this.ttlMs = config?.ttlMs ?? 300_000;
+    this.ttlMs = config?.keyTtlMs ?? config?.ttlMs ?? 86_400_000;
     this.maxEntries = config?.maxEntries ?? 10_000;
   }
 
