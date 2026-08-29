@@ -29,6 +29,13 @@ export class InvalidDestinationError extends Error {
   }
 }
 
+/** Payload emitted on the "merge" event. */
+export interface MergeEventPayload {
+  source: string;
+  destination: string;
+  mergedAt: Date;
+}
+
 export class AccountMergeDetector extends EventEmitter {
   private watchedAccounts = new Set<string>();
   private mergeCache = new Map<string, string>(); // source -> destination mapping
@@ -186,6 +193,12 @@ export class AccountMergeDetector extends EventEmitter {
     };
 
     this.emit("recipient:mergeDetected", event);
+
+    this.emit("merge", {
+      source: sourceAccount,
+      destination: destinationAccount,
+      mergedAt: event.timestamp,
+    } satisfies MergeEventPayload);
 
     // Notify the client to reroute recipients
     try {

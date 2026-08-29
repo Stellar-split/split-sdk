@@ -90,6 +90,7 @@ export type HorizonStreamKind = "payments" | "operations";
 export const DEFAULT_REPLAY_CUTOFF_MS = 300_000;
 export const DEFAULT_DEDUPE_BUFFER_SIZE = 256;
 export const DEFAULT_RECONNECT_DELAY_MS = 1_000;
+export const MAX_RECONNECT_DELAY_MS = 30_000;
 
 export interface HorizonStreamManagerConfig<T extends HorizonStreamRecord = HorizonStreamRecord> {
   /** Horizon server URL. Required unless `source` is supplied directly (e.g. for tests). */
@@ -108,6 +109,8 @@ export interface HorizonStreamManagerConfig<T extends HorizonStreamRecord = Hori
   dedupeBufferSize?: number;
   /** Delay before reconnecting after a stream error. Default: 1 000ms. */
   reconnectDelayMs?: number;
+  /** Maximum number of reconnect attempts before giving up. Default: Infinity (unlimited). */
+  maxReconnectAttempts?: number;
   /** Time source — exposed for deterministic tests. */
   now?: () => number;
 }
@@ -115,8 +118,10 @@ export interface HorizonStreamManagerConfig<T extends HorizonStreamRecord = Hori
 /** Event map for {@link HorizonStreamManager}. */
 export interface HorizonStreamEventMap {
   "stream:reconnected": [{ accountId: string; cursor: string | null }];
+  "stream:reconnecting": [{ accountId: string; attempt: number; delayMs: number }];
   "stream:lag": [{ accountId: string; error: unknown }];
   "stream:cursor_advanced": [{ accountId: string; cursor: string }];
+  "stream:reconnect_failed": [{ accountId: string; attempts: number }];
 }
 
 function defaultSource<T extends HorizonStreamRecord>(
@@ -144,6 +149,7 @@ export class HorizonStreamManager<
   private readonly _replayCutoffMs: number;
   private readonly _dedupeBufferSize: number;
   private readonly _reconnectDelayMs: number;
+  private readonly _maxReconnectAttempts: number;
   private readonly _now: () => number;
 
   private _accountId: string | null = null;
@@ -152,6 +158,7 @@ export class HorizonStreamManager<
   private _closeStream: (() => void) | null = null;
   private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private _stopped = true;
+  private _reconnectAttempts = 0;
   private _seenTokens: string[] = [];
   private readonly _seenSet = new Set<string>();
 
@@ -172,6 +179,7 @@ export class HorizonStreamManager<
     this._replayCutoffMs = config.replayCutoffMs ?? DEFAULT_REPLAY_CUTOFF_MS;
     this._dedupeBufferSize = config.dedupeBufferSize ?? DEFAULT_DEDUPE_BUFFER_SIZE;
     this._reconnectDelayMs = config.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS;
+    this._maxReconnectAttempts = config.maxReconnectAttempts ?? Infinity;
     this._now = config.now ?? (() => Date.now());
   }
 
@@ -181,6 +189,7 @@ export class HorizonStreamManager<
     this._accountId = accountId;
     this._handler = handler;
     this._stopped = false;
+    this._reconnectAttempts = 0;
     this._cursor = this._cursorStore.get(this._cursorKey(accountId));
     this._seenTokens = [];
     this._seenSet.clear();
@@ -225,6 +234,7 @@ export class HorizonStreamManager<
     });
 
     if (isReconnect) {
+      this._reconnectAttempts = 0;
       this.emit("stream:reconnected", { accountId: this._accountId, cursor: this._cursor });
     }
   }
@@ -270,9 +280,28 @@ export class HorizonStreamManager<
     this._closeStream?.();
     this._closeStream = null;
     this.emit("stream:lag", { accountId: this._accountId, error: event });
+
+    this._reconnectAttempts += 1;
+    if (this._reconnectAttempts > this._maxReconnectAttempts) {
+      this.emit("stream:reconnect_failed", {
+        accountId: this._accountId,
+        attempts: this._reconnectAttempts,
+      });
+      return;
+    }
+
+    const delayMs = Math.min(
+      this._reconnectDelayMs * Math.pow(2, this._reconnectAttempts - 1),
+      MAX_RECONNECT_DELAY_MS,
+    );
+    this.emit("stream:reconnecting", {
+      accountId: this._accountId,
+      attempt: this._reconnectAttempts,
+      delayMs,
+    });
     this._reconnectTimer = setTimeout(() => {
       this._reconnectTimer = null;
       this._connect(true);
-    }, this._reconnectDelayMs);
+    }, delayMs);
   }
 }

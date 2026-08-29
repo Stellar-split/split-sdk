@@ -105,6 +105,25 @@ export class AccountSignerWeightCalculator {
     this.cache.delete(accountId);
   }
 
+  /**
+   * Check whether the provided signing keys meet the required threshold
+   * for the given account. Returns `true` if sufficient, `false` otherwise.
+   *
+   * Missing signers (not on the account) contribute 0 weight.
+   *
+   * @param accountId      - The Stellar account G… address.
+   * @param signers        - List of public keys that will sign the transaction.
+   * @param threshold      - Which threshold level to check: 'low', 'medium', or 'high'.
+   */
+  async meetsThreshold(
+    accountId: string,
+    signers: string[],
+    threshold: ThresholdLevel,
+  ): Promise<boolean> {
+    const result = await this.calculateWeight(accountId, signers, threshold);
+    return result.sufficient;
+  }
+
   // --------------------------------------------------------------------------
   // Private helpers
   // --------------------------------------------------------------------------
