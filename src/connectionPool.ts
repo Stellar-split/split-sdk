@@ -34,6 +34,8 @@ interface PoolSlot {
   createdAt: number;
   lastUsedAt: number;
   lastSelectedAt: number;
+  /** Pending idle-recycle timer armed when this slot returns to inFlight === 0. */
+  idleTimer: ReturnType<typeof setTimeout> | null;
 }
 
 export interface PoolSlotStats {
@@ -232,8 +234,44 @@ export class ConnectionPool {
         slot.inFlight = Math.max(0, slot.inFlight - 1);
         if (error) slot.totalErrors += 1;
         slot.lastUsedAt = this.opts.now();
+
+        // Connection returned to the pool: (re)arm its idle-recycle timer so
+        // that a slot which stays idle for idleTimeoutMs gets closed even if
+        // nothing ever calls select() again to trigger lazy recycling
+        // (issue #360 follow-up).
+        if (slot.inFlight === 0) {
+          this._armIdleTimer(slotIdx, slot);
+        }
       },
     };
+  }
+
+  /**
+   * Arm (replacing any existing) idle-recycle timer for the slot at `idx`.
+   * When the timer fires, if the slot is still idle and hasn't been used
+   * again in the meantime, it is recycled — the underlying connection is
+   * closed and replaced with a fresh one.
+   */
+  private _armIdleTimer(idx: number, slot: PoolSlot): void {
+    if (slot.idleTimer) {
+      clearTimeout(slot.idleTimer);
+      slot.idleTimer = null;
+    }
+    const armedAt = slot.lastUsedAt;
+    slot.idleTimer = setTimeout(() => {
+      if (this.disposed) return;
+      const current = this.slots[idx];
+      if (!current || current !== slot) return;
+      if (current.inFlight !== 0 || current.lastUsedAt !== armedAt) {
+        // Slot was reused since the timer was armed — nothing to do.
+        return;
+      }
+      this._recycle(idx, this.opts.now());
+    }, this.opts.idleTimeoutMs);
+    // Don't keep the process alive solely for pool housekeeping.
+    if (typeof (slot.idleTimer as unknown as { unref?: () => void }).unref === "function") {
+      (slot.idleTimer as unknown as { unref: () => void }).unref();
+    }
   }
 
   /**
@@ -289,6 +327,12 @@ export class ConnectionPool {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    for (const slot of this.slots) {
+      if (slot.idleTimer) {
+        clearTimeout(slot.idleTimer);
+        slot.idleTimer = null;
+      }
+    }
     this.slots = [];
   }
 
@@ -311,11 +355,16 @@ export class ConnectionPool {
       createdAt,
       lastUsedAt: createdAt,
       lastSelectedAt: createdAt,
+      idleTimer: null,
     };
   }
 
   private _recycle(idx: number, now: number): PoolSlot {
     const old = this.slots[idx]!;
+    if (old.idleTimer) {
+      clearTimeout(old.idleTimer);
+      old.idleTimer = null;
+    }
     const fresh = this._createSlot(old.recycledCount + 1, now);
     this.slots[idx] = fresh;
     return fresh;
