@@ -1388,3 +1388,15 @@ export type {
   SubmitTransactionOptions,
   SubmitServer,
 } from "./transaction/submit.js";
+
+// ---------------------------------------------------------------------------
+// #614 — Search / searchByMemo
+// ---------------------------------------------------------------------------
+
+export { searchInvoices, searchByMemo } from "./search.js";
+export type {
+  SearchQuery,
+  SearchResult,
+  SearchByMemoOptions,
+} from "./search.js";
+
