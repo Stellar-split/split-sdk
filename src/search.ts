@@ -1,5 +1,5 @@
 import { Horizon } from "@stellar/stellar-sdk";
-import type { InvoiceStatus } from "./types.js";
+import type { Invoice, InvoiceStatus } from "./types.js";
 import { SearchFailedError } from "./errors.js";
 
 /** Query parameters for searching invoices. */
@@ -18,6 +18,39 @@ export interface SearchResult {
   invoiceId: string;
   /** Current status of the invoice. */
   status: InvoiceStatus;
+}
+
+/** Options for {@link searchByMemo}. */
+export interface SearchByMemoOptions {
+  /** When true, match exact case; otherwise ignore case (default). */
+  caseSensitive?: boolean;
+}
+
+/**
+ * Search a local array of invoices by memo content.
+ *
+ * @param invoices - Array of invoices to search.
+ * @param query - Substring to look for in each invoice's memo.
+ * @param opts - Search options.
+ * @returns Invoices whose memo contains `query`; all invoices if `query` is empty.
+ */
+export function searchByMemo(
+  invoices: Invoice[],
+  query: string,
+  opts?: SearchByMemoOptions,
+): Invoice[] {
+  if (query === "") {
+    return invoices;
+  }
+
+  const needle = opts?.caseSensitive ? query : query.toLowerCase();
+  return invoices.filter((invoice) => {
+    if (invoice.memo === undefined || invoice.memo === null) {
+      return false;
+    }
+    const haystack = opts?.caseSensitive ? invoice.memo : invoice.memo.toLowerCase();
+    return haystack.includes(needle);
+  });
 }
 
 /**

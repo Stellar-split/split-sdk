@@ -337,6 +337,17 @@ export type {
   HorizonProberConfig,
 } from "./horizonProber.js";
 
+// Invoice calculator
+export {
+  calculateSplitAmounts,
+  computeAmounts,
+  formatSplitPercentage,
+} from "./invoice/calculator.js";
+
+// Invoice memo search
+export { searchByMemo } from "./search.js";
+export type { SearchByMemoOptions } from "./search.js";
+
 // AMM Calculator
 export { estimateSwapOutput, calculatePoolShare } from "./ammCalculator.js";
 
