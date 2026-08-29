@@ -2080,3 +2080,30 @@ export interface SubentryCapacityError {
   /** The capacity result that triggered this error. */
   capacityResult: SubentryCapacityResult;
 }
+
+// ---------------------------------------------------------------------------
+// Claimable Balance Lifecycle Types
+// ---------------------------------------------------------------------------
+
+/** Lifecycle status of a tracked claimable balance. */
+export type ClaimableBalanceStatus = "created" | "claimed" | "expired";
+
+/** A claimable balance record tracked by {@link ClaimableBalanceLifecycle}. */
+export interface ClaimableBalanceRecord {
+  /** Stellar claimable balance ID (e.g. `00000000…`). */
+  balanceId: string;
+  /** Stellar address of the account that can claim this balance. */
+  claimant: string;
+  /** Asset descriptor: `"native"` for XLM, `"CODE:ISSUER"` for issued assets. */
+  asset: string;
+  /** Human-readable amount string (e.g. `"12.5000000"`). */
+  amount: string;
+  /** Current lifecycle status. */
+  status: ClaimableBalanceStatus;
+  /** Unix epoch ms when the balance was created / first tracked. */
+  createdAt: number;
+  /** Unix epoch ms when the balance was claimed, or `null` if not yet claimed. */
+  claimedAt: number | null;
+  /** Ledger sequence after which the predicate expires (optional). */
+  predicateExpiryLedger?: number;
+}
