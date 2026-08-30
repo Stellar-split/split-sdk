@@ -9,6 +9,16 @@ export interface RetryStrategy {
   jitterMs?: number;
 }
 
+export interface RetryEngineOptions {
+  /**
+   * Multiplicative jitter applied to each computed delay.
+   * Each delay is multiplied by a random value in [1 - jitterFactor, 1 + jitterFactor].
+   * Must be in the range [0, 1]. Set to 0 to disable jitter entirely.
+   * @default 0.2
+   */
+  jitterFactor?: number;
+}
+
 export interface RetryConfig {
   transient: RetryStrategy;
   rateLimit: RetryStrategy;
@@ -47,11 +57,19 @@ function sleep(ms: number): Promise<void> {
 export class RetryEngine {
   private _consecutiveTransientFailures = 0;
   private _circuitOpenedAt: number | null = null;
+  private readonly _jitterFactor: number;
 
   constructor(
     private readonly config: RetryConfig,
-    private readonly telemetry: TelemetryCollector
-  ) {}
+    private readonly telemetry: TelemetryCollector,
+    options: RetryEngineOptions = {}
+  ) {
+    const jf = options.jitterFactor ?? 0.2;
+    if (jf < 0 || jf > 1) {
+      throw new Error(`jitterFactor must be in [0, 1], got ${jf}`);
+    }
+    this._jitterFactor = jf;
+  }
 
   get isCircuitOpen(): boolean {
     if (this._circuitOpenedAt === null) return false;
@@ -110,9 +128,14 @@ export class RetryEngine {
           break;
         }
 
-        const delay =
+        const baseDelay =
           strategy.initialDelayMs * strategy.backoffMultiplier ** (attempt - 1) +
           (strategy.jitterMs ? Math.random() * strategy.jitterMs : 0);
+
+        const delay =
+          this._jitterFactor === 0
+            ? baseDelay
+            : baseDelay * (1 - this._jitterFactor + Math.random() * 2 * this._jitterFactor);
 
         await sleep(delay);
       }

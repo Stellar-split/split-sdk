@@ -263,6 +263,12 @@ export interface ClaimableBalanceLifecycleEventMap {
 export interface ClaimableBalanceLifecycleConfig {
   /** Polling interval in milliseconds. Default: 10_000 (10s). */
   pollIntervalMs?: number;
+  /**
+   * Time-to-live for tracked entries in milliseconds.  Entries older than
+   * this are considered stale and will be removed by {@link ClaimableBalanceLifecycle.pruneExpired}.
+   * Default: 86_400_000 (24 hours).
+   */
+  ttlMs?: number;
 }
 
 /**
@@ -280,10 +286,20 @@ export interface ClaimableBalanceLifecycleConfig {
  * lifecycle.start();
  * ```
  */
+/** @internal Extended record stored inside the lifecycle manager. */
+interface TrackedEntry {
+  record: ClaimableBalanceRecord;
+  /** Unix epoch ms when this entry was registered via {@link ClaimableBalanceLifecycle.track}. */
+  trackedAt: number;
+  /** TTL override for this specific entry (ms). Falls back to the manager default. */
+  ttlMs: number;
+}
+
 export class ClaimableBalanceLifecycle extends TypedEventEmitter<ClaimableBalanceLifecycleEventMap> {
   private readonly server: Horizon.Server;
   private readonly pollIntervalMs: number;
-  private tracked: Map<string, ClaimableBalanceRecord> = new Map();
+  private readonly _defaultTtlMs: number;
+  private tracked: Map<string, TrackedEntry> = new Map();
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private _running = false;
 
@@ -291,6 +307,7 @@ export class ClaimableBalanceLifecycle extends TypedEventEmitter<ClaimableBalanc
     super();
     this.server = server;
     this.pollIntervalMs = config.pollIntervalMs ?? 10_000;
+    this._defaultTtlMs = config.ttlMs ?? 86_400_000; // 24 h
   }
 
   /** Whether the lifecycle manager is currently polling. */
@@ -301,6 +318,11 @@ export class ClaimableBalanceLifecycle extends TypedEventEmitter<ClaimableBalanc
   /** Number of balances currently being tracked. */
   get trackedCount(): number {
     return this.tracked.size;
+  }
+
+  /** Default TTL for tracked entries in milliseconds. */
+  get defaultTtlMs(): number {
+    return this._defaultTtlMs;
   }
 
   /**
@@ -327,10 +349,37 @@ export class ClaimableBalanceLifecycle extends TypedEventEmitter<ClaimableBalanc
   /**
    * Register a claimable balance for tracking.
    *
+   * Expired entries are pruned automatically before inserting the new record.
+   *
    * @param record - The balance to track.
+   * @param ttlMs  - Optional per-entry TTL override in milliseconds.
+   *                 Falls back to the manager-level default.
    */
-  track(record: ClaimableBalanceRecord): void {
-    this.tracked.set(record.balanceId, { ...record });
+  track(record: ClaimableBalanceRecord, ttlMs?: number): void {
+    // Prune stale entries before every insert to prevent unbounded growth.
+    this.pruneExpired();
+    this.tracked.set(record.balanceId, {
+      record: { ...record },
+      trackedAt: Date.now(),
+      ttlMs: ttlMs ?? this._defaultTtlMs,
+    });
+  }
+
+  /**
+   * Remove all tracked entries whose TTL has elapsed.
+   *
+   * @returns The number of entries removed.
+   */
+  pruneExpired(): number {
+    const now = Date.now();
+    let removed = 0;
+    for (const [id, entry] of this.tracked.entries()) {
+      if (now - entry.trackedAt >= entry.ttlMs) {
+        this.tracked.delete(id);
+        removed += 1;
+      }
+    }
+    return removed;
   }
 
   /**
@@ -344,7 +393,7 @@ export class ClaimableBalanceLifecycle extends TypedEventEmitter<ClaimableBalanc
    * Get all currently tracked balances.
    */
   listTracked(): ClaimableBalanceRecord[] {
-    return Array.from(this.tracked.values());
+    return Array.from(this.tracked.values()).map((e) => e.record);
   }
 
   /**
@@ -361,13 +410,14 @@ export class ClaimableBalanceLifecycle extends TypedEventEmitter<ClaimableBalanc
     networkPassphrase: string,
   ): Promise<string> {
     try {
-      const record = this.tracked.get(balanceId);
-      if (!record) {
+      const entry = this.tracked.get(balanceId);
+      if (!entry) {
         throw new ClaimableBalanceLifecycleError(
           `Balance ${balanceId} is not tracked`,
           balanceId,
         );
       }
+      const record = entry.record;
 
       const keypair = Keypair.fromSecret(claimantSecret);
       const account = await this.server.loadAccount(keypair.publicKey());
@@ -432,7 +482,8 @@ export class ClaimableBalanceLifecycle extends TypedEventEmitter<ClaimableBalanc
   private async poll(): Promise<void> {
     if (!this._running) return;
 
-    for (const [balanceId, record] of this.tracked.entries()) {
+    for (const [balanceId, entry] of this.tracked.entries()) {
+      const record = entry.record;
       try {
         const fresh = await this.server
           .claimableBalances()

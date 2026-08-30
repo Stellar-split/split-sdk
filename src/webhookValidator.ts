@@ -1,6 +1,27 @@
 import { ValidationError } from "./errors.js";
+import { createHmac, timingSafeEqual } from "crypto";
 
 const textEncoder = new TextEncoder();
+
+// ---------------------------------------------------------------------------
+// Error
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown by {@link validateWebhook} when the request's HMAC-SHA256 signature
+ * does not match the computed signature.
+ */
+export class WebhookSignatureError extends Error {
+  constructor(message = "Webhook signature verification failed") {
+    super(message);
+    this.name = "WebhookSignatureError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
 
 function normalizeHex(hex: string): string {
   return hex.toLowerCase();
@@ -59,10 +80,13 @@ async function computeHmacSha256(secret: string, message: string): Promise<Uint8
     return new Uint8Array(signature);
   }
 
-  const crypto = await import("crypto");
-  const digest = crypto.createHmac("sha256", secret).update(message).digest();
+  const digest = createHmac("sha256", secret).update(message).digest();
   return new Uint8Array(digest);
 }
+
+// ---------------------------------------------------------------------------
+// Original export — validates a pre-serialised hex signature
+// ---------------------------------------------------------------------------
 
 export async function validateWebhookSignature(
   payload: unknown,
@@ -89,4 +113,78 @@ export async function validateWebhookSignature(
   }
 
   return constantTimeCompare(expectedBytes, providedBytes);
+}
+
+// ---------------------------------------------------------------------------
+// New export — validates X-Split-Signature header against the raw request body
+// ---------------------------------------------------------------------------
+
+/**
+ * Expected signature header format produced by Stellar-split webhook
+ * deliveries: `hmac-sha256=<hex-digest>`.
+ */
+const SIGNATURE_PREFIX = "hmac-sha256=";
+
+/**
+ * Verify the HMAC-SHA256 signature attached to a webhook delivery.
+ *
+ * The signature is expected in the `X-Split-Signature` header using the
+ * format `hmac-sha256=<hex-digest>`.  The HMAC is computed over the raw
+ * request body (bytes) so that JSON key ordering is preserved exactly as
+ * the sender signed it.
+ *
+ * Pass `secret = null` to skip verification entirely (opt-out mode).
+ *
+ * @param payload   - Parsed request body (used only for type-checking; the
+ *                    HMAC is verified against `rawBody`).
+ * @param rawBody   - The verbatim request body bytes / string received over
+ *                    the wire.  Must match what the sender signed.
+ * @param secret    - Shared HMAC secret.  Pass `null` to skip verification.
+ * @param signature - Value of the `X-Split-Signature` header.
+ *
+ * @throws {WebhookSignatureError} When the computed HMAC does not match the
+ *   provided signature.
+ */
+export function validateWebhook(
+  payload: unknown,
+  rawBody: string | Uint8Array,
+  secret: string | null,
+  signature: string
+): void {
+  // Opt-out: skip verification when secret is explicitly null.
+  if (secret === null) {
+    return;
+  }
+
+  // Strip the "hmac-sha256=" prefix if present.
+  const hexDigest = signature.startsWith(SIGNATURE_PREFIX)
+    ? signature.slice(SIGNATURE_PREFIX.length)
+    : signature;
+
+  const body =
+    rawBody instanceof Uint8Array
+      ? rawBody
+      : Buffer.from(rawBody, "utf8");
+
+  const expected = createHmac("sha256", secret).update(body).digest();
+
+  let provided: Buffer;
+  try {
+    provided = Buffer.from(hexDigest, "hex");
+  } catch {
+    throw new WebhookSignatureError("Webhook signature header is not valid hex");
+  }
+
+  if (provided.length === 0) {
+    throw new WebhookSignatureError("Webhook signature header is empty or not valid hex");
+  }
+
+  // Use Node.js timingSafeEqual to prevent timing attacks.
+  const match =
+    expected.length === provided.length &&
+    timingSafeEqual(expected, provided);
+
+  if (!match) {
+    throw new WebhookSignatureError();
+  }
 }
