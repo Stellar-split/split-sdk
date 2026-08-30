@@ -16,12 +16,66 @@ export interface EventCursor {
   updatedAt: number;
 }
 
+// ---------------------------------------------------------------------------
+// Discriminated event payload interfaces
+// ---------------------------------------------------------------------------
+
+/** Subscription successfully established. */
+export interface ConnectedEvent {
+  kind: "Connected";
+  type: "connected";
+  invoiceId: string;
+}
+
+/** Subscription lost; consumers may wish to show an error or auto-retry. */
+export interface DisconnectedEvent {
+  kind: "Disconnected";
+  type: "disconnected";
+  invoiceId: string;
+  error: Error;
+}
+
+/** Reconnection attempt in progress. */
+export interface ReconnectingEvent {
+  kind: "Reconnecting";
+  type: "reconnecting";
+  invoiceId: string;
+  attempt: number;
+  delayMs: number;
+}
+
+/** Event cursor persisted to storage for crash recovery. */
+export interface CursorPersistedEvent {
+  kind: "CursorPersisted";
+  type: "cursor_persisted";
+  invoiceId: string;
+  cursor: EventCursor;
+}
+
+/**
+ * Top-level discriminated union of every SDK event payload.
+ *
+ * Use the `kind` field for exhaustive pattern-matching:
+ *
+ * ```ts
+ * function handle(event: SdkEvent) {
+ *   switch (event.kind) {
+ *     case "Connected":    // ...
+ *     case "Disconnected": // ...
+ *     case "Reconnecting": // ...
+ *     case "CursorPersisted": // ...
+ *   }
+ * }
+ * ```
+ */
+export type SdkEvent =
+  | ConnectedEvent
+  | DisconnectedEvent
+  | ReconnectingEvent
+  | CursorPersistedEvent;
+
 /** Lifecycle events emitted by SubscriptionManager for observability. */
-export type SubscriptionManagerLifecycleEvent =
-  | { type: "connected"; invoiceId: string }
-  | { type: "disconnected"; invoiceId: string; error: Error }
-  | { type: "reconnecting"; invoiceId: string; attempt: number; delayMs: number }
-  | { type: "cursor_persisted"; invoiceId: string; cursor: EventCursor };
+export type SubscriptionManagerLifecycleEvent = SdkEvent;
 
 /** Options accepted by SubscriptionManager and its per-invoice subscribe() calls. */
 export interface SubscriptionOptions {
