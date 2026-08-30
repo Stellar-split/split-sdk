@@ -26,6 +26,46 @@ import type {
 import { signTransaction } from "./wallet.js";
 
 // ---------------------------------------------------------------------------
+// Supported chain IDs & mismatch error
+// ---------------------------------------------------------------------------
+
+/**
+ * The set of chain IDs that this SDK's bridge module accepts.
+ * Any `targetChainId` outside this list will cause `buildBridgePayment` and
+ * `submitBridgePayment` to throw a {@link BridgeChainMismatchError}.
+ */
+export const SUPPORTED_CHAIN_IDS: readonly ChainId[] = ["ethereum", "solana"];
+
+/**
+ * Thrown when `BridgeOptions.targetChainId` is absent or not present in
+ * {@link SUPPORTED_CHAIN_IDS}.  Because a mismatch would silently route funds
+ * to the wrong chain, the error is raised before any transaction is built.
+ */
+export class BridgeChainMismatchError extends Error {
+  constructor(targetChainId: string | undefined) {
+    super(
+      targetChainId === undefined || targetChainId === null || targetChainId === ""
+        ? `targetChainId is required. Supported chain IDs: [${SUPPORTED_CHAIN_IDS.join(", ")}]`
+        : `Unsupported targetChainId "${targetChainId}". Supported chain IDs: [${SUPPORTED_CHAIN_IDS.join(", ")}]`,
+    );
+    this.name = "BridgeChainMismatchError";
+  }
+}
+
+/**
+ * Options passed alongside bridge payment parameters to specify and validate
+ * the intended destination chain.
+ */
+export interface BridgeOptions {
+  /**
+   * The chain the funds should be routed to. Must be one of
+   * {@link SUPPORTED_CHAIN_IDS}; an unsupported or missing value throws
+   * {@link BridgeChainMismatchError} before any transaction is built.
+   */
+  targetChainId: ChainId;
+}
+
+// ---------------------------------------------------------------------------
 // Per-chain bridge configuration
 // ---------------------------------------------------------------------------
 
@@ -223,12 +263,26 @@ export async function estimateBridgeFee(
  * source-chain wallet before it can be submitted via
  * {@link submitBridgePayment}.
  *
- * @param params - Payment parameters (chain, payer, invoiceId, amount, etc.).
+ * @param params   - Payment parameters (chain, payer, invoiceId, amount, etc.).
+ * @param options  - Bridge options; `targetChainId` must be a supported chain.
  * @returns Unsigned BridgePaymentRequest ready for source-chain signing.
+ * @throws {BridgeChainMismatchError} if `options.targetChainId` is absent or
+ *   not in {@link SUPPORTED_CHAIN_IDS}.
  */
 export function buildBridgePayment(
   params: BridgePaymentParams,
+  options?: BridgeOptions,
 ): BridgePaymentRequest {
+  // Validate targetChainId before building any transaction.
+  const targetChainId = options?.targetChainId;
+  if (
+    targetChainId === undefined ||
+    targetChainId === null ||
+    !(SUPPORTED_CHAIN_IDS as readonly string[]).includes(targetChainId)
+  ) {
+    throw new BridgeChainMismatchError(targetChainId);
+  }
+
   const {
     sourceChain,
     payer,
@@ -303,14 +357,41 @@ export interface BridgePayDeps {
  *
  * @param proof         - Signed bridge proof from the source-chain wallet.
  * @param clientConfig  - StellarSplitClient configuration (rpcUrl, contractId, etc.).
+ * @param options       - Bridge options; `targetChainId` must be a supported chain.
  * @param _deps         - Optional injectable dependencies (for testing only).
  * @returns Transaction hash of the submitted bridge payment.
+ * @throws {BridgeChainMismatchError} if `options.targetChainId` is absent or
+ *   not in {@link SUPPORTED_CHAIN_IDS}.
  */
 export async function submitBridgePayment(
   proof: SignedBridgeProof,
   clientConfig: StellarSplitClientConfig,
+  options?: BridgeOptions | BridgePayDeps,
   _deps?: BridgePayDeps,
 ): Promise<{ txHash: string }> {
+  // Normalise the overloaded signature: submitBridgePayment(proof, cfg, deps)
+  // was the old public shape; new shape is submitBridgePayment(proof, cfg, options, deps).
+  let resolvedOptions: BridgeOptions | undefined;
+  let resolvedDeps: BridgePayDeps | undefined;
+
+  if (options !== undefined && "targetChainId" in options) {
+    resolvedOptions = options as BridgeOptions;
+    resolvedDeps = _deps;
+  } else {
+    // Legacy call: third arg is actually deps (no options).
+    resolvedDeps = options as BridgePayDeps | undefined;
+  }
+
+  // Validate targetChainId before touching the network.
+  const targetChainId = resolvedOptions?.targetChainId;
+  if (
+    targetChainId === undefined ||
+    targetChainId === null ||
+    !(SUPPORTED_CHAIN_IDS as readonly string[]).includes(targetChainId)
+  ) {
+    throw new BridgeChainMismatchError(targetChainId);
+  }
+
   const { request, signature } = proof;
 
   if (!request.payloadHash) {
@@ -325,14 +406,14 @@ export async function submitBridgePayment(
     ? clientConfig.rpcUrl[0]!
     : clientConfig.rpcUrl;
 
-  const server: SorobanServerLike = _deps?.server ?? new SorobanRpc.Server(rpcUrl, {
+  const server: SorobanServerLike = resolvedDeps?.server ?? new SorobanRpc.Server(rpcUrl, {
     allowHttp: rpcUrl.startsWith("http://"),
   });
 
   // Build the bridge_pay contract call operation via injectable or real Contract
   let operation: any;
-  if (_deps?.contractCall) {
-    operation = _deps.contractCall(
+  if (resolvedDeps?.contractCall) {
+    operation = resolvedDeps.contractCall(
       "bridge_pay",
       request.invoiceId,
       request.payer,
@@ -360,8 +441,8 @@ export async function submitBridgePayment(
 
   // Build the transaction (injectable for tests)
   let tx: any;
-  if (_deps?.buildTx) {
-    tx = _deps.buildTx(account, operation, clientConfig.networkPassphrase);
+  if (resolvedDeps?.buildTx) {
+    tx = resolvedDeps.buildTx(account, operation, clientConfig.networkPassphrase);
   } else {
     tx = new TransactionBuilder(account as unknown as Account, {
       fee: BASE_FEE,
@@ -379,7 +460,7 @@ export async function submitBridgePayment(
   }
 
   // Assemble and sign
-  const _assembleTransaction = _deps?.assembleTransaction ?? SorobanRpc.assembleTransaction;
+  const _assembleTransaction = resolvedDeps?.assembleTransaction ?? SorobanRpc.assembleTransaction;
   const preparedTx = _assembleTransaction(tx, simResult).build();
   const preparedXdr: string =
     typeof preparedTx === "string"
@@ -391,12 +472,12 @@ export async function submitBridgePayment(
   const adapter = (clientConfig as {
     adapter?: { signTransaction: (xdr: string, network: string) => Promise<string> };
   }).adapter;
-  const _sign = _deps?.signTransaction ?? (adapter?.signTransaction.bind(adapter)) ??
+  const _sign = resolvedDeps?.signTransaction ?? (adapter?.signTransaction.bind(adapter)) ??
     ((xdr: string, network: string) => signTransaction(xdr, network));
   const signedXdr = await _sign(preparedXdr, clientConfig.networkPassphrase);
 
   // Submit
-  const _fromXDR = _deps?.fromXDR ?? TransactionBuilder.fromXDR.bind(TransactionBuilder);
+  const _fromXDR = resolvedDeps?.fromXDR ?? TransactionBuilder.fromXDR.bind(TransactionBuilder);
   const sendResult = await server.sendTransaction(
     _fromXDR(signedXdr, clientConfig.networkPassphrase),
   );

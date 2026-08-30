@@ -32,10 +32,12 @@ export {
 } from "./invoiceTemplate.js";
 export {
   validateBulkImport,
+  SUPPORTED_SCHEMA_VERSIONS,
 } from "./bulkImportValidator.js";
 export type {
   BulkImportRowError,
   BulkImportValidationResult,
+  BulkImportPayload,
 } from "./bulkImportValidator.js";
 export {
   StellarSplitError,
@@ -743,6 +745,7 @@ export type {
 export {
   AdaptiveThrottle,
   DEFAULT_PENALTY_DURATION_MS,
+  DEFAULT_MAX_BACKOFF_MS,
 } from "./throttle/AdaptiveThrottle.js";
 export type { AdaptiveThrottleConfig, ThrottleStats } from "./throttle/AdaptiveThrottle.js";
 export { parseRateLimitHeaders } from "./throttle/RateLimitParser.js";
@@ -1143,9 +1146,11 @@ export {
   submitBridgePayment,
   computePayloadHash,
   DEFAULT_CHAIN_CONFIGS,
+  SUPPORTED_CHAIN_IDS,
+  BridgeChainMismatchError,
 } from "./bridge.js";
 
-export type { ChainBridgeConfig, BridgeConfig } from "./bridge.js";
+export type { ChainBridgeConfig, BridgeConfig, BridgeOptions } from "./bridge.js";
 
 export type {
   ChainId,
@@ -1161,6 +1166,7 @@ export type {
   TimelineEntry,
   TimelineEventType,
   TimelineSource,
+  TimelineEntryStatus,
   ReconstructedTimeline,
   RebuildOptions,
 } from "./types/timeline.js";

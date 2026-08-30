@@ -116,6 +116,7 @@ export class PaymentTimelineReconstructor {
           timestamp: e.timestamp,
           ledger: e.ledger,
           type: computeEventType(e),
+          status: "completed" as const,
           data: rawData,
           source: "soroban" as const,
           txHash,
@@ -160,6 +161,7 @@ export class PaymentTimelineReconstructor {
             : ledger,
           ledger,
           type: "payment_received",
+          status: "completed",
           data: {
             paymentId: op.id,
             amount: op.amount,

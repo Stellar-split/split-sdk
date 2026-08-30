@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { validateBulkImport } from "../src/bulkImportValidator.js";
+import { validateBulkImport, SUPPORTED_SCHEMA_VERSIONS } from "../src/bulkImportValidator.js";
+import type { BulkImportPayload } from "../src/bulkImportValidator.js";
 import type { CreateInvoiceParams } from "../src/types.js";
 
 /** Helper: future deadline (1 hour from now). */
@@ -197,5 +198,99 @@ describe("bulkImportValidator", () => {
         expect.objectContaining({ row: 0, field: "deadline" }),
       );
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// schemaVersion validation (SUPPORTED_SCHEMA_VERSIONS)
+// ---------------------------------------------------------------------------
+describe("schemaVersion validation", () => {
+  const stableNow2 = Math.floor(new Date("2026-01-15T00:00:00Z").getTime() / 1000);
+  const futureDeadline2 = stableNow2 + 7200;
+
+  function payloadRow(overrides: Partial<CreateInvoiceParams> = {}): CreateInvoiceParams {
+    return {
+      creator: "GABCDEFG1234567890",
+      recipients: [{ address: "GXYZ1234567890", amount: 500n }],
+      token: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+      deadline: futureDeadline2,
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-15T00:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("exports SUPPORTED_SCHEMA_VERSIONS containing 1 and 2", () => {
+    expect(SUPPORTED_SCHEMA_VERSIONS).toContain(1);
+    expect(SUPPORTED_SCHEMA_VERSIONS).toContain(2);
+  });
+
+  it("accepts a versioned payload with schemaVersion 1", () => {
+    const payload: BulkImportPayload = {
+      schemaVersion: 1,
+      rows: [payloadRow()],
+    };
+    const result = validateBulkImport(payload);
+    expect(result.errors).toHaveLength(0);
+    expect(result.validRows).toEqual([0]);
+  });
+
+  it("accepts a versioned payload with schemaVersion 2", () => {
+    const payload: BulkImportPayload = {
+      schemaVersion: 2,
+      rows: [payloadRow()],
+    };
+    const result = validateBulkImport(payload);
+    expect(result.errors).toHaveLength(0);
+    expect(result.validRows).toEqual([0]);
+  });
+
+  it("rejects an unsupported schemaVersion with a descriptive error", () => {
+    const payload: BulkImportPayload = {
+      schemaVersion: 99,
+      rows: [payloadRow()],
+    };
+    const result = validateBulkImport(payload);
+    expect(result.validRows).toEqual([]);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0].field).toBe("schemaVersion");
+    expect(result.errors[0].message).toMatch(/99/);
+    expect(result.errors[0].message).toMatch(/Supported/i);
+  });
+
+  it("rejects schemaVersion 0 (not in supported list)", () => {
+    const payload: BulkImportPayload = {
+      schemaVersion: 0,
+      rows: [payloadRow()],
+    };
+    const result = validateBulkImport(payload);
+    expect(result.errors[0].field).toBe("schemaVersion");
+  });
+
+  it("still validates rows normally when schemaVersion is valid", () => {
+    const payload: BulkImportPayload = {
+      schemaVersion: 1,
+      rows: [
+        payloadRow(),                                          // valid
+        payloadRow({ recipients: [] }),                        // invalid
+      ],
+    };
+    const result = validateBulkImport(payload);
+    expect(result.validRows).toEqual([0]);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toMatchObject({ row: 1, field: "recipients" });
+  });
+
+  it("raw array (no schemaVersion) continues to work unchanged", () => {
+    const result = validateBulkImport([payloadRow(), payloadRow()]);
+    expect(result.validRows).toEqual([0, 1]);
+    expect(result.errors).toHaveLength(0);
   });
 });

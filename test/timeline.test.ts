@@ -7,7 +7,7 @@ vi.mock("../src/events.js", () => ({
 }));
 
 import { replayEvents } from "../src/events.js";
-import type { TimelineEventType } from "../src/types/timeline.js";
+import type { TimelineEventType, TimelineEntryStatus } from "../src/types/timeline.js";
 
 const mockReplayEvents = replayEvents as ReturnType<typeof vi.fn>;
 
@@ -393,5 +393,91 @@ describe("PaymentTimelineReconstructor", () => {
       expect(result.entries[0].ledger).toBe(1);
       expect(result.entries[1].ledger).toBe(3);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TimelineEntryStatus — status field on TimelineEntry
+// ---------------------------------------------------------------------------
+
+describe("TimelineEntryStatus and TimelineEntry.status", () => {
+  let reconstructor: PaymentTimelineReconstructor;
+  let mockServer: { getEvents: ReturnType<typeof vi.fn> };
+  let mockHorizonChain: ReturnType<typeof makeMockHorizonChain>;
+
+  beforeEach(() => {
+    mockServer = { getEvents: vi.fn() };
+    mockHorizonChain = makeMockHorizonChain();
+    mockReplayEvents.mockReset();
+    mockHorizonChain.call.mockReset();
+
+    reconstructor = new PaymentTimelineReconstructor({
+      rpcUrl: "https://soroban-testnet.stellar.org",
+      contractId: "CCONTRACT",
+      networkPassphrase: "Test SDF Network ; September 2015",
+      server: mockServer as never,
+      horizonServer: { operations: mockHorizonChain.operations } as never,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("all Soroban entries carry status: 'completed'", async () => {
+    mockReplayEvents.mockResolvedValue([
+      sorobanEvent({ type: "created", invoiceId: "42", ledger: 1, timestamp: 100 }),
+      sorobanEvent({ type: "payment", invoiceId: "42", ledger: 2, timestamp: 200 }),
+    ]);
+    mockHorizonChain.call.mockResolvedValue({ records: [] });
+
+    const result = await reconstructor.rebuild("42");
+    for (const entry of result.entries) {
+      expect(entry.status).toBe("completed" satisfies TimelineEntryStatus);
+    }
+  });
+
+  it("Horizon payment entries carry status: 'completed'", async () => {
+    mockReplayEvents.mockResolvedValue([]);
+    mockHorizonChain.call.mockResolvedValue({
+      records: [
+        horizonPayment({ ledger: 5, transaction_hash: "tx-h1", memo: "invoice:42" }),
+      ],
+    });
+
+    const result = await reconstructor.rebuild("42");
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].status).toBe("completed" satisfies TimelineEntryStatus);
+  });
+
+  it("status field is present on every entry regardless of type", async () => {
+    mockReplayEvents.mockResolvedValue([
+      sorobanEvent({ type: "created",   invoiceId: "42", ledger: 1, timestamp: 100 }),
+      sorobanEvent({ type: "payment",   invoiceId: "42", ledger: 2, timestamp: 200 }),
+      sorobanEvent({ type: "released",  invoiceId: "42", ledger: 3, timestamp: 300 }),
+      sorobanEvent({ type: "refunded",  invoiceId: "42", ledger: 4, timestamp: 400 }),
+      sorobanEvent({ type: "cancelled", invoiceId: "42", ledger: 5, timestamp: 500 }),
+      sorobanEvent({ type: "frozen",    invoiceId: "42", ledger: 6, timestamp: 600 }),
+      sorobanEvent({ type: "unfrozen",  invoiceId: "42", ledger: 7, timestamp: 700 }),
+    ]);
+    mockHorizonChain.call.mockResolvedValue({ records: [] });
+
+    const result = await reconstructor.rebuild("42");
+
+    expect(result.entries).toHaveLength(7);
+    for (const entry of result.entries) {
+      expect(entry).toHaveProperty("status");
+      expect(["pending", "in_progress", "completed", "failed"]).toContain(entry.status);
+    }
+  });
+
+  it("TypeScript: TimelineEntryStatus union contains all four values", () => {
+    // Compile-time check — these assignments would fail to compile if the
+    // union were incomplete.
+    const s1: TimelineEntryStatus = "pending";
+    const s2: TimelineEntryStatus = "in_progress";
+    const s3: TimelineEntryStatus = "completed";
+    const s4: TimelineEntryStatus = "failed";
+    expect([s1, s2, s3, s4]).toHaveLength(4);
   });
 });

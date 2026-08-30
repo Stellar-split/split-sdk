@@ -1,6 +1,12 @@
 import type { CreateInvoiceParams } from "./types.js";
 
 /**
+ * Schema versions that this SDK version accepts for bulk import payloads.
+ * Callers can inspect this list to pre-screen payloads before submission.
+ */
+export const SUPPORTED_SCHEMA_VERSIONS: readonly number[] = [1, 2];
+
+/**
  * Describes a single validation error on a specific row and field.
  */
 export interface BulkImportRowError {
@@ -23,9 +29,23 @@ export interface BulkImportValidationResult {
 }
 
 /**
- * Validate an array of invoice-creation rows against the same constraints
- * the contract's `_create_invoice_inner` enforces:
+ * A bulk import payload that carries a `schemaVersion` alongside the rows.
+ * When this overload is used the version is validated before row-level checks.
+ */
+export interface BulkImportPayload {
+  /** Must be one of the values in {@link SUPPORTED_SCHEMA_VERSIONS}. */
+  schemaVersion: number;
+  rows: CreateInvoiceParams[];
+}
+
+/**
+ * Validate an array of invoice-creation rows (or a versioned payload) against
+ * the same constraints the contract's `_create_invoice_inner` enforces:
  *
+ * 0. **Schema version present and supported** – when a
+ *    {@link BulkImportPayload} is supplied, `schemaVersion` must appear in
+ *    {@link SUPPORTED_SCHEMA_VERSIONS}.  Absent or unsupported versions cause
+ *    an immediate error before any row-level validation runs.
  * 1. **Positive amounts** – every recipient amount must be > 0.
  * 2. **Recipients present** – `recipients` array must not be empty.
  * 3. **Future deadline** – `deadline` must be in the future (greater than
@@ -34,13 +54,54 @@ export interface BulkImportValidationResult {
  * Unlike a fail-fast approach, *all* rows are always validated so the caller
  * can surface every problem in one pass.
  *
- * @param rows - Array of {@link CreateInvoiceParams}-like objects to validate.
+ * @param input - Either a raw array of {@link CreateInvoiceParams} rows, or a
+ *   {@link BulkImportPayload} object that also carries a `schemaVersion`.
  * @returns A {@link BulkImportValidationResult} with valid row indices and
  *          collected per-row errors.
  */
 export function validateBulkImport(
-  rows: CreateInvoiceParams[],
+  input: CreateInvoiceParams[] | BulkImportPayload,
 ): BulkImportValidationResult {
+  // Unwrap a versioned payload, validating the schema version first.
+  let rows: CreateInvoiceParams[];
+
+  if (Array.isArray(input)) {
+    rows = input;
+  } else {
+    const { schemaVersion, rows: payloadRows } = input;
+
+    if (schemaVersion === undefined || schemaVersion === null) {
+      return {
+        validRows: [],
+        errors: [
+          {
+            row: -1,
+            field: "schemaVersion",
+            message:
+              `schemaVersion is required. Supported versions: [${SUPPORTED_SCHEMA_VERSIONS.join(", ")}]`,
+          },
+        ],
+      };
+    }
+
+    if (!(SUPPORTED_SCHEMA_VERSIONS as readonly number[]).includes(schemaVersion)) {
+      return {
+        validRows: [],
+        errors: [
+          {
+            row: -1,
+            field: "schemaVersion",
+            message:
+              `Unsupported schemaVersion ${schemaVersion}. Supported versions: [${SUPPORTED_SCHEMA_VERSIONS.join(", ")}]`,
+          },
+        ],
+      };
+    }
+
+    rows = payloadRows;
+  }
+
+  // --- row-level validation (unchanged) ---
   const validRows: number[] = [];
   const errors: BulkImportRowError[] = [];
 

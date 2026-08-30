@@ -12,6 +12,8 @@ import {
   submitBridgePayment,
   computePayloadHash,
   DEFAULT_CHAIN_CONFIGS,
+  SUPPORTED_CHAIN_IDS,
+  BridgeChainMismatchError,
 } from "../src/bridge.js";
 import type {
   ChainId,
@@ -252,7 +254,7 @@ describe("buildBridgePayment", () => {
   };
 
   it("returns a BridgePaymentRequest with all required fields", () => {
-    const req = buildBridgePayment(baseParams);
+    const req = buildBridgePayment(baseParams, { targetChainId: "ethereum" });
     expect(req.sourceChain).toBe("ethereum");
     expect(req.invoiceId).toBe(INVOICE_ID);
     expect(req.payer).toBe(PAYER);
@@ -264,24 +266,24 @@ describe("buildBridgePayment", () => {
   });
 
   it("nonce is a non-empty hex string", () => {
-    const req = buildBridgePayment(baseParams);
+    const req = buildBridgePayment(baseParams, { targetChainId: "ethereum" });
     expect(req.nonce).toMatch(/^[0-9a-f]+$/);
     expect(req.nonce.length).toBeGreaterThan(0);
   });
 
   it("payloadHash has length 64", () => {
-    const req = buildBridgePayment(baseParams);
+    const req = buildBridgePayment(baseParams, { targetChainId: "ethereum" });
     expect(req.payloadHash).toHaveLength(64);
   });
 
   it("each call produces a unique nonce", () => {
-    const req1 = buildBridgePayment(baseParams);
-    const req2 = buildBridgePayment(baseParams);
+    const req1 = buildBridgePayment(baseParams, { targetChainId: "ethereum" });
+    const req2 = buildBridgePayment(baseParams, { targetChainId: "ethereum" });
     expect(req1.nonce).not.toBe(req2.nonce);
   });
 
   it("payloadHash matches computePayloadHash with same inputs", () => {
-    const req = buildBridgePayment(baseParams);
+    const req = buildBridgePayment(baseParams, { targetChainId: "ethereum" });
     const expected = computePayloadHash(
       req.sourceChain,
       req.invoiceId,
@@ -300,13 +302,13 @@ describe("buildBridgePayment", () => {
       sourceChain: "solana",
       sourceToken: SOL_TOKEN,
     };
-    const req = buildBridgePayment(solParams);
+    const req = buildBridgePayment(solParams, { targetChainId: "solana" });
     expect(req.sourceChain).toBe("solana");
     expect(req.sourceToken).toBe(SOL_TOKEN);
   });
 
   it("preserves all parameter values", () => {
-    const req = buildBridgePayment(baseParams);
+    const req = buildBridgePayment(baseParams, { targetChainId: "ethereum" });
     expect(req.invoiceId).toBe(baseParams.invoiceId);
     expect(req.payer).toBe(baseParams.payer);
     expect(req.amount).toBe(baseParams.amount);
@@ -384,7 +386,7 @@ describe("submitBridgePayment", () => {
   it("throws when payloadHash is missing", async () => {
     const proof = makeProof({ payloadHash: "" });
     await expect(
-      submitBridgePayment(proof, CLIENT_CONFIG),
+      submitBridgePayment(proof, CLIENT_CONFIG, { targetChainId: "ethereum" }),
     ).rejects.toThrow("missing payloadHash");
   });
 
@@ -394,14 +396,14 @@ describe("submitBridgePayment", () => {
       signature: "",
     };
     await expect(
-      submitBridgePayment(proof, CLIENT_CONFIG),
+      submitBridgePayment(proof, CLIENT_CONFIG, { targetChainId: "ethereum" }),
     ).rejects.toThrow("missing signature");
   });
 
   it("calls getAccount and sendTransaction, returns txHash", async () => {
     const deps = buildDeps("bridge_tx_001");
     const proof = makeProof();
-    const result = await submitBridgePayment(proof, CLIENT_CONFIG, deps);
+    const result = await submitBridgePayment(proof, CLIENT_CONFIG, { targetChainId: "ethereum" }, deps);
 
     expect(result).toHaveProperty("txHash", "bridge_tx_001");
     expect(deps.server.getAccount).toHaveBeenCalledWith(PAYER);
@@ -414,7 +416,7 @@ describe("submitBridgePayment", () => {
       getTransaction: vi.fn().mockResolvedValue({ status: "FAILED", txHash: "fail_tx" }),
     });
     const proof = makeProof();
-    await expect(submitBridgePayment(proof, CLIENT_CONFIG, deps)).rejects.toThrow(
+    await expect(submitBridgePayment(proof, CLIENT_CONFIG, { targetChainId: "ethereum" }, deps)).rejects.toThrow(
       "failed on-chain",
     );
   });
@@ -430,7 +432,7 @@ describe("submitBridgePayment", () => {
     SorobanRpc.Api.isSimulationError = (_r: any) => true;
     try {
       const proof = makeProof();
-      await expect(submitBridgePayment(proof, CLIENT_CONFIG, deps)).rejects.toThrow(
+      await expect(submitBridgePayment(proof, CLIENT_CONFIG, { targetChainId: "ethereum" }, deps)).rejects.toThrow(
         "simulation failed",
       );
     } finally {
@@ -443,7 +445,7 @@ describe("submitBridgePayment", () => {
       sendTransaction: vi.fn().mockResolvedValue({ status: "ERROR", hash: "err_hash" }),
     });
     const proof = makeProof();
-    await expect(submitBridgePayment(proof, CLIENT_CONFIG, deps)).rejects.toThrow(
+    await expect(submitBridgePayment(proof, CLIENT_CONFIG, { targetChainId: "ethereum" }, deps)).rejects.toThrow(
       "Bridge pay transaction failed",
     );
   });
@@ -455,14 +457,17 @@ describe("submitBridgePayment", () => {
 
 describe("type integration", () => {
   it("BridgePaymentRequest can be wrapped in SignedBridgeProof", () => {
-    const request = buildBridgePayment({
-      sourceChain: "solana",
-      payer: PAYER,
-      invoiceId: "99",
-      amount: 5_000_000n,
-      sourceToken: SOL_TOKEN,
-      deadline: DEADLINE,
-    });
+    const request = buildBridgePayment(
+      {
+        sourceChain: "solana",
+        payer: PAYER,
+        invoiceId: "99",
+        amount: 5_000_000n,
+        sourceToken: SOL_TOKEN,
+        deadline: DEADLINE,
+      },
+      { targetChainId: "solana" },
+    );
 
     const proof: SignedBridgeProof = {
       request,
@@ -473,5 +478,120 @@ describe("type integration", () => {
     expect(proof.request.sourceChain).toBe("solana");
     expect(proof.request.invoiceId).toBe("99");
     expect(proof.signerAddress).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SUPPORTED_CHAIN_IDS & BridgeChainMismatchError
+// ---------------------------------------------------------------------------
+
+describe("SUPPORTED_CHAIN_IDS", () => {
+  it("exports ethereum and solana", () => {
+    expect(SUPPORTED_CHAIN_IDS).toContain("ethereum");
+    expect(SUPPORTED_CHAIN_IDS).toContain("solana");
+  });
+
+  it("does not include unknown chains", () => {
+    expect(SUPPORTED_CHAIN_IDS).not.toContain("bitcoin");
+    expect(SUPPORTED_CHAIN_IDS).not.toContain("polygon");
+  });
+});
+
+describe("buildBridgePayment — chain ID validation", () => {
+  const baseParams: BridgePaymentParams = {
+    sourceChain: "ethereum",
+    payer: PAYER,
+    invoiceId: INVOICE_ID,
+    amount: 1_000_000n,
+    sourceToken: ETH_TOKEN,
+    deadline: DEADLINE,
+  };
+
+  it("throws BridgeChainMismatchError when targetChainId is missing", () => {
+    expect(() => buildBridgePayment(baseParams)).toThrow(BridgeChainMismatchError);
+  });
+
+  it("throws BridgeChainMismatchError when targetChainId is unsupported", () => {
+    expect(() =>
+      buildBridgePayment(baseParams, { targetChainId: "bitcoin" as any }),
+    ).toThrow(BridgeChainMismatchError);
+  });
+
+  it("error message names the bad chain ID", () => {
+    try {
+      buildBridgePayment(baseParams, { targetChainId: "polygon" as any });
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as Error).message).toMatch(/polygon/);
+      expect((err as Error).message).toMatch(/Supported/i);
+    }
+  });
+
+  it("error message mentions missing targetChainId when undefined", () => {
+    try {
+      buildBridgePayment(baseParams, undefined);
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(BridgeChainMismatchError);
+    }
+  });
+
+  it("succeeds with ethereum targetChainId", () => {
+    expect(() =>
+      buildBridgePayment(baseParams, { targetChainId: "ethereum" }),
+    ).not.toThrow();
+  });
+
+  it("succeeds with solana targetChainId", () => {
+    expect(() =>
+      buildBridgePayment(
+        { ...baseParams, sourceChain: "solana", sourceToken: SOL_TOKEN },
+        { targetChainId: "solana" },
+      ),
+    ).not.toThrow();
+  });
+});
+
+describe("submitBridgePayment — chain ID validation", () => {
+  const CLIENT_CONFIG = {
+    rpcUrl: "https://soroban-testnet.stellar.org",
+    networkPassphrase: "Test SDF Network ; September 2015",
+    contractId: "CCJGSXWNBGGKQ4YLEFLNFK55UQ3IXNXZ7WOCBX3XQLQJWBJD2A4XTAQ",
+  };
+
+  const validProof: SignedBridgeProof = {
+    request: {
+      sourceChain: "ethereum",
+      invoiceId: INVOICE_ID,
+      payer: PAYER,
+      amount: 1_000_000n,
+      sourceToken: ETH_TOKEN,
+      deadline: DEADLINE,
+      nonce: "aabbccdd",
+      payloadHash: "a".repeat(64),
+    },
+    signature: "0xdeadbeef",
+    signerAddress: "0xabc",
+  };
+
+  it("throws BridgeChainMismatchError before any network call when targetChainId is missing", async () => {
+    await expect(submitBridgePayment(validProof, CLIENT_CONFIG)).rejects.toThrow(
+      BridgeChainMismatchError,
+    );
+  });
+
+  it("throws BridgeChainMismatchError for unsupported chain", async () => {
+    await expect(
+      submitBridgePayment(validProof, CLIENT_CONFIG, { targetChainId: "tron" as any }),
+    ).rejects.toThrow(BridgeChainMismatchError);
+  });
+
+  it("error is thrown before any server.getAccount call", async () => {
+    const mockGetAccount = vi.fn();
+    // If getAccount was called it means we got past the chain check — that's the bug.
+    await expect(
+      submitBridgePayment(validProof, CLIENT_CONFIG, { targetChainId: "unknown" as any }),
+    ).rejects.toThrow(BridgeChainMismatchError);
+    expect(mockGetAccount).not.toHaveBeenCalled();
   });
 });
