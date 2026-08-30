@@ -5,6 +5,7 @@
  * - Enrich invoices with IPFS metadata
  * - Parse IPFS CIDs from invoice memos
  * - Merge on-chain invoice data with off-chain metadata
+ * - Cache enriched results with a configurable TTL
  */
 
 import type { Invoice, InvoiceMetadata, IPFSConfig } from "./types.js";
@@ -194,4 +195,64 @@ export function hasIPFSMetadata(invoice: Invoice): boolean {
  */
 export function getInvoiceMetadataCID(invoice: Invoice): string | null {
   return parseIpfsCid(invoice.memo);
+}
+
+// ---------------------------------------------------------------------------
+// EnricherCache — in-memory TTL cache for metadata lookups
+// ---------------------------------------------------------------------------
+
+/** Default TTL for cache entries in milliseconds. */
+const DEFAULT_TTL_MS = 60_000;
+
+interface CacheEntry<T> {
+  value: T;
+  expiresAt: number;
+}
+
+/**
+ * Caches enriched metadata results with a configurable TTL.
+ */
+export class EnricherCache<T = unknown> {
+  private _cache = new Map<string, CacheEntry<T>>();
+  private _ttlMs: number;
+
+  constructor(ttlMs: number = DEFAULT_TTL_MS) {
+    this._ttlMs = ttlMs;
+  }
+
+  /**
+   * Get a cached value or compute and cache it.
+   *
+   * @param key   - Cache key (enrichment identifier).
+   * @param fetch - Async function to compute the value on cache miss.
+   * @returns The cached or freshly computed value.
+   */
+  async getOrFetch(key: string, fetch: () => Promise<T>): Promise<T> {
+    const cached = this._cache.get(key);
+    if (cached && Date.now() < cached.expiresAt) {
+      return cached.value;
+    }
+
+    const value = await fetch();
+    this._cache.set(key, {
+      value,
+      expiresAt: Date.now() + this._ttlMs,
+    });
+    return value;
+  }
+
+  /** Clear all cache entries. */
+  clearCache(): void {
+    this._cache.clear();
+  }
+
+  /** Return the number of non-expired entries. */
+  get size(): number {
+    let count = 0;
+    const now = Date.now();
+    for (const entry of Array.from(this._cache.values())) {
+      if (now < entry.expiresAt) count++;
+    }
+    return count;
+  }
 }

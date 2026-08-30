@@ -52,3 +52,34 @@ export function parseRateLimitHeaders(headers: HeadersLike): RateLimitInfo {
     resetAt: resetSeconds !== undefined ? resetSeconds * 1000 : 0,
   };
 }
+
+/**
+ * Parse a Retry-After header value into a delay in milliseconds.
+ *
+ * - Integer or fractional seconds (e.g. "3", "1.5") are converted to ms.
+ * - HTTP-date values (e.g. "Wed, 21 Oct 2015 07:28:00 GMT") are converted
+ *   to the delay between now and that date.
+ * - Unparseable values return `null`.
+ */
+export function parseRetryAfter(value: string): number | null {
+  if (!value || value.trim().length === 0) return null;
+
+  const trimmed = value.trim();
+
+  const numeric = Number.parseFloat(trimmed);
+  if (!Number.isNaN(numeric) && trimmed === String(numeric)) {
+    return Math.max(0, Math.round(numeric * 1000));
+  }
+
+  if (!Number.isNaN(numeric) && /^[\d.]+\s*$/.test(trimmed)) {
+    return Math.max(0, Math.round(numeric * 1000));
+  }
+
+  const dateMs = Date.parse(trimmed);
+  if (!Number.isNaN(dateMs)) {
+    const delay = dateMs - Date.now();
+    return Math.max(0, Math.round(delay));
+  }
+
+  return null;
+}

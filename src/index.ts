@@ -216,6 +216,7 @@ export {
 // Invoice metadata JSON Schema validator (issue #533)
 export { InvoiceMetadataValidator } from "./validators/invoiceMetadataValidator.js";
 export type { MetadataValidationResult } from "./validators/invoiceMetadataValidator.js";
+export { validateMetadataKeys, MAX_METADATA_KEY_LENGTH } from "./validators/invoiceMetadataValidator.js";
 
 // ---------------------------------------------------------------------------
 // Lifecycle management (graceful shutdown)
@@ -240,6 +241,8 @@ export type {
   SpeedscopeEvent,
   ProfilerSessionOptions,
 } from "./profiler.js";
+export { MemoryProfiler, memoryProfiler, ProfilerNotInitializedError } from "./memoryProfiler.js";
+export type { MemorySnapshot } from "./memoryProfiler.js";
 export {
   enrichInvoice,
   enrichInvoices,
@@ -248,6 +251,7 @@ export {
   getInvoiceMetadataCID,
 } from "./enricher.js";
 export type { EnrichedInvoice, EnrichOptions } from "./enricher.js";
+export { EnricherCache } from "./enricher.js";
 
 // IPFS functionality
 export {
@@ -743,6 +747,7 @@ export {
 export type { AdaptiveThrottleConfig, ThrottleStats } from "./throttle/AdaptiveThrottle.js";
 export { parseRateLimitHeaders } from "./throttle/RateLimitParser.js";
 export type { HeadersLike, RateLimitInfo } from "./throttle/RateLimitParser.js";
+export { parseRetryAfter } from "./throttle/RateLimitParser.js";
 
 // Receipt chain — SHA-256-linked, tamper-evident payment receipt history
 // per invoice. `PaymentReceipt` is aliased to `ChainPaymentReceipt` here to
