@@ -10,6 +10,7 @@
  */
 
 import { auditSplitRounding, RoundingOverflowError } from "./rounding.js";
+import { SdkError, SdkErrorCode } from "../errors.js";
 import type { SplitLine, AuditedSplitResult } from "../types.js";
 
 // Re-export the error so callers can import it from the calculator.
@@ -65,4 +66,79 @@ export function computeAmounts(
   splits: SplitLine[],
 ): Record<string, bigint> {
   return calculateSplitAmounts(total, splits).amounts;
+}
+
+// ---------------------------------------------------------------------------
+// Formatting helpers
+// ---------------------------------------------------------------------------
+
+/** Basis points per whole unit (1.0 = 10000 bps). */
+const BASIS_POINTS_PER_UNIT = 10000n;
+
+/**
+ * Format a basis-point value as a human-readable percentage string.
+ *
+ * @param basisPoints - Integer value in basis points (0–10000).
+ * @param opts.decimals - Number of decimal places to display (default 2, range 0–4).
+ * @returns Percentage string such as `"33.33%"` or `"100.00%"`.
+ *
+ * @throws {SdkError} When `basisPoints` is outside the 0–10000 range.
+ * @throws {RangeError} When `opts.decimals` is outside the 0–4 range.
+ *
+ * @example
+ * ```ts
+ * formatSplitPercentage(3333n); // "33.33%"
+ * formatSplitPercentage(1n);    // "0.01%"
+ * formatSplitPercentage(3333n, { decimals: 0 }); // "33%"
+ * ```
+ */
+export function formatSplitPercentage(
+  basisPoints: bigint,
+  opts?: { decimals?: number },
+): string {
+  const decimals = opts?.decimals ?? 2;
+
+  if (decimals < 0 || decimals > 4 || !Number.isInteger(decimals)) {
+    throw new RangeError(`decimals must be an integer between 0 and 4, got ${decimals}`);
+  }
+
+  if (basisPoints < 0n || basisPoints > BASIS_POINTS_PER_UNIT) {
+    throw new SdkError(
+      `basisPoints must be between 0 and 10000, got ${basisPoints.toString()}`,
+      SdkErrorCode.INVALID_RECIPIENT,
+      { basisPoints: basisPoints.toString() },
+    );
+  }
+
+  if (decimals === 0) {
+    // Integer percentage, with standard rounding.
+    const scaled = basisPoints + BASIS_POINTS_PER_UNIT / 2n;
+    const whole = scaled / BASIS_POINTS_PER_UNIT;
+    return `${whole.toString()}%`;
+  }
+
+  // Compute whole and fractional parts without floating point.
+  const whole = basisPoints / BASIS_POINTS_PER_UNIT;
+  const remainder = basisPoints % BASIS_POINTS_PER_UNIT;
+
+  // Scale remainder to the requested number of decimal places.
+  // e.g. decimals=2: remainder * 100 / 10000 = remainder / 100
+  const divisor = 10n ** BigInt(4 - decimals);
+  let fractional = remainder / divisor;
+  const remainderMod = remainder % divisor;
+
+  // Round to nearest at the last displayed decimal place.
+  const halfDivisor = divisor / 2n;
+  if (remainderMod >= halfDivisor) {
+    fractional += 1n;
+  }
+
+  // Handle carry-over that turns fractional into a whole unit (e.g. 99.995 → 100.00).
+  const maxFractional = 10n ** BigInt(decimals) - 1n;
+  if (fractional > maxFractional) {
+    return `${(whole + 1n).toString()}.${"0".repeat(decimals)}%`;
+  }
+
+  const fractionalStr = fractional.toString().padStart(decimals, "0");
+  return `${whole.toString()}.${fractionalStr}%`;
 }
