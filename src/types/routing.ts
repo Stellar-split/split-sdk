@@ -1,5 +1,5 @@
 /**
- * Types for waterfall payment routing (WaterfallRouter).
+ * Types for waterfall payment routing (WaterfallRouter) and path-scoring.
  *
  * Amounts are always in stroops (bigint). `asset` is a Stellar asset
  * identifier: the invoice's own SEP-41 token contract address, or "native"
@@ -7,6 +7,32 @@
  */
 
 export type Asset = string;
+
+/**
+ * A single hop along a payment route used for path scoring.
+ *
+ * The `weight` field is advisory — it signals to the routing layer how
+ * preferable this hop is relative to alternatives. Enforcement (e.g.
+ * preferring higher-weight hops) is the responsibility of the router, not
+ * this type definition.
+ */
+export interface RoutingHop {
+  /** Asset to send into this hop (asset identifier or "native" for XLM). */
+  sourceAsset: Asset;
+  /** Asset to receive from this hop (asset identifier or "native" for XLM). */
+  destAsset: Asset;
+  /** Source amount in the asset's base unit (stroops for XLM). */
+  sourceAmount: bigint;
+  /** Estimated destination amount in the asset's base unit. */
+  destAmount: bigint;
+  /**
+   * Advisory preference score for this hop in the range [0, 1].
+   * A higher value indicates a more desirable hop (e.g. cheaper fee,
+   * better reliability). When omitted, the routing layer treats this hop
+   * as having neutral weight.
+   */
+  weight?: number;
+}
 
 /** A single ordered tier in a waterfall payout. */
 export interface WaterfallTier {

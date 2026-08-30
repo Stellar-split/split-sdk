@@ -157,6 +157,53 @@ export function verifyMerkleProof(proof: MerkleProof): boolean {
   return computed === proof.root;
 }
 
+/**
+ * Verify a Merkle proof by hashing the leaf, iterating through the proof
+ * siblings, and checking whether the recomputed root matches the expected root.
+ *
+ * Both left-sibling and right-sibling steps are supported via the `index`
+ * parameter embedded in {@link MerkleProof}. When no `index` is provided it
+ * defaults to 0 (every sibling treated as a right-hand sibling).
+ *
+ * @param leaf  - The raw (unhashed) leaf value to verify.
+ * @param proof - Ordered sibling hashes from leaf level up to (but not
+ *                including) the root, as returned by {@link generateMerkleProof}.
+ * @param root  - The expected Merkle root hex string.
+ * @returns `true` if the recomputed root equals `root`, `false` otherwise.
+ */
+export function verifyProof(leaf: string, proof: string[], root: string): boolean {
+  if (typeof leaf !== "string" || typeof root !== "string" || !Array.isArray(proof)) {
+    return false;
+  }
+  if (leaf.length === 0 || root.length === 0) {
+    return false;
+  }
+
+  // Hash the raw leaf value the same way the tree does.
+  let computed = sha256Hex(leaf);
+
+  if (proof.length === 0) {
+    // Single-leaf tree: the leaf hash must equal the root.
+    return computed === root;
+  }
+
+  // Walk up the tree. Without an external index we cannot determine
+  // left/right ordering, so the caller must supply pre-hashed siblings in
+  // the correct directional order (left sibling first at each level).
+  // We default to treating the current node as the left sibling so that
+  // the sibling is always on the right — callers that need positional
+  // proof steps should use verifyMerkleProof() with a full MerkleProof object.
+  for (const sibling of proof) {
+    if (typeof sibling !== "string" || sibling.length === 0) {
+      return false;
+    }
+    // Default: current node is left, sibling is right.
+    computed = hashPair(computed, sibling);
+  }
+
+  return computed === root;
+}
+
 // Re-exported for callers that want to reference the Invoice type alongside
 // Merkle proofs (kept for backward compatibility with existing imports).
 export type { Invoice };

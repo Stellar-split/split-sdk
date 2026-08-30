@@ -453,6 +453,51 @@ describe("GracefulShutdownHandler", () => {
     expect(process.listenerCount("SIGUSR2")).toBeGreaterThan(0);
   });
 
+  it("should accept timeoutMs as an alias for drainTimeoutMs (default 10000)", async () => {
+    const { ShutdownHandlerInstance } = GracefulShutdownHandler as any;
+    const instance = new ShutdownHandlerInstance(client as any, { timeoutMs: 10_000 });
+
+    // Start a very short request — should complete well within 10s
+    void client.simulateInFlightRequest("pay", 50);
+    await expect(instance.shutdown()).resolves.toBeUndefined();
+    expect(client.wasFinalizeCalled()).toBe(true);
+  });
+
+  it("should emit shutdownTimedOut event when drain times out", async () => {
+    const { ShutdownHandlerInstance } = GracefulShutdownHandler as any;
+    const instance = new ShutdownHandlerInstance(client as any, {
+      timeoutMs: 100,
+      onTimeout: "force",
+    });
+
+    // Start a long request that will outlive the timeout
+    void client.simulateInFlightRequest("slowOp", 500);
+
+    const timedOutPayloads: unknown[] = [];
+    instance.on("shutdownTimedOut", (pending: unknown) => timedOutPayloads.push(pending));
+
+    await instance.shutdown();
+
+    expect(timedOutPayloads).toHaveLength(1);
+    expect(client.wasFinalizeCalled()).toBe(true);
+  });
+
+  it("should emit shutdownTimedOut before rejecting when onTimeout is error", async () => {
+    const { ShutdownHandlerInstance } = GracefulShutdownHandler as any;
+    const instance = new ShutdownHandlerInstance(client as any, {
+      timeoutMs: 100,
+      onTimeout: "error",
+    });
+
+    void client.simulateInFlightRequest("slowOp", 500);
+
+    let eventFired = false;
+    instance.on("shutdownTimedOut", () => { eventFired = true; });
+
+    await expect(instance.shutdown()).rejects.toThrow(ShutdownTimeoutError);
+    expect(eventFired).toBe(true);
+  });
+
   it("should be idempotent when shutdown is called multiple times", async () => {
     const ShutdownHandlerInstance = class {
       private readonly client: MockClient;
