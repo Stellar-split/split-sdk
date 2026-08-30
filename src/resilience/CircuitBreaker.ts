@@ -24,6 +24,8 @@ export interface CircuitBreakerOptions {
   openDurationMs: number;
   /** Milliseconds before an in-flight HALF_OPEN probe is treated as a failure. */
   halfOpenProbeTimeoutMs: number;
+  /** Number of concurrent probe requests allowed in HALF_OPEN state. Default: 1. */
+  halfOpenProbeCount?: number;
 }
 
 type ResolvedCircuitBreakerOptions = Required<CircuitBreakerOptions>;
@@ -33,6 +35,7 @@ const DEFAULT_OPTIONS: ResolvedCircuitBreakerOptions = {
   successThreshold: 1,
   openDurationMs: 30_000,
   halfOpenProbeTimeoutMs: 5_000,
+  halfOpenProbeCount: 1,
 };
 
 /** Structured log event emitted on every state transition. */
@@ -63,7 +66,7 @@ interface MutableState {
   successCount: number;
   lastFailureAt: number;
   lastTransitionAt: number;
-  halfOpenProbeInFlight: boolean;
+  halfOpenProbesInFlight: number;
 }
 
 export class CircuitBreaker {
@@ -81,7 +84,7 @@ export class CircuitBreaker {
       successCount: 0,
       lastFailureAt: 0,
       lastTransitionAt: now,
-      halfOpenProbeInFlight: false,
+      halfOpenProbesInFlight: 0,
     };
   }
 
@@ -105,10 +108,10 @@ export class CircuitBreaker {
     }
 
     if (this.state.state === "HALF_OPEN") {
-      if (this.state.halfOpenProbeInFlight) {
-        throw new CircuitOpenError({ state: this.state.state, reason: "probe_in_flight" });
+      if (this.state.halfOpenProbesInFlight >= this.options.halfOpenProbeCount) {
+        throw new CircuitOpenError({ state: this.state.state, reason: "probe_limit_reached" });
       }
-      this.state.halfOpenProbeInFlight = true;
+      this.state.halfOpenProbesInFlight += 1;
       try {
         const result = await this._withProbeTimeout(fn);
         this._onSuccess();
@@ -117,7 +120,7 @@ export class CircuitBreaker {
         this._onFailure();
         throw error;
       } finally {
-        this.state.halfOpenProbeInFlight = false;
+        this.state.halfOpenProbesInFlight -= 1;
       }
     }
 
@@ -136,7 +139,7 @@ export class CircuitBreaker {
     this._transition("CLOSED");
     this.state.failureCount = 0;
     this.state.successCount = 0;
-    this.state.halfOpenProbeInFlight = false;
+    this.state.halfOpenProbesInFlight = 0;
   }
 
   private _withProbeTimeout<T>(fn: () => Promise<T>): Promise<T> {
