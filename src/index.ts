@@ -1390,8 +1390,13 @@ export {
   encryptSigningKeyToPem,
   writeEncryptedSigningKeyFile,
 } from "./signing/adapters/EncryptedFileSigner.js";
-export { CloudKmsSigner } from "./signing/adapters/CloudKmsSigner.js";
-export type { KmsClient } from "./signing/adapters/CloudKmsSigner.js";
+export { CloudKmsSigner, isRegionError } from "./signing/adapters/CloudKmsSigner.js";
+export type {
+  KmsClient,
+  KmsClientSignOptions,
+  CloudKmsSignerOptions,
+  CloudKmsSignerEventMap,
+} from "./signing/adapters/CloudKmsSigner.js";
 
 // ---------------------------------------------------------------------------
 // #588 — Soroban Transaction Footprint Optimizer

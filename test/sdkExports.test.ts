@@ -8,6 +8,7 @@ describe("public API surface (issues #586, #588, #589)", () => {
     expect(typeof sdk.isInvalidKeypairError).toBe("function");
     expect(typeof sdk.EncryptedFileSigner).toBe("function");
     expect(typeof sdk.CloudKmsSigner).toBe("function");
+    expect(typeof sdk.isRegionError).toBe("function");
     expect(typeof sdk.encryptSigningKeyToPem).toBe("function");
     expect(typeof sdk.writeEncryptedSigningKeyFile).toBe("function");
   });
