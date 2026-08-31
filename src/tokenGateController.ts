@@ -110,9 +110,14 @@ export class TokenGateController {
    * - Resolves with a {@link TokenGateVerifyResult} when the caller meets the
    *   requirement.
    * - Throws {@link TokenGateAccessDeniedError} when `policy.strict !== false`
-   *   and the balance is insufficient.
+   *   and the balance is insufficient **or** the current time is outside the
+   *   gate's `validFrom`/`validUntil` window.
    * - When `policy.strict === false`, logs a warning and resolves instead of
    *   throwing.
+   * - When `validFrom` and/or `validUntil` are provided, the gate returns
+   *   `allowed: false` outside that window regardless of the caller's balance.
+   * - When no time constraints are set the gate evaluates balance only (no
+   *   behavior change).
    *
    * @param callerAccountId - The Stellar public key (G…) of the caller.
    * @param policy          - The token-gate policy to evaluate.
@@ -121,12 +126,63 @@ export class TokenGateController {
     callerAccountId: string,
     policy: TokenGatePolicy,
   ): Promise<TokenGateVerifyResult> {
+    const strict = policy.strict !== false; // default true
+    const assetCode = policy.asset.split(":")[0] ?? policy.asset;
+
+    // ── Time-window check ──────────────────────────────────────────────────
+    // Evaluate before the cache so that time boundaries are always respected
+    // even for cached results.
+    const now = new Date();
+    if (policy.validFrom !== undefined && now < policy.validFrom) {
+      const result: TokenGateVerifyResult = {
+        allowed: false,
+        actualBalance: "0.0000000",
+        requiredBalance: policy.minBalance,
+        cached: false,
+      };
+      if (strict) {
+        throw new TokenGateAccessDeniedError(
+          callerAccountId,
+          assetCode,
+          policy.minBalance,
+          result.actualBalance,
+        );
+      } else {
+        console.warn(
+          `[TokenGateController] Non-strict warning: gate for ${assetCode} not yet active ` +
+            `(validFrom: ${policy.validFrom.toISOString()}).`,
+        );
+      }
+      return result;
+    }
+    if (policy.validUntil !== undefined && now > policy.validUntil) {
+      const result: TokenGateVerifyResult = {
+        allowed: false,
+        actualBalance: "0.0000000",
+        requiredBalance: policy.minBalance,
+        cached: false,
+      };
+      if (strict) {
+        throw new TokenGateAccessDeniedError(
+          callerAccountId,
+          assetCode,
+          policy.minBalance,
+          result.actualBalance,
+        );
+      } else {
+        console.warn(
+          `[TokenGateController] Non-strict warning: gate for ${assetCode} has expired ` +
+            `(validUntil: ${policy.validUntil.toISOString()}).`,
+        );
+      }
+      return result;
+    }
+
+    // ── Cache check ────────────────────────────────────────────────────────
     const key = cacheKey(callerAccountId, policy);
     const cached = this._cache.get(key);
     if (cached !== undefined) {
-      const strict = policy.strict !== false;
       if (!cached.allowed && strict) {
-        const assetCode = policy.asset.split(":")[0] ?? policy.asset;
         throw new TokenGateAccessDeniedError(
           callerAccountId,
           assetCode,
@@ -137,8 +193,8 @@ export class TokenGateController {
       return { ...cached, cached: true };
     }
 
+    // ── Balance check ──────────────────────────────────────────────────────
     const balance = await this._fetchBalance(callerAccountId, policy.asset);
-    const strict = policy.strict !== false; // default true
 
     const allowed = parseBalance(balance) >= parseBalance(policy.minBalance);
 
@@ -154,7 +210,6 @@ export class TokenGateController {
     this._cache.set(key, result);
 
     if (!allowed) {
-      const assetCode = policy.asset.split(":")[0] ?? policy.asset;
       if (strict) {
         throw new TokenGateAccessDeniedError(
           callerAccountId,

@@ -5,6 +5,17 @@
  *
  * Extends {@link src/feeEstimator.ts} and {@link src/fee.ts} with surge-aware
  * behaviour.
+ *
+ * ## Moving-average baseline (#690)
+ *
+ * Instead of comparing the observed fee against a hard-coded static baseline,
+ * the detector maintains a **sliding window** of the last N fee samples
+ * (configurable via `windowSize`, default 20). The moving average of the
+ * window becomes the dynamic baseline used for surge detection.
+ *
+ * When the window is not yet full (i.e. fewer than `windowSize` samples have
+ * been collected), the static baseline (`DEFAULT_BASE_FEE = 100n stroops`) is
+ * used as a fallback so the detector is immediately useful on first run.
  */
 
 import { rpc as SorobanRpc, Horizon } from "@stellar/stellar-sdk";
@@ -30,7 +41,7 @@ export interface FeeSurgeConfig {
 
   /**
    * Congestion threshold multiplier. When the observed fee exceeds
-   * `baseFee * surgeMultiplier`, the network is considered congested.
+   * `baseline * surgeMultiplier`, the network is considered congested.
    * Defaults to `2`.
    */
   surgeMultiplier?: number;
@@ -51,6 +62,15 @@ export interface FeeSurgeConfig {
    * a safety ceiling. Defaults to 10_000_000 (10 XLM).
    */
   maxFeeStroops?: number;
+
+  /**
+   * Number of recent fee samples kept in the sliding window used to compute
+   * the moving-average baseline. When the window has fewer than `windowSize`
+   * samples, the static `DEFAULT_BASE_FEE` is used as a fallback.
+   *
+   * Defaults to `20`.
+   */
+  windowSize?: number;
 }
 
 /** Congestion level derived from fee statistics. */
@@ -77,13 +97,54 @@ export interface FeeRecommendation {
 }
 
 // ---------------------------------------------------------------------------
-// Implementation
+// Moving-average window state (module-level for the free-standing function)
 // ---------------------------------------------------------------------------
 
 const DEFAULT_BASE_FEE = 100n; // 100 stroops
+const DEFAULT_WINDOW_SIZE = 20;
+
+/** Circular buffer of recent fee samples (in stroops, as numbers for averaging). */
+const _feeSamples: number[] = [];
+let _windowSize = DEFAULT_WINDOW_SIZE;
 
 let cachedRecommendation: FeeRecommendation | null = null;
 let cacheExpiry = 0;
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Add a new fee sample to the sliding window. Evicts the oldest sample when
+ * the window is full.
+ *
+ * @internal
+ */
+function addFeeSample(fee: bigint, windowSize: number): void {
+  // Update window size if it changed between calls
+  _windowSize = windowSize;
+  _feeSamples.push(Number(fee));
+  if (_feeSamples.length > _windowSize) {
+    _feeSamples.shift();
+  }
+}
+
+/**
+ * Compute the moving-average baseline from the current window.
+ *
+ * Returns `null` when the window is not yet full (so callers can fall back to
+ * the static baseline).
+ *
+ * @internal
+ */
+function movingAverageBaseline(windowSize: number): bigint | null {
+  if (_feeSamples.length < windowSize) {
+    // Window not yet full — use static fallback
+    return null;
+  }
+  const sum = _feeSamples.reduce((acc, v) => acc + v, 0);
+  return BigInt(Math.ceil(sum / _feeSamples.length));
+}
 
 /**
  * Fetch the current fee statistics from Horizon and produce a surge-aware
@@ -112,13 +173,21 @@ export async function detectFeeSurge(
   const surgeMultiplier = config?.surgeMultiplier ?? 2;
   const surgeFeeMultiplier = config?.surgeFeeMultiplier ?? 1.5;
   const maxFee = BigInt(config?.maxFeeStroops ?? 10_000_000);
-  const baseFee = DEFAULT_BASE_FEE;
+  const windowSize = config?.windowSize ?? DEFAULT_WINDOW_SIZE;
 
   try {
     const server = new Horizon.Server(horizonUrl);
     const feeStats = await server.feeStats();
 
     const observedFee = feePercentileToBigInt(feeStats, percentile);
+
+    // ── Moving-average baseline ────────────────────────────────────────────
+    // Add the observed fee to the sliding window and derive the baseline.
+    // Falls back to the static DEFAULT_BASE_FEE until the window is full.
+    addFeeSample(observedFee, windowSize);
+    const maBaseline = movingAverageBaseline(windowSize);
+    const baseFee = maBaseline ?? DEFAULT_BASE_FEE;
+
     const surgeActive = observedFee > baseFee * BigInt(Math.ceil(surgeMultiplier));
 
     let congestion: CongestionLevel;
@@ -166,9 +235,9 @@ export async function detectFeeSurge(
   } catch {
     // On failure, return a safe default (base fee with low congestion).
     return {
-      fee: baseFee,
-      baseFee,
-      observedFee: baseFee,
+      fee: DEFAULT_BASE_FEE,
+      baseFee: DEFAULT_BASE_FEE,
+      observedFee: DEFAULT_BASE_FEE,
       congestion: "low",
       surgeActive: false,
       multiplier: 1.0,
@@ -184,6 +253,25 @@ export async function detectFeeSurge(
 export function clearFeeSurgeCache(): void {
   cachedRecommendation = null;
   cacheExpiry = 0;
+}
+
+/**
+ * Reset the moving-average window (clears all accumulated samples).
+ *
+ * Useful in tests or when resetting detector state entirely.
+ */
+export function resetFeeSurgeWindow(): void {
+  _feeSamples.length = 0;
+  _windowSize = DEFAULT_WINDOW_SIZE;
+}
+
+/**
+ * Return a read-only snapshot of the current fee sample window.
+ *
+ * Intended for debugging and unit testing.
+ */
+export function getFeeSampleWindow(): readonly number[] {
+  return [..._feeSamples];
 }
 
 /**

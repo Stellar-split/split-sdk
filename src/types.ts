@@ -247,6 +247,42 @@ export class HealthCheckTimeoutError extends StellarSplitError {
 /**
  * Basic invoice data structure mirroring the Soroban contract.
  */
+
+/**
+ * Policy used to gate access to an invoice based on a minimum token balance.
+ *
+ * When `validFrom` or `validUntil` are provided the gate is only active
+ * during that time window. Outside the window the gate evaluates to `false`
+ * regardless of the caller's balance.
+ */
+export interface TokenGatePolicy {
+  /**
+   * The asset to check, in "CODE:ISSUER" format or "native" for XLM.
+   * @example "USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"
+   */
+  asset: string;
+  /**
+   * Minimum balance required to pass the gate, as a decimal string.
+   * @example "10.0000000"
+   */
+  minBalance: string;
+  /**
+   * When `false`, a balance shortfall emits a warning instead of throwing.
+   * Defaults to `true`.
+   */
+  strict?: boolean;
+  /**
+   * Optional start of the gate's active window. Before this date the gate
+   * always returns `false` (or warns in non-strict mode).
+   */
+  validFrom?: Date;
+  /**
+   * Optional end of the gate's active window. After this date the gate
+   * always returns `false` (or warns in non-strict mode).
+   */
+  validUntil?: Date;
+}
+
 /** An on-chain StellarSplit invoice. */
 export interface Invoice {
   /** Invoice ID (u64 from the contract). */
@@ -1960,6 +1996,13 @@ export interface CollectionPage<T> {
 export interface HorizonPaginatorOptions {
   /** Maximum number of records to yield across all pages. Default: unlimited. */
   maxRecords?: number;
+  /**
+   * The page size that was passed to the Horizon call builder's `.limit()`
+   * method. The paginator uses this to detect when the server has silently
+   * capped the page size and adapts `effectivePageSize` accordingly.
+   * Default: 200.
+   */
+  pageSize?: number;
   /** Optional cursor store for persisting the last-seen paging token. */
   cursorStore?: CursorStore;
   /** Optional namespace for cursor storage keys (default: "horizon"). */

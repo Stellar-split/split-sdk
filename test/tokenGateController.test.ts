@@ -213,4 +213,103 @@ describe("TokenGateController", () => {
       expect(err?.name).toBe("TokenGateAccessDeniedError");
     });
   });
+
+  // ── Time-bounded gate windows (#693) ─────────────────────────────────────
+
+  describe("time-bounded gate windows", () => {
+    it("returns false and skips balance check when current time is before validFrom", async () => {
+      const fetchSpy = vi
+        .spyOn(controller as any, "_fetchBalance")
+        .mockResolvedValue("100.0000000");
+
+      const policy: TokenGatePolicy = {
+        ...USDC_POLICY,
+        // validFrom is one hour in the future
+        validFrom: new Date(Date.now() + 60 * 60 * 1000),
+      };
+
+      await expect(controller.verify(CALLER, policy)).rejects.toThrow(
+        TokenGateAccessDeniedError,
+      );
+      // Balance should never be fetched — gate is not yet active
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("returns false and skips balance check when current time is after validUntil", async () => {
+      const fetchSpy = vi
+        .spyOn(controller as any, "_fetchBalance")
+        .mockResolvedValue("100.0000000");
+
+      const policy: TokenGatePolicy = {
+        ...USDC_POLICY,
+        // validUntil is one hour in the past
+        validUntil: new Date(Date.now() - 60 * 60 * 1000),
+      };
+
+      await expect(controller.verify(CALLER, policy)).rejects.toThrow(
+        TokenGateAccessDeniedError,
+      );
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("evaluates balance normally when current time is within the active window", async () => {
+      vi.spyOn(controller as any, "_fetchBalance").mockResolvedValue("25.0000000");
+
+      const policy: TokenGatePolicy = {
+        ...USDC_POLICY,
+        validFrom: new Date(Date.now() - 60 * 60 * 1000),   // started 1 h ago
+        validUntil: new Date(Date.now() + 60 * 60 * 1000),  // ends in 1 h
+      };
+
+      const result = await controller.verify(CALLER, policy);
+
+      expect(result.allowed).toBe(true);
+      expect(result.actualBalance).toBe("25.0000000");
+    });
+
+    it("evaluates balance normally when no time constraints are provided", async () => {
+      vi.spyOn(controller as any, "_fetchBalance").mockResolvedValue("15.0000000");
+
+      // No validFrom / validUntil — should behave exactly as before
+      const result = await controller.verify(CALLER, USDC_POLICY);
+
+      expect(result.allowed).toBe(true);
+    });
+
+    it("warns but does not throw (non-strict) when gate is not yet active", async () => {
+      vi.spyOn(controller as any, "_fetchBalance").mockResolvedValue("100.0000000");
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const policy: TokenGatePolicy = {
+        ...USDC_POLICY,
+        strict: false,
+        validFrom: new Date(Date.now() + 60 * 60 * 1000),
+      };
+
+      const result = await controller.verify(CALLER, policy);
+
+      expect(result.allowed).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("not yet active"),
+      );
+    });
+
+    it("warns but does not throw (non-strict) when gate has expired", async () => {
+      vi.spyOn(controller as any, "_fetchBalance").mockResolvedValue("100.0000000");
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const policy: TokenGatePolicy = {
+        ...USDC_POLICY,
+        strict: false,
+        validUntil: new Date(Date.now() - 60 * 60 * 1000),
+      };
+
+      const result = await controller.verify(CALLER, policy);
+
+      expect(result.allowed).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("expired"),
+      );
+    });
+  });
 });
