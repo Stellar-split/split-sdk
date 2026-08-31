@@ -2512,7 +2512,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
    *
    * @returns The new invoice ID and the transaction hash.
    * @example
-   * const result = await client.createInvoice({ /* params */ });
+   * const result = await client.createInvoice({ ...params });
    * @param params - The parameters for the method.
    * @throws {Error} If the method fails.
    */
@@ -2909,7 +2909,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
    *
    * @returns The transaction hash.
    * @example
-   * const result = await client.pay({ /* params */ });
+   * const result = await client.pay({ ...params });
    * @param params - The parameters for the method.
    * @throws {Error} If the method fails.
    */
@@ -3454,7 +3454,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
    * the invoice data is returned. Throws {@link TokenGateAccessDeniedError} when
    * the caller does not meet the balance requirement (and `strict !== false`).
    * @example
-   * const result = await client.getInvoice({ /* params */ });
+   * const result = await client.getInvoice({ ...params });
    * @param params - The parameters for the method.
    * @returns The result of the method.
    * @throws {Error} If the method fails.

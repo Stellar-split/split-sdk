@@ -213,6 +213,9 @@ export {
   SdkError,
   SdkErrorCode,
   isSdkError,
+  // Wallet connection timeout (issue #770)
+  WalletConnectionTimeoutError,
+  isWalletConnectionTimeoutError,
 } from "./errors.js";
 
 // Invoice metadata JSON Schema validator (issue #533)
@@ -318,6 +321,8 @@ export { ResilientRpcClient } from "./resilientRpc.js";
 export type { RetryConfig } from "./resilientRpc.js";
 
 export { connectWallet, getPublicKey, signTransaction } from "./wallet.js";
+export { LobstrAdapter } from "./wallets/adapters/LobstrAdapter.js";
+export type { LobstrAdapterOptions } from "./wallets/adapters/LobstrAdapter.js";
 
 export { checkRPCHealth } from "./health.js";
 export { FallbackChain, FallbackExhaustedError } from "./fallbackChain.js";

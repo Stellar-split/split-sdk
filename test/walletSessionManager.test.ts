@@ -8,6 +8,11 @@ import { WalletSessionManager, WalletNotConnectedError } from "../src/wallets/Wa
 import { FreighterAdapter } from "../src/wallets/adapters/FreighterAdapter.js";
 import { LobstrAdapter } from "../src/wallets/adapters/LobstrAdapter.js";
 import { XBullAdapter } from "../src/wallets/adapters/XBullAdapter.js";
+import {
+  WalletConnectionTimeoutError,
+  isWalletConnectionTimeoutError,
+  StellarSplitError,
+} from "../src/errors.js";
 
 const MOCK_PUBLIC_KEY = "GBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
 const MOCK_PUBLIC_KEY_2 = "GCBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBF";
@@ -218,17 +223,146 @@ describe("LobstrAdapter", () => {
     expect(adapter.name).toBe("LOBSTR");
   });
 
-  it("connect() calls window.lobstr.connect", async () => {
+  it("defaults connectionTimeoutMs to 60000", () => {
+    const adapter = new LobstrAdapter();
+    expect(adapter.connectionTimeoutMs).toBe(60_000);
+  });
+
+  it("allows configurable connectionTimeoutMs", () => {
+    const adapter = new LobstrAdapter({ connectionTimeoutMs: 5000 });
+    expect(adapter.connectionTimeoutMs).toBe(5000);
+  });
+
+  it("connect() calls window.lobstr.connect and returns publicKey", async () => {
     (global as any).window = {
       lobstr: {
         connect: vi.fn().mockResolvedValue({ publicKey: MOCK_PUBLIC_KEY }),
         on: vi.fn(),
+        off: vi.fn(),
       },
     };
 
     const adapter = new LobstrAdapter();
     const address = await adapter.connect();
     expect(address).toBe(MOCK_PUBLIC_KEY);
+    expect((global as any).window.lobstr.connect).toHaveBeenCalledTimes(1);
+    expect((global as any).window.lobstr.on).toHaveBeenCalledWith("accountChanged", expect.any(Function));
+  });
+
+  it("connect() rejects with WalletConnectionTimeoutError when connection takes longer than connectionTimeoutMs", async () => {
+    vi.useFakeTimers();
+
+    (global as any).window = {
+      lobstr: {
+        connect: vi.fn().mockImplementation(
+          () => new Promise((resolve) => setTimeout(() => resolve({ publicKey: MOCK_PUBLIC_KEY }), 5000)),
+        ),
+        on: vi.fn(),
+        off: vi.fn(),
+      },
+    };
+
+    const adapter = new LobstrAdapter({ connectionTimeoutMs: 1000 });
+    const connectPromise = adapter.connect();
+
+    // Advance timers beyond timeout
+    vi.advanceTimersByTime(1001);
+
+    await expect(connectPromise).rejects.toThrow(WalletConnectionTimeoutError);
+    await expect(connectPromise).rejects.toThrow("LOBSTR connection timed out after 1000ms");
+
+    vi.useRealTimers();
+  });
+
+  it("clears timeout timer on successful connect()", async () => {
+    vi.useFakeTimers();
+    const clearTimeoutSpy = vi.spyOn(global, "clearTimeout");
+
+    (global as any).window = {
+      lobstr: {
+        connect: vi.fn().mockResolvedValue({ publicKey: MOCK_PUBLIC_KEY }),
+        on: vi.fn(),
+        off: vi.fn(),
+      },
+    };
+
+    const adapter = new LobstrAdapter({ connectionTimeoutMs: 5000 });
+    const address = await adapter.connect();
+    expect(address).toBe(MOCK_PUBLIC_KEY);
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+
+    clearTimeoutSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("clears timeout timer when window.lobstr.connect() rejects immediately", async () => {
+    vi.useFakeTimers();
+    const clearTimeoutSpy = vi.spyOn(global, "clearTimeout");
+
+    (global as any).window = {
+      lobstr: {
+        connect: vi.fn().mockRejectedValue(new Error("User rejected connection")),
+        on: vi.fn(),
+        off: vi.fn(),
+      },
+    };
+
+    const adapter = new LobstrAdapter({ connectionTimeoutMs: 5000 });
+    await expect(adapter.connect()).rejects.toThrow("User rejected connection");
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+
+    clearTimeoutSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("getAddress() rejects with WalletConnectionTimeoutError on timeout", async () => {
+    vi.useFakeTimers();
+
+    (global as any).window = {
+      lobstr: {
+        connect: vi.fn().mockImplementation(
+          () => new Promise((resolve) => setTimeout(() => resolve({ publicKey: MOCK_PUBLIC_KEY }), 10000)),
+        ),
+      },
+    };
+
+    const adapter = new LobstrAdapter({ connectionTimeoutMs: 2000 });
+    const addrPromise = adapter.getAddress();
+
+    vi.advanceTimersByTime(2001);
+
+    await expect(addrPromise).rejects.toThrow(WalletConnectionTimeoutError);
+
+    vi.useRealTimers();
+  });
+
+  it("disconnect() cleans up accountChanged event listener from window.lobstr.off", async () => {
+    const offMock = vi.fn();
+    (global as any).window = {
+      lobstr: {
+        connect: vi.fn().mockResolvedValue({ publicKey: MOCK_PUBLIC_KEY }),
+        on: vi.fn(),
+        off: offMock,
+      },
+    };
+
+    const adapter = new LobstrAdapter();
+    await adapter.connect();
+
+    adapter.disconnect();
+    expect(offMock).toHaveBeenCalledWith("accountChanged", expect.any(Function));
+  });
+
+  it("WalletConnectionTimeoutError has correct error code, context, and prototype chain", () => {
+    const error = new WalletConnectionTimeoutError("Connection timed out", { timeoutMs: 60000 });
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toBeInstanceOf(StellarSplitError);
+    expect(error).toBeInstanceOf(WalletConnectionTimeoutError);
+    expect(error.name).toBe("WalletConnectionTimeoutError");
+    expect(error.code).toBe("WALLET_CONNECTION_TIMEOUT");
+    expect(error.timeoutMs).toBe(60000);
+    expect(isWalletConnectionTimeoutError(error)).toBe(true);
+    expect(isWalletConnectionTimeoutError(new Error())).toBe(false);
   });
 });
 

@@ -2211,3 +2211,31 @@ export class MergeConflictError extends StellarSplitError {
 export function isMergeConflictError(err: unknown): err is MergeConflictError {
   return err instanceof MergeConflictError;
 }
+
+// ---------------------------------------------------------------------------
+// Wallet Connection Timeout Errors (issue #770)
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown when a wallet connection (such as a deep link or extension connect)
+ * exceeds its configured timeout window without receiving a response.
+ */
+export class WalletConnectionTimeoutError extends StellarSplitError {
+  readonly timeoutMs?: number;
+
+  constructor(
+    message: string = "Wallet connection timed out",
+    context?: Record<string, unknown>,
+    raw?: string,
+  ) {
+    super(message, "WALLET_CONNECTION_TIMEOUT", context, raw);
+    this.name = "WalletConnectionTimeoutError";
+    this.timeoutMs = typeof context?.timeoutMs === "number" ? context.timeoutMs : undefined;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isWalletConnectionTimeoutError(err: unknown): err is WalletConnectionTimeoutError {
+  return err instanceof WalletConnectionTimeoutError;
+}
+
