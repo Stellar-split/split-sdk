@@ -2213,29 +2213,21 @@ export function isMergeConflictError(err: unknown): err is MergeConflictError {
 }
 
 // ---------------------------------------------------------------------------
-// Wallet Connection Timeout Errors (issue #770)
+// Keypair format and signing validation errors (issue #768)
 // ---------------------------------------------------------------------------
 
 /**
- * Thrown when a wallet connection (such as a deep link or extension connect)
- * exceeds its configured timeout window without receiving a response.
+ * Thrown when a KeypairSigner is constructed with an invalid secret key or keypair.
  */
-export class WalletConnectionTimeoutError extends StellarSplitError {
-  readonly timeoutMs?: number;
-
-  constructor(
-    message: string = "Wallet connection timed out",
-    context?: Record<string, unknown>,
-    raw?: string,
-  ) {
-    super(message, "WALLET_CONNECTION_TIMEOUT", context, raw);
-    this.name = "WalletConnectionTimeoutError";
-    this.timeoutMs = typeof context?.timeoutMs === "number" ? context.timeoutMs : undefined;
+export class InvalidKeypairError extends StellarSplitError {
+  constructor(message: string, context?: Record<string, unknown>, raw?: string) {
+    super(message, "INVALID_KEYPAIR", context, raw);
+    this.name = "InvalidKeypairError";
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
-export function isWalletConnectionTimeoutError(err: unknown): err is WalletConnectionTimeoutError {
-  return err instanceof WalletConnectionTimeoutError;
+export function isInvalidKeypairError(err: unknown): err is InvalidKeypairError {
+  return err instanceof InvalidKeypairError;
 }
 

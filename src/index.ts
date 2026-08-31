@@ -213,9 +213,9 @@ export {
   SdkError,
   SdkErrorCode,
   isSdkError,
-  // Wallet connection timeout (issue #770)
-  WalletConnectionTimeoutError,
-  isWalletConnectionTimeoutError,
+  // Keypair format and signing validation (issue #768)
+  InvalidKeypairError,
+  isInvalidKeypairError,
 } from "./errors.js";
 
 // Invoice metadata JSON Schema validator (issue #533)
@@ -1392,8 +1392,13 @@ export {
   encryptSigningKeyToPem,
   writeEncryptedSigningKeyFile,
 } from "./signing/adapters/EncryptedFileSigner.js";
-export { CloudKmsSigner } from "./signing/adapters/CloudKmsSigner.js";
-export type { KmsClient } from "./signing/adapters/CloudKmsSigner.js";
+export { CloudKmsSigner, isRegionError } from "./signing/adapters/CloudKmsSigner.js";
+export type {
+  KmsClient,
+  KmsClientSignOptions,
+  CloudKmsSignerOptions,
+  CloudKmsSignerEventMap,
+} from "./signing/adapters/CloudKmsSigner.js";
 
 // ---------------------------------------------------------------------------
 // #588 — Soroban Transaction Footprint Optimizer
