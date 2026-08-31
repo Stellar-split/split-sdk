@@ -134,4 +134,33 @@ export class InvoiceBatchProcessor {
       yield result;
     }
   }
+
+  /**
+   * Process a batch and return a single result object with `succeeded` and
+   * `failed` arrays, making it easy to inspect partial-failure outcomes.
+   *
+   * Internally delegates to {@link process} so all concurrency and
+   * rate-limit behaviour is preserved.
+   *
+   * @param invoiceIds - Ordered list of invoice IDs to process.
+   * @param config     - Batch configuration (payer, amounts, concurrency).
+   * @returns `{ succeeded, failed }` — results split by outcome.
+   */
+  async processAll(
+    invoiceIds: string[],
+    config: InvoiceBatchConfig,
+  ): Promise<{ succeeded: BatchInvoiceResult[]; failed: BatchInvoiceResult[] }> {
+    const succeeded: BatchInvoiceResult[] = [];
+    const failed: BatchInvoiceResult[] = [];
+
+    for await (const result of this.process(invoiceIds, config)) {
+      if (result.status === "success") {
+        succeeded.push(result);
+      } else {
+        failed.push(result);
+      }
+    }
+
+    return { succeeded, failed };
+  }
 }

@@ -7,6 +7,17 @@
  *
  * Integrates with {@link cursorTracker} to persist the last-seen paging
  * token for resumable pagination.
+ *
+ * ## Automatic page-size negotiation (#692)
+ *
+ * When the configured `pageSize` exceeds the server's actual maximum,
+ * Horizon silently returns fewer records than requested. The paginator
+ * detects this on the first response: if the first page returns fewer
+ * records than `pageSize`, `effectivePageSize` is updated to the actual
+ * count. Subsequent pages use `effectivePageSize` to decide whether a page
+ * is the last one, preventing premature termination.
+ *
+ * `effectivePageSize` is exposed as a read-only property for debugging.
  */
 
 import type { CollectionPage, HorizonPaginatorOptions } from "./types.js";
@@ -14,6 +25,64 @@ import { buildCursorKey, getDefaultCursorStore } from "./cursorTracker.js";
 
 /** Default namespace for cursor store keys. */
 const DEFAULT_NAMESPACE = "horizon";
+
+/**
+ * Stateful paginator for a Horizon collection endpoint.
+ *
+ * Prefer the {@link HorizonPaginator} class when you need access to
+ * `effectivePageSize`. Use the free-standing {@link paginate} or
+ * {@link collectAll} helpers for a simpler one-shot API.
+ */
+export class HorizonPaginator<T> {
+  /** The page size originally requested by the caller. */
+  readonly requestedPageSize: number;
+
+  /**
+   * The effective page size derived from the first response.
+   *
+   * Equals `requestedPageSize` until the first page is received. If the
+   * first page returns fewer records than `requestedPageSize`, this is
+   * updated to the actual count so subsequent pages are judged correctly.
+   * Exposed as a read-only property for debugging.
+   */
+  get effectivePageSize(): number {
+    return this._effectivePageSize;
+  }
+
+  private _effectivePageSize: number;
+  private _firstPageSeen = false;
+
+  constructor(requestedPageSize: number) {
+    this.requestedPageSize = requestedPageSize;
+    this._effectivePageSize = requestedPageSize;
+  }
+
+  /**
+   * Observe the first page response to negotiate the effective page size.
+   * Called internally by {@link paginate}.
+   *
+   * @param recordCount - Number of records returned in the first page.
+   */
+  observeFirstPage(recordCount: number): void {
+    if (this._firstPageSeen) return;
+    this._firstPageSeen = true;
+    if (recordCount < this.requestedPageSize) {
+      // Server returned fewer records than requested — adapt to the actual
+      // maximum so we don't mistake later full pages for the last one.
+      this._effectivePageSize = recordCount;
+    }
+  }
+
+  /**
+   * Returns `true` when the given page should be treated as the last page
+   * (i.e. the server has no more data to return).
+   */
+  isLastPage(recordCount: number): boolean {
+    // A page with 0 records (or fewer than effectivePageSize after negotiation)
+    // means the collection is exhausted.
+    return recordCount < this._effectivePageSize;
+  }
+}
 
 /**
  * Create an async iterable iterator that walks all pages of a Horizon
@@ -37,17 +106,29 @@ export async function* paginate<T>(
   opts?: HorizonPaginatorOptions,
 ): AsyncIterableIterator<T> {
   const maxRecords = opts?.maxRecords;
+  const pageSize = opts?.pageSize ?? 200;
   const cursorStore = opts?.cursorStore ?? getDefaultCursorStore();
   const namespace = opts?.cursorNamespace ?? DEFAULT_NAMESPACE;
 
+  const paginator = new HorizonPaginator<T>(pageSize);
+
   let yielded = 0;
   let currentPage: CollectionPage<T> | null = initialPage;
+  let isFirst = true;
 
   while (currentPage) {
     const records = currentPage.records ?? [];
     const batch = maxRecords !== undefined
       ? records.slice(0, maxRecords - yielded)
       : records;
+
+    // ── Page-size negotiation ──────────────────────────────────────────────
+    // On the first page, observe the actual record count to detect whether
+    // the server silently capped our requested page size.
+    if (isFirst) {
+      paginator.observeFirstPage(records.length);
+      isFirst = false;
+    }
 
     for (const record of batch) {
       if (maxRecords !== undefined && yielded >= maxRecords) return;
@@ -70,6 +151,13 @@ export async function* paginate<T>(
     }
 
     if (maxRecords !== undefined && yielded >= maxRecords) return;
+
+    // ── Termination: use effectivePageSize to detect last page ─────────────
+    // After negotiation, a page with fewer records than effectivePageSize
+    // means the collection is exhausted — no need to fetch further.
+    if (paginator.isLastPage(records.length)) {
+      return;
+    }
 
     // Fetch next page
     currentPage = await currentPage.next();
