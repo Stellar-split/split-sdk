@@ -9,7 +9,14 @@
 
 import { createHmac, randomUUID } from "crypto";
 import { WebhookExhaustedError } from "../errors.js";
-import type { WebhookPayload } from "../types.js";
+
+/** Outgoing webhook payload envelope delivered by WebhookAgent. */
+export interface WebhookPayload<T = unknown> {
+  event_id: string;
+  event_type: string;
+  timestamp: string;
+  data: T;
+}
 
 /** Header carrying the hex-encoded HMAC-SHA256 signature of the raw body. */
 export const WEBHOOK_SIGNATURE_HEADER = "X-Stellar-Split-Signature";
