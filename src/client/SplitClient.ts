@@ -18,7 +18,7 @@
 
 import { rpc as SorobanRpc } from "@stellar/stellar-sdk";
 import { LazyInitializer } from "./LazyInitializer.js";
-import { RpcConnectionError } from "../errors.js";
+import { RpcConnectionError, RequestTimeoutError } from "../errors.js";
 
 // ---------------------------------------------------------------------------
 // Public config
@@ -31,6 +31,8 @@ export interface SplitClientConfig {
   networkPassphrase: string;
   /** Deployed StellarSplit contract ID. */
   contractId: string;
+  /** Per-request timeout in milliseconds. Defaults to 30 000. */
+  requestTimeoutMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -79,7 +81,7 @@ export class SplitClient {
    */
   async getLedger(): Promise<number> {
     const server = await this.ensureConnected();
-    const info = await server.getLatestLedger();
+    const info = await this._withTimeout(server.getLatestLedger(), "getLedger");
     return info.sequence;
   }
 
@@ -91,7 +93,7 @@ export class SplitClient {
     tx: Parameters<SorobanRpc.Server["simulateTransaction"]>[0],
   ): Promise<ReturnType<SorobanRpc.Server["simulateTransaction"]>> {
     const server = await this.ensureConnected();
-    return server.simulateTransaction(tx);
+    return this._withTimeout(server.simulateTransaction(tx), "simulateTransaction");
   }
 
   /**
@@ -102,7 +104,7 @@ export class SplitClient {
     tx: Parameters<SorobanRpc.Server["sendTransaction"]>[0],
   ): Promise<ReturnType<SorobanRpc.Server["sendTransaction"]>> {
     const server = await this.ensureConnected();
-    return server.sendTransaction(tx);
+    return this._withTimeout(server.sendTransaction(tx), "sendTransaction");
   }
 
   /**
@@ -125,6 +127,24 @@ export class SplitClient {
   }
 
   /**
+   * Wraps a promise with timeout enforcement. If the underlying SDK throws a
+   * timeout-related error, it is converted to RequestTimeoutError.
+   */
+  private async _withTimeout<T>(promise: Promise<T>, method: string): Promise<T> {
+    const timeoutMs = this.config.requestTimeoutMs ?? 30_000;
+    if (timeoutMs <= 0) return promise;
+
+    try {
+      return await promise;
+    } catch (err: unknown) {
+      if (err instanceof Error && /timeout/i.test(err.message)) {
+        throw new RequestTimeoutError(method, timeoutMs);
+      }
+      throw err;
+    }
+  }
+
+  /**
    * Factory that creates and validates the SorobanRpc.Server connection.
    * Wraps construction errors in RpcConnectionError.
    */
@@ -133,6 +153,7 @@ export class SplitClient {
     try {
       const server = new SorobanRpc.Server(rpcUrl, {
         allowHttp: rpcUrl.startsWith("http://"),
+        timeout: this.config.requestTimeoutMs ?? 30_000,
       });
       return server;
     } catch (err: unknown) {

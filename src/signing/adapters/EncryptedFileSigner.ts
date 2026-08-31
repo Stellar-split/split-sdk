@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, pbkdf2, randomBytes } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { Keypair } from "@stellar/stellar-sdk";
 import type { Signer } from "../signer.js";
@@ -69,6 +69,8 @@ export class EncryptedFileSigner implements Signer {
   private readonly aesKey: Buffer;
   /** Weak reference to the decrypted keypair — cleared by GC or clearCache(). */
   private cachedKeypairRef: WeakRef<Keypair> | null = null;
+  /** Promise-based lock serialising key rotation and sign operations. */
+  private _rotationLock: Promise<void> = Promise.resolve();
 
   constructor(filePath: string, options: EncryptedFileSignerOptions) {
     this.filePath = filePath;
@@ -87,6 +89,39 @@ export class EncryptedFileSigner implements Signer {
     this.cachedKeypairRef = null;
   }
 
+  /**
+   * Rotates the encrypted signing key to a new file.
+   *
+   * The new file is loaded and validated before the in-memory state is
+   * replaced. A promise-based lock ensures that:
+   * - Signing operations already in flight complete with the old key.
+   * - Only one rotation is in progress at a time.
+   * - All new signing operations after rotation use the new key.
+   *
+   * @param newKeyFilePath Path to the new encrypted PEM key file.
+   * @param passphrase Passphrase used to derive the AES-256 decryption key.
+   */
+  async rotateKey(newKeyFilePath: string, passphrase: string): Promise<void> {
+    const previousLock = this._rotationLock;
+
+    let resolveRotation!: () => void;
+    this._rotationLock = new Promise<void>((resolve) => {
+      resolveRotation = resolve;
+    });
+
+    try {
+      await previousLock;
+      const newAesKey = await this._deriveKey(passphrase);
+      const newKeypair = await this._loadKeypairFromFile(newKeyFilePath, newAesKey);
+
+      this.filePath = newKeyFilePath;
+      this.aesKey = newAesKey;
+      this.cachedKeypairRef = new WeakRef(newKeypair);
+    } finally {
+      resolveRotation();
+    }
+  }
+
   async sign(txHash: Buffer): Promise<Buffer> {
     const keypair = await this._getKeypair();
     return Buffer.from(keypair.sign(txHash));
@@ -95,17 +130,22 @@ export class EncryptedFileSigner implements Signer {
   private async _getKeypair(): Promise<Keypair> {
     const cached = this.cachedKeypairRef?.deref();
     if (cached) return cached;
-    // Re-read + decrypt on first use / after GC. The keypair is kept alive
-    // for the duration of this call even though only a WeakRef is stored.
+    await this._rotationLock;
+    const cachedAgain = this.cachedKeypairRef?.deref();
+    if (cachedAgain) return cachedAgain;
     const keypair = await this._loadKeypair();
     this.cachedKeypairRef = new WeakRef(keypair);
     return keypair;
   }
 
   private async _loadKeypair(): Promise<Keypair> {
-    const content = await readFile(this.filePath, "utf8");
+    return this._loadKeypairFromFile(this.filePath, this.aesKey);
+  }
+
+  private async _loadKeypairFromFile(filePath: string, aesKey: Buffer): Promise<Keypair> {
+    const content = await readFile(filePath, "utf8");
     const { iv, authTag, ciphertext } = parseEncryptedPayload(content);
-    const decipher = createDecipheriv("aes-256-gcm", this.aesKey, iv);
+    const decipher = createDecipheriv("aes-256-gcm", aesKey, iv);
     decipher.setAuthTag(authTag);
     const plaintext = Buffer.concat([
       decipher.update(ciphertext),
@@ -113,6 +153,22 @@ export class EncryptedFileSigner implements Signer {
     ]);
     const secret = extractSecretFromPem(plaintext.toString("utf8"));
     return Keypair.fromSecret(secret);
+  }
+
+  private async _deriveKey(passphrase: string): Promise<Buffer> {
+    return new Promise<Buffer>((resolve, reject) => {
+      pbkdf2(
+        passphrase,
+        "split-sdk-rotation-salt",
+        100_000,
+        32,
+        "sha256",
+        (err, derivedKey) => {
+          if (err) reject(err);
+          else resolve(Buffer.from(derivedKey));
+        },
+      );
+    });
   }
 }
 
