@@ -18,4 +18,10 @@ describe("public API surface (issues #586, #588, #589)", () => {
     expect(typeof sdk.footprintDiff).toBe("function");
     expect(typeof sdk.submitTransaction).toBe("function");
   });
+
+  it("exports LobstrAdapter and WalletConnectionTimeoutError", () => {
+    expect(typeof sdk.LobstrAdapter).toBe("function");
+    expect(typeof sdk.WalletConnectionTimeoutError).toBe("function");
+    expect(typeof sdk.isWalletConnectionTimeoutError).toBe("function");
+  });
 });

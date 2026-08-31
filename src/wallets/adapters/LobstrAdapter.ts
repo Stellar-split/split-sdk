@@ -1,8 +1,9 @@
 /**
- * LobstrAdapter — Adapter for the LOBSTR wallet extension.
+ * LobstrAdapter — Adapter for the LOBSTR wallet extension and deep link provider.
  */
 
 import type { WalletAdapter } from "../../types.js";
+import { WalletConnectionTimeoutError } from "../../errors.js";
 
 type Unsubscribe = () => void;
 
@@ -17,21 +18,58 @@ declare global {
   }
 }
 
+/**
+ * Options for configuring {@link LobstrAdapter}.
+ */
+export interface LobstrAdapterOptions {
+  /**
+   * Maximum time (in milliseconds) to wait for a connection response before timing out.
+   * Default: 60000 (60 seconds).
+   */
+  connectionTimeoutMs?: number;
+}
+
 export class LobstrAdapter implements WalletAdapter {
   readonly name = "LOBSTR";
+  readonly connectionTimeoutMs: number;
   private accountChangeHandlers: Array<(address: string) => void> = [];
+  private accountChangedHandler: ((data: any) => void) | null = null;
+
+  constructor(options?: LobstrAdapterOptions) {
+    this.connectionTimeoutMs = options?.connectionTimeoutMs ?? 60_000;
+  }
 
   async connect(): Promise<string> {
     if (!window.lobstr) {
       throw new Error("LOBSTR wallet not installed");
     }
 
-    const result = await window.lobstr.connect();
-    
-    // Set up account change listener
-    this.setupAccountChangeListener();
-    
-    return result.publicKey;
+    let timer: NodeJS.Timeout | undefined;
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(
+          new WalletConnectionTimeoutError(
+            `LOBSTR connection timed out after ${this.connectionTimeoutMs}ms`,
+            { timeoutMs: this.connectionTimeoutMs },
+          ),
+        );
+      }, this.connectionTimeoutMs);
+    });
+
+    try {
+      const connectPromise = window.lobstr.connect();
+      const result = await Promise.race([connectPromise, timeoutPromise]);
+
+      // Set up account change listener
+      this.setupAccountChangeListener();
+
+      return result.publicKey;
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
   }
 
   async sign(xdr: string): Promise<string> {
@@ -48,8 +86,28 @@ export class LobstrAdapter implements WalletAdapter {
       throw new Error("LOBSTR wallet not installed");
     }
 
-    const result = await window.lobstr.connect();
-    return result.publicKey;
+    let timer: NodeJS.Timeout | undefined;
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        reject(
+          new WalletConnectionTimeoutError(
+            `LOBSTR connection timed out after ${this.connectionTimeoutMs}ms`,
+            { timeoutMs: this.connectionTimeoutMs },
+          ),
+        );
+      }, this.connectionTimeoutMs);
+    });
+
+    try {
+      const connectPromise = window.lobstr.connect();
+      const result = await Promise.race([connectPromise, timeoutPromise]);
+      return result.publicKey;
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
   }
 
   async signTransaction(xdr: string, _network: string): Promise<string> {
@@ -57,13 +115,16 @@ export class LobstrAdapter implements WalletAdapter {
   }
 
   disconnect(): void {
+    if (this.accountChangedHandler && window.lobstr && typeof window.lobstr.off === "function") {
+      window.lobstr.off("accountChanged", this.accountChangedHandler);
+      this.accountChangedHandler = null;
+    }
     this.accountChangeHandlers = [];
-    // LOBSTR doesn't have explicit disconnect
   }
 
   onAccountChange(handler: (address: string) => void): Unsubscribe {
     this.accountChangeHandlers.push(handler);
-    
+
     return () => {
       const index = this.accountChangeHandlers.indexOf(handler);
       if (index > -1) {
@@ -75,7 +136,11 @@ export class LobstrAdapter implements WalletAdapter {
   private setupAccountChangeListener(): void {
     if (!window.lobstr) return;
 
-    const handler = (data: any) => {
+    if (this.accountChangedHandler && typeof window.lobstr.off === "function") {
+      window.lobstr.off("accountChanged", this.accountChangedHandler);
+    }
+
+    this.accountChangedHandler = (data: any) => {
       const newAddress = data?.publicKey;
       if (newAddress) {
         for (const h of this.accountChangeHandlers) {
@@ -88,6 +153,9 @@ export class LobstrAdapter implements WalletAdapter {
       }
     };
 
-    window.lobstr.on("accountChanged", handler);
+    if (typeof window.lobstr.on === "function") {
+      window.lobstr.on("accountChanged", this.accountChangedHandler);
+    }
   }
 }
+
