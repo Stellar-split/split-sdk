@@ -51,3 +51,134 @@ export class WarmStandby {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// StandbyController — issue #702
+// ---------------------------------------------------------------------------
+
+/** Options accepted by {@link StandbyController}. */
+export interface StandbyControllerOptions {
+  /**
+   * Duration in milliseconds during which standby activation is suppressed
+   * after {@link StandbyController.start} is called.
+   *
+   * Useful to prevent normal initialisation traffic from falsely triggering
+   * standby mode during startup.
+   *
+   * @default 0
+   */
+  warmUpMs?: number;
+
+  /**
+   * Milliseconds of inactivity before standby mode is activated.
+   *
+   * @default 30_000
+   */
+  inactivityMs?: number;
+}
+
+/**
+ * Controls standby-mode activation based on inactivity, with an optional
+ * warm-up window that suppresses standby during startup.
+ *
+ * @example
+ * ```typescript
+ * const ctrl = new StandbyController({ warmUpMs: 5_000, inactivityMs: 30_000 });
+ * ctrl.onStandby(() => console.log("entered standby"));
+ * ctrl.start();
+ *
+ * // Record activity whenever the SDK makes an RPC call:
+ * ctrl.recordActivity();
+ * ```
+ */
+export class StandbyController {
+  private readonly warmUpMs: number;
+  private readonly inactivityMs: number;
+  private standbyListeners: Array<() => void> = [];
+  private inactivityHandle: ReturnType<typeof setTimeout> | null = null;
+  private warmUpHandle: ReturnType<typeof setTimeout> | null = null;
+  private isWarmedUp = false;
+  private isStandby = false;
+  private started = false;
+
+  constructor(options: StandbyControllerOptions = {}) {
+    this.warmUpMs = options.warmUpMs ?? 0;
+    this.inactivityMs = options.inactivityMs ?? 30_000;
+  }
+
+  /**
+   * Register a callback invoked when standby mode activates.
+   */
+  onStandby(listener: () => void): void {
+    this.standbyListeners.push(listener);
+  }
+
+  /**
+   * Start the controller.  The warm-up timer begins immediately; inactivity
+   * detection only arms once the warm-up period has elapsed.
+   */
+  start(): void {
+    if (this.started) return;
+    this.started = true;
+    this.isStandby = false;
+
+    if (this.warmUpMs > 0) {
+      // Suppress inactivity detection during the warm-up window.
+      this.warmUpHandle = setTimeout(() => {
+        this.warmUpHandle = null;
+        this.isWarmedUp = true;
+        this.scheduleStandby();
+      }, this.warmUpMs);
+    } else {
+      this.isWarmedUp = true;
+      this.scheduleStandby();
+    }
+  }
+
+  /**
+   * Record that activity occurred.  Resets the inactivity timer (but only
+   * after the warm-up period has ended).
+   */
+  recordActivity(): void {
+    if (!this.isWarmedUp) return;
+    this.cancelStandby();
+    this.scheduleStandby();
+  }
+
+  /** Whether the controller is currently in standby mode. */
+  get standby(): boolean {
+    return this.isStandby;
+  }
+
+  /** Stop the controller and cancel all pending timers. */
+  stop(): void {
+    this.cancelStandby();
+    if (this.warmUpHandle !== null) {
+      clearTimeout(this.warmUpHandle);
+      this.warmUpHandle = null;
+    }
+    this.started = false;
+    this.isWarmedUp = false;
+    this.isStandby = false;
+  }
+
+  // ---- private helpers ----
+
+  private scheduleStandby(): void {
+    this.inactivityHandle = setTimeout(() => {
+      this.inactivityHandle = null;
+      this.isStandby = true;
+      for (const listener of this.standbyListeners) {
+        listener();
+      }
+    }, this.inactivityMs);
+  }
+
+  private cancelStandby(): void {
+    if (this.inactivityHandle !== null) {
+      clearTimeout(this.inactivityHandle);
+      this.inactivityHandle = null;
+    }
+    this.isStandby = false;
+  }
+}

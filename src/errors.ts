@@ -2163,3 +2163,51 @@ export class SdkError extends Error {
 export function isSdkError(err: unknown): err is SdkError {
   return err instanceof SdkError;
 }
+
+// ---------------------------------------------------------------------------
+// Three-way merge errors (issue #703)
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown by {@link mergeInvoices} when both local and remote branches have
+ * modified the same field relative to the common base, producing a conflict
+ * that cannot be resolved automatically.
+ */
+export class MergeConflictError extends StellarSplitError {
+  /** The invoice field that caused the conflict. */
+  readonly field: string;
+  /** The value of the field on the base (common ancestor) invoice. */
+  readonly baseValue: unknown;
+  /** The value of the field on the local branch. */
+  readonly localValue: unknown;
+  /** The value of the field on the remote branch. */
+  readonly remoteValue: unknown;
+
+  constructor(
+    field: string,
+    baseValue: unknown,
+    localValue: unknown,
+    remoteValue: unknown,
+  ) {
+    super(
+      `Merge conflict on field "${field}": both branches diverged from base`,
+      "MERGE_CONFLICT",
+      {
+        field,
+        baseValue: typeof baseValue === "bigint" ? baseValue.toString() : baseValue,
+        localValue: typeof localValue === "bigint" ? localValue.toString() : localValue,
+        remoteValue: typeof remoteValue === "bigint" ? remoteValue.toString() : remoteValue,
+      },
+    );
+    this.name = "MergeConflictError";
+    this.field = field;
+    this.baseValue = baseValue;
+    this.localValue = localValue;
+    this.remoteValue = remoteValue;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isMergeConflictError(err: unknown): err is MergeConflictError {
+  return err instanceof MergeConflictError;
+}

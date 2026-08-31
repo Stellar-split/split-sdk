@@ -1,11 +1,13 @@
 /**
- * Invoice diff utility — compare two invoice states.
- * 
- * Pure function with no RPC calls or side effects.
- * Returns structured diff showing only changed fields.
+ * Invoice diff utility — compare two invoice states and perform three-way
+ * merge for invoice state reconciliation.
+ *
+ * Pure functions with no RPC calls or side effects.
+ * Returns structured diff showing only changed fields, or a merged invoice.
  */
 
 import type { Invoice } from "./types.js";
+import { MergeConflictError } from "./errors.js";
 
 /**
  * A single field change in an invoice diff.
@@ -188,4 +190,69 @@ export function diffInvoices(a: Invoice, b: Invoice): InvoiceDiff {
  */
 export function hasDiff(a: Invoice, b: Invoice): boolean {
   return diffInvoices(a, b).length > 0;
+}
+
+/**
+ * Perform a three-way merge of invoice states.
+ *
+ * Compares `local` and `remote` each against the common `base` ancestor and
+ * produces a single merged invoice according to these rules:
+ *
+ * - **Neither branch modified the field** → keep the base value unchanged.
+ * - **Only one branch modified the field** → use that branch's value (fast-forward).
+ * - **Both branches modified the field to different values** → throw {@link MergeConflictError}.
+ * - **Both branches modified the field to the *same* value** → use that value (no conflict).
+ *
+ * @param base   - The common ancestor invoice (fork point).
+ * @param local  - The locally-modified copy of the invoice.
+ * @param remote - The remotely-modified copy of the invoice.
+ * @returns A new merged `Invoice` object.
+ * @throws {MergeConflictError} When both branches diverge on the same field.
+ *
+ * @example
+ * ```typescript
+ * const base   = await client.getInvoice("123"); // original snapshot
+ * const local  = { ...base, memo: "updated locally" };
+ * const remote = await client.getInvoice("123"); // re-fetched after remote edit
+ *
+ * const merged = mergeInvoices(base, local, remote);
+ * ```
+ */
+export function mergeInvoices(base: Invoice, local: Invoice, remote: Invoice): Invoice {
+  const merged: Invoice = { ...base };
+
+  for (const field of INVOICE_FIELDS) {
+    const baseVal   = base[field];
+    const localVal  = local[field];
+    const remoteVal = remote[field];
+
+    const localChanged  = !valuesEqual(baseVal, localVal);
+    const remoteChanged = !valuesEqual(baseVal, remoteVal);
+
+    if (!localChanged && !remoteChanged) {
+      // Neither branch touched this field — keep base value.
+      continue;
+    }
+
+    if (localChanged && !remoteChanged) {
+      // Only local changed — take local value.
+      (merged as Record<string, unknown>)[field] = localVal;
+      continue;
+    }
+
+    if (!localChanged && remoteChanged) {
+      // Only remote changed — take remote value.
+      (merged as Record<string, unknown>)[field] = remoteVal;
+      continue;
+    }
+
+    // Both changed — conflict unless they converged to the same value.
+    if (valuesEqual(localVal, remoteVal)) {
+      (merged as Record<string, unknown>)[field] = localVal;
+    } else {
+      throw new MergeConflictError(field, baseVal, localVal, remoteVal);
+    }
+  }
+
+  return merged;
 }
