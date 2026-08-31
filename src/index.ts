@@ -1404,7 +1404,11 @@ export type {
 // #588 — Soroban Transaction Footprint Optimizer
 // ---------------------------------------------------------------------------
 
-export { optimizeFootprint } from "./soroban/footprint.js";
+export {
+  optimizeFootprint,
+  simulateFootprint,
+  clearFootprintSimulationCache,
+} from "./soroban/footprint.js";
 export type {
   OptimizeFootprintOptions,
   FootprintLogger,
