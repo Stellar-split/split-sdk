@@ -2211,3 +2211,23 @@ export class MergeConflictError extends StellarSplitError {
 export function isMergeConflictError(err: unknown): err is MergeConflictError {
   return err instanceof MergeConflictError;
 }
+
+// ---------------------------------------------------------------------------
+// Keypair format and signing validation errors (issue #768)
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown when a KeypairSigner is constructed with an invalid secret key or keypair.
+ */
+export class InvalidKeypairError extends StellarSplitError {
+  constructor(message: string, context?: Record<string, unknown>, raw?: string) {
+    super(message, "INVALID_KEYPAIR", context, raw);
+    this.name = "InvalidKeypairError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isInvalidKeypairError(err: unknown): err is InvalidKeypairError {
+  return err instanceof InvalidKeypairError;
+}
+

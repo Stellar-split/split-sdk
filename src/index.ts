@@ -213,6 +213,9 @@ export {
   SdkError,
   SdkErrorCode,
   isSdkError,
+  // Keypair format and signing validation (issue #768)
+  InvalidKeypairError,
+  isInvalidKeypairError,
 } from "./errors.js";
 
 // Invoice metadata JSON Schema validator (issue #533)

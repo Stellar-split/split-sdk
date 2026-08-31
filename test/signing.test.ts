@@ -13,10 +13,16 @@ import {
   encryptSigningKeyToPem,
 } from "../src/signing/adapters/EncryptedFileSigner.js";
 
+import {
+  InvalidKeypairError,
+  isInvalidKeypairError,
+  StellarSplitError,
+} from "../src/errors.js";
+
 const TX_HASH = randomBytes(32);
 
 describe("KeypairSigner", () => {
-  it("produces a 64-byte ed25519 signature verifiable by Keypair.verify", async () => {
+  it("produces a 64-byte ed25519 signature verifiable by Keypair.verify when initialized with Keypair", async () => {
     const keypair = Keypair.random();
     const signer = new KeypairSigner(keypair);
 
@@ -34,6 +40,71 @@ describe("KeypairSigner", () => {
     const signature = await signer.sign(TX_HASH);
 
     expect(other.verify(TX_HASH, signature)).toBe(false);
+  });
+
+  it("constructs and signs correctly when initialized with a valid secret key string", async () => {
+    const keypair = Keypair.random();
+    const secret = keypair.secret();
+    const signer = new KeypairSigner(secret);
+
+    expect(signer.keypair.publicKey()).toBe(keypair.publicKey());
+    const signature = await signer.sign(TX_HASH);
+    expect(signature).toHaveLength(64);
+    expect(keypair.verify(TX_HASH, signature)).toBe(true);
+  });
+
+  it("throws InvalidKeypairError when secret key does not start with 'S' (e.g. public key)", () => {
+    const publicKey = "GBYVQHUDHLWQMS5GZZ7W4P6OCBW5MVAOUXCTFB7VOVLIKGOOQT5ATOZ4";
+    expect(() => new KeypairSigner(publicKey)).toThrow(InvalidKeypairError);
+    expect(() => new KeypairSigner(publicKey)).toThrow(/Invalid secret key format/);
+  });
+
+  it("throws InvalidKeypairError when secret key has invalid length or base32 encoding", () => {
+    expect(() => new KeypairSigner("S123")).toThrow(InvalidKeypairError);
+    expect(() => new KeypairSigner("S123")).toThrow(/Invalid secret key format/);
+    expect(() => new KeypairSigner("not-a-secret-key")).toThrow(InvalidKeypairError);
+  });
+
+  it("throws InvalidKeypairError when secret key has invalid checksum", () => {
+    const invalidChecksumKey = "SAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    expect(() => new KeypairSigner(invalidChecksumKey)).toThrow(InvalidKeypairError);
+    expect(() => new KeypairSigner(invalidChecksumKey)).toThrow(/invalid checksum/i);
+  });
+
+  it("throws InvalidKeypairError when secret key is empty string", () => {
+    expect(() => new KeypairSigner("")).toThrow(InvalidKeypairError);
+  });
+
+  it("throws InvalidKeypairError when Keypair cannot sign (public key only)", () => {
+    const pubKeypair = Keypair.fromPublicKey("GBYVQHUDHLWQMS5GZZ7W4P6OCBW5MVAOUXCTFB7VOVLIKGOOQT5ATOZ4");
+    expect(() => new KeypairSigner(pubKeypair)).toThrow(InvalidKeypairError);
+    expect(() => new KeypairSigner(pubKeypair)).toThrow(/Keypair does not contain a secret key for signing/);
+  });
+
+  it("throws InvalidKeypairError for invalid input types", () => {
+    expect(() => new KeypairSigner(null as unknown as string)).toThrow(InvalidKeypairError);
+    expect(() => new KeypairSigner(undefined as unknown as string)).toThrow(InvalidKeypairError);
+    expect(() => new KeypairSigner(12345 as unknown as string)).toThrow(InvalidKeypairError);
+    expect(() => new KeypairSigner({} as unknown as Keypair)).toThrow(InvalidKeypairError);
+  });
+
+  it("InvalidKeypairError has correct code, name, and prototype hierarchy", () => {
+    const err = new InvalidKeypairError("format error");
+    expect(err).toBeInstanceOf(Error);
+    expect(err).toBeInstanceOf(StellarSplitError);
+    expect(err).toBeInstanceOf(InvalidKeypairError);
+    expect(err.name).toBe("InvalidKeypairError");
+    expect(err.code).toBe("INVALID_KEYPAIR");
+    expect(err.message).toBe("format error");
+  });
+
+  it("isInvalidKeypairError correctly identifies InvalidKeypairError instances", () => {
+    const err = new InvalidKeypairError("test");
+    expect(isInvalidKeypairError(err)).toBe(true);
+    expect(isInvalidKeypairError(new Error("test"))).toBe(false);
+    expect(isInvalidKeypairError(null)).toBe(false);
+    expect(isInvalidKeypairError(undefined)).toBe(false);
+    expect(isInvalidKeypairError({ name: "InvalidKeypairError" })).toBe(false);
   });
 });
 
