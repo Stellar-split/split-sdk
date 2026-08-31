@@ -413,6 +413,7 @@ export type {
   PreviewTokenSwapResult,
   SDKHealth,
   FeeBreakdown,
+  FeeStats,
   TokenInfo,
   ExpiryEvent,
   ExpiryCallback,
@@ -1038,11 +1039,13 @@ export type {
 } from "./xdrParser.js";
 
 // ---------------------------------------------------------------------------
-// Fee surge detector
+// Fee surge detector & Fee Estimator
 // ---------------------------------------------------------------------------
 
 export { detectFeeSurge, clearFeeSurgeCache } from "./feeSurgeDetector.js";
 export type { FeeSurgeConfig, FeeRecommendation, CongestionLevel } from "./feeSurgeDetector.js";
+export { estimateFee, estimateFeeForAmount, estimateOperationCost } from "./feeEstimator.js";
+export type { FeeEstimate, FeeEstimateError, FeeEstimationStrategy } from "./feeEstimator.js";
 
 export {
   reconcileChannel,

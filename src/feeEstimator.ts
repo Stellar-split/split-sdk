@@ -16,6 +16,10 @@ import {
   rpc as SorobanRpc,
   BASE_FEE,
 } from "@stellar/stellar-sdk";
+import { SdkError, SdkErrorCode } from "./errors.js";
+import type { FeeStats } from "./types.js";
+
+export type { FeeStats } from "./types.js";
 
 export interface FeeEstimate {
   baseFee: string;
@@ -53,6 +57,37 @@ export function estimateFee(type: string, params: unknown): number {
     throw new RangeError(`Unknown fee estimation strategy: ${type}`);
   }
   return strategy.estimate(params);
+}
+
+/**
+ * Estimates transaction fee for a given payment amount based on fee statistics.
+ *
+ * @param amount - Payment amount in stroops (must be non-negative)
+ * @param feeStats - Fee statistics including baseFee, p50Fee, and p99Fee
+ * @returns Object with feeLumens (bigint), feePercent (number), and totalWithFee (bigint)
+ * @throws {SdkError} with code `INVALID_RECIPIENT` if `amount` is negative
+ */
+export function estimateFeeForAmount(
+  amount: bigint,
+  feeStats: FeeStats,
+): { feeLumens: bigint; feePercent: number; totalWithFee: bigint } {
+  if (amount < 0n) {
+    throw new SdkError(
+      "Payment amount cannot be negative",
+      SdkErrorCode.INVALID_RECIPIENT,
+      { amount },
+    );
+  }
+
+  const feeLumens = feeStats.baseFee;
+  const totalWithFee = amount + feeLumens;
+  const feePercent = amount === 0n ? 0 : (Number(feeLumens) / Number(amount)) * 100;
+
+  return {
+    feeLumens,
+    feePercent,
+    totalWithFee,
+  };
 }
 
 /**

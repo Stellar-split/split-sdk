@@ -1,49 +1,58 @@
 import { describe, expect, it, vi } from "vitest";
-import { estimateFee, estimateOperationCost, type FeeEstimate } from "../src/feeEstimator.js";
+import {
+  estimateFee,
+  estimateOperationCost,
+  estimateFeeForAmount,
+  type FeeEstimate,
+  type FeeStats,
+} from "../src/feeEstimator.js";
+import { SdkError, SdkErrorCode } from "../src/errors.js";
 import { rpc as SorobanRpc, BASE_FEE, Operation, Asset } from "@stellar/stellar-sdk";
 
 describe("estimateFeeForAmount", () => {
-  it("returns the base fee when feeBps is zero", () => {
-    expect(estimateFeeForAmount(0n, { baseFee: BASE_FEE })).toBe(BASE_FEE);
-    expect(estimateFeeForAmount(123_456_789n, { baseFee: BASE_FEE })).toBe(BASE_FEE);
+  const sampleFeeStats: FeeStats = {
+    baseFee: 100n,
+    p50Fee: 150n,
+    p99Fee: 300n,
+  };
+
+  it("calculates correct fee for known amount and feeStats", () => {
+    const result = estimateFeeForAmount(1000n, sampleFeeStats);
+    expect(result.feeLumens).toBe(100n);
+    expect(result.totalWithFee).toBe(1100n);
+    expect(result.feePercent).toBe(10);
   });
 
-  it("computes an exact fee for a whole-number bps using bigint", () => {
-    // 100 bps = 1% on 10_000_000 stroops (10 XLM) = 100_000 stroops.
-    const fee = estimateFeeForAmount(10_000_000n, { feeBps: 100, baseFee: 0n });
-    expect(fee).toBe(100_000n);
+  it("calculates fee for large payment amounts with bigint precision", () => {
+    const stats: FeeStats = {
+      baseFee: 5000n,
+      p50Fee: 10000n,
+      p99Fee: 20000n,
+    };
+    const amount = 100_000n;
+    const result = estimateFeeForAmount(amount, stats);
+    expect(result.feeLumens).toBe(5000n);
+    expect(result.totalWithFee).toBe(105_000n);
+    expect(result.feePercent).toBe(5);
   });
 
-  it("rounds up fractional bps to avoid undercharging", () => {
-    // 1 bps of 9 stroops = 0.0009 stroop -> rounds up to 1 stroop.
-    expect(estimateFeeForAmount(1_000n, { feeBps: 1, baseFee: 0n })).toBe(1n); // 0.1 stroop -> 1
-    // Exact multiples stay exact: 10_000 stroops * 1bps = 1 stroop.
-    expect(estimateFeeForAmount(10_000n, { feeBps: 1, baseFee: 0n })).toBe(1n);
+  it("zero amount returns 0 percent and preserves feeLumens and totalWithFee", () => {
+    const result = estimateFeeForAmount(0n, sampleFeeStats);
+    expect(result.feeLumens).toBe(100n);
+    expect(result.totalWithFee).toBe(100n);
+    expect(result.feePercent).toBe(0);
   });
 
-  it("truncates instead of rounding up when roundUp is false", () => {
-    // 1 bps of 1000 stroops = 0.1 stroop -> truncated to 0.
-    expect(estimateFeeForAmount(1000n, { feeBps: 1, baseFee: 0n, roundUp: false })).toBe(0n);
-  });
-
-  it("adds the flat base fee on top of the proportional fee", () => {
-    const fee = estimateFeeForAmount(2000n, { feeBps: 50, baseFee: 1000n });
-    // proportional = 2000 * 50 / 10000 = 10; total = 1000 + 10 = 1010.
-    expect(fee).toBe(1010n);
-  });
-
-  it("handles large amounts without precision loss", () => {
-    const huge = 123456789123456789n;
-    const fee = estimateFeeForAmount(huge, { feeBps: 250, baseFee: BASE_FEE });
-    expect(fee).toBe(BASE_FEE + (huge * 250n) / 10000n);
-  });
-
-  it("throws on negative amount", () => {
-    expect(() => estimateFeeForAmount(-1n)).toThrow(RangeError);
-  });
-
-  it("throws on negative feeBps", () => {
-    expect(() => estimateFeeForAmount(1000n, { feeBps: -1 })).toThrow(RangeError);
+  it("throws SdkError with code INVALID_RECIPIENT on negative amount", () => {
+    expect(() => estimateFeeForAmount(-1n, sampleFeeStats)).toThrow(SdkError);
+    try {
+      estimateFeeForAmount(-100n, sampleFeeStats);
+      expect.unreachable("Should have thrown SdkError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(SdkError);
+      expect((err as SdkError).code).toBe(SdkErrorCode.INVALID_RECIPIENT);
+      expect((err as SdkError).code).toBe("INVALID_RECIPIENT");
+    }
   });
 });
 

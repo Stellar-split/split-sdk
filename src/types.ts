@@ -653,6 +653,13 @@ export interface FeeBreakdown {
   feeBps: number;
 }
 
+/** Fee statistics for network operations. */
+export interface FeeStats {
+  baseFee: bigint;
+  p50Fee: bigint;
+  p99Fee: bigint;
+}
+
 /** Token metadata information. */
 export interface TokenInfo {
   /** Token contract address. */
