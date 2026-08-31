@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { Keypair } from "@stellar/stellar-sdk";
 import { KeypairSigner } from "../src/signing/adapters/KeypairSigner.js";
-import { CloudKmsSigner } from "../src/signing/adapters/CloudKmsSigner.js";
+import { CloudKmsSigner, isRegionError } from "../src/signing/adapters/CloudKmsSigner.js";
 import type { KmsClient } from "../src/signing/adapters/CloudKmsSigner.js";
 import {
   EncryptedFileSigner,
@@ -59,6 +59,225 @@ describe("CloudKmsSigner", () => {
     const signer = new CloudKmsSigner(fakeKms, "key-id");
     expect(signer.keyId).toBe("key-id");
     expect(() => new CloudKmsSigner(fakeKms, "key-id")).not.toThrow();
+  });
+
+  it("stores configured region and fallbackRegions", () => {
+    const fakeKms = { sign: vi.fn(async () => Buffer.alloc(64, 1)) };
+    const signer = new CloudKmsSigner(fakeKms, "key-id", {
+      region: "us-east-1",
+      fallbackRegions: ["us-west-2", "eu-central-1"],
+    });
+    expect(signer.region).toBe("us-east-1");
+    expect(signer.fallbackRegions).toEqual(["us-west-2", "eu-central-1"]);
+  });
+
+  it("signs successfully in primary region when region is configured", async () => {
+    const signature = randomBytes(64);
+    const kmsClient: KmsClient = {
+      sign: vi.fn(async (_keyId, _digest, options) => {
+        expect(options?.region).toBe("us-east-1");
+        return signature;
+      }),
+    };
+    const signer = new CloudKmsSigner(kmsClient, "alias/split-key", {
+      region: "us-east-1",
+      fallbackRegions: ["us-west-2"],
+    });
+
+    const result = await signer.sign(TX_HASH);
+    expect(result).toEqual(signature);
+    expect(kmsClient.sign).toHaveBeenCalledTimes(1);
+    expect(kmsClient.sign).toHaveBeenCalledWith("alias/split-key", TX_HASH, { region: "us-east-1" });
+  });
+
+  it("retries in fallback region on HTTP 503 error and emits regionFallback event", async () => {
+    const signature = randomBytes(64);
+    const fallbackEvents: Array<{ from: string; to: string }> = [];
+
+    const kmsClient: KmsClient = {
+      sign: vi.fn(async (_keyId, _digest, options) => {
+        if (options?.region === "us-east-1") {
+          const err = new Error("503 Service Unavailable");
+          (err as unknown as { statusCode: number }).statusCode = 503;
+          throw err;
+        }
+        if (options?.region === "us-west-2") {
+          return signature;
+        }
+        throw new Error("unexpected region");
+      }),
+    };
+
+    const signer = new CloudKmsSigner(kmsClient, "alias/split-key", {
+      region: "us-east-1",
+      fallbackRegions: ["us-west-2"],
+    });
+    signer.on("regionFallback", (event) => fallbackEvents.push(event));
+
+    const result = await signer.sign(TX_HASH);
+    expect(result).toEqual(signature);
+    expect(kmsClient.sign).toHaveBeenCalledTimes(2);
+    expect(kmsClient.sign).toHaveBeenNthCalledWith(1, "alias/split-key", TX_HASH, { region: "us-east-1" });
+    expect(kmsClient.sign).toHaveBeenNthCalledWith(2, "alias/split-key", TX_HASH, { region: "us-west-2" });
+    expect(fallbackEvents).toEqual([{ from: "us-east-1", to: "us-west-2" }]);
+  });
+
+  it("retries in fallback region on timeout error and emits regionFallback event", async () => {
+    const signature = randomBytes(64);
+    const fallbackEvents: Array<{ from: string; to: string }> = [];
+
+    const kmsClient: KmsClient = {
+      sign: vi.fn(async (_keyId, _digest, options) => {
+        if (options?.region === "us-east-1") {
+          const timeoutErr = new Error("Request timed out after 5000ms");
+          timeoutErr.name = "TimeoutError";
+          throw timeoutErr;
+        }
+        if (options?.region === "us-west-2") {
+          return signature;
+        }
+        throw new Error("unexpected region");
+      }),
+    };
+
+    const signer = new CloudKmsSigner(kmsClient, "alias/split-key", {
+      region: "us-east-1",
+      fallbackRegions: ["us-west-2"],
+    });
+    signer.on("regionFallback", (event) => fallbackEvents.push(event));
+
+    const result = await signer.sign(TX_HASH);
+    expect(result).toEqual(signature);
+    expect(fallbackEvents).toEqual([{ from: "us-east-1", to: "us-west-2" }]);
+  });
+
+  it("retries through multiple fallback regions in order and emits regionFallback event for each switch", async () => {
+    const signature = randomBytes(64);
+    const fallbackEvents: Array<{ from: string; to: string }> = [];
+
+    const kmsClient: KmsClient = {
+      sign: vi.fn(async (_keyId, _digest, options) => {
+        if (options?.region === "us-east-1") {
+          const err = new Error("KMS unavailable in region us-east-1");
+          (err as unknown as { statusCode: number }).statusCode = 503;
+          throw err;
+        }
+        if (options?.region === "us-west-2") {
+          const err = new Error("Connection reset by peer");
+          (err as unknown as { code: string }).code = "ECONNRESET";
+          throw err;
+        }
+        if (options?.region === "eu-central-1") {
+          return signature;
+        }
+        throw new Error("unexpected region");
+      }),
+    };
+
+    const signer = new CloudKmsSigner(kmsClient, "alias/split-key", {
+      region: "us-east-1",
+      fallbackRegions: ["us-west-2", "eu-central-1"],
+    });
+    signer.on("regionFallback", (event) => fallbackEvents.push(event));
+
+    const result = await signer.sign(TX_HASH);
+    expect(result).toEqual(signature);
+    expect(kmsClient.sign).toHaveBeenCalledTimes(3);
+    expect(fallbackEvents).toEqual([
+      { from: "us-east-1", to: "us-west-2" },
+      { from: "us-west-2", to: "eu-central-1" },
+    ]);
+  });
+
+  it("throws last region error when all fallback regions fail", async () => {
+    const fallbackEvents: Array<{ from: string; to: string }> = [];
+
+    const kmsClient: KmsClient = {
+      sign: vi.fn(async (_keyId, _digest, options) => {
+        const err = new Error(`503 unavailable in ${options?.region}`);
+        (err as unknown as { statusCode: number }).statusCode = 503;
+        throw err;
+      }),
+    };
+
+    const signer = new CloudKmsSigner(kmsClient, "alias/split-key", {
+      region: "us-east-1",
+      fallbackRegions: ["us-west-2"],
+    });
+    signer.on("regionFallback", (event) => fallbackEvents.push(event));
+
+    await expect(signer.sign(TX_HASH)).rejects.toThrow("503 unavailable in us-west-2");
+    expect(kmsClient.sign).toHaveBeenCalledTimes(2);
+    expect(fallbackEvents).toEqual([{ from: "us-east-1", to: "us-west-2" }]);
+  });
+
+  it("does NOT trigger fallback on non-region errors (e.g. PermissionDenied, 403, 401)", async () => {
+    const fallbackEvents: Array<{ from: string; to: string }> = [];
+
+    const kmsClient: KmsClient = {
+      sign: vi.fn(async () => {
+        const err = new Error("AccessDenied: User is not authorized to perform: kms:Sign");
+        (err as unknown as { statusCode: number }).statusCode = 403;
+        throw err;
+      }),
+    };
+
+    const signer = new CloudKmsSigner(kmsClient, "alias/split-key", {
+      region: "us-east-1",
+      fallbackRegions: ["us-west-2", "eu-central-1"],
+    });
+    signer.on("regionFallback", (event) => fallbackEvents.push(event));
+
+    await expect(signer.sign(TX_HASH)).rejects.toThrow(/AccessDenied/);
+    expect(kmsClient.sign).toHaveBeenCalledTimes(1);
+    expect(fallbackEvents).toHaveLength(0);
+  });
+
+  it("does NOT trigger fallback on validation or key not found errors", async () => {
+    const kmsClient: KmsClient = {
+      sign: vi.fn(async () => {
+        throw new Error("ValidationException: 1 validation error detected");
+      }),
+    };
+
+    const signer = new CloudKmsSigner(kmsClient, "alias/split-key", {
+      region: "us-east-1",
+      fallbackRegions: ["us-west-2"],
+    });
+
+    await expect(signer.sign(TX_HASH)).rejects.toThrow(/ValidationException/);
+    expect(kmsClient.sign).toHaveBeenCalledTimes(1);
+  });
+
+  it("isRegionError correctly classifies region vs non-region errors", () => {
+    expect(isRegionError(null)).toBe(false);
+    expect(isRegionError(undefined)).toBe(false);
+
+    // Region errors
+    expect(isRegionError({ statusCode: 503 })).toBe(true);
+    expect(isRegionError({ status: 502 })).toBe(true);
+    expect(isRegionError({ statusCode: 504 })).toBe(true);
+    expect(isRegionError({ statusCode: 408 })).toBe(true);
+    expect(isRegionError({ statusCode: 429 })).toBe(true);
+    expect(isRegionError({ code: "ETIMEDOUT" })).toBe(true);
+    expect(isRegionError({ code: "ECONNRESET" })).toBe(true);
+    expect(isRegionError({ code: "ECONNREFUSED" })).toBe(true);
+    expect(isRegionError({ name: "TimeoutError" })).toBe(true);
+    expect(isRegionError(new Error("503 Service Unavailable"))).toBe(true);
+    expect(isRegionError(new Error("Gateway Timeout"))).toBe(true);
+    expect(isRegionError(new Error("Request timed out"))).toBe(true);
+    expect(isRegionError(new Error("KMS region unavailable"))).toBe(true);
+
+    // Non-region errors
+    expect(isRegionError({ statusCode: 403 })).toBe(false);
+    expect(isRegionError({ statusCode: 401 })).toBe(false);
+    expect(isRegionError({ statusCode: 400 })).toBe(false);
+    expect(isRegionError({ statusCode: 404 })).toBe(false);
+    expect(isRegionError(new Error("AccessDenied: User not authorized"))).toBe(false);
+    expect(isRegionError(new Error("PermissionDenied"))).toBe(false);
+    expect(isRegionError(new Error("Unauthorized"))).toBe(false);
+    expect(isRegionError(new Error("KeyNotFound: Key does not exist"))).toBe(false);
+    expect(isRegionError(new Error("ValidationException: Invalid parameter"))).toBe(false);
   });
 });
 
