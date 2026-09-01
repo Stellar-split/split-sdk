@@ -1416,3 +1416,14 @@ export type {
   SubmitTransactionOptions,
   SubmitServer,
 } from "./transaction/submit.js";
+
+// ---------------------------------------------------------------------------
+// Horizon Collection & Array Pagination (Issue #618)
+// ---------------------------------------------------------------------------
+
+export { paginate, collectAll, paginateArray, HorizonPaginator } from "./horizonPaginator.js";
+export type {
+  PaginateArrayOptions,
+  PaginateArrayResult,
+} from "./horizonPaginator.js";
+

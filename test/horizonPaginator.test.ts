@@ -5,7 +5,8 @@ import {
   getDefaultCursorStore,
   buildCursorKey,
 } from "../src/cursorTracker.js";
-import { paginate, collectAll, HorizonPaginator } from "../src/horizonPaginator.js";
+import { paginate, collectAll, paginateArray, HorizonPaginator } from "../src/horizonPaginator.js";
+import { SdkError, SdkErrorCode } from "../src/errors.js";
 import type { CollectionPage } from "../src/types.js";
 
 describe("InMemoryCursorStore", () => {
@@ -249,3 +250,210 @@ describe("paginate – page-size negotiation integration (#692)", () => {
     expect(results).toHaveLength(8);
   });
 });
+
+describe("paginateArray", () => {
+  const sampleItems = [
+    { id: "inv-1", amount: 100 },
+    { id: "inv-2", amount: 200 },
+    { id: "inv-3", amount: 300 },
+    { id: "inv-4", amount: 400 },
+    { id: "inv-5", amount: 500 },
+    { id: "inv-6", amount: 600 },
+    { id: "inv-7", amount: 700 },
+  ];
+
+  it("returns the first page (page 1) of items", () => {
+    const result = paginateArray(sampleItems, { page: 1, pageSize: 3 });
+    expect(result.data).toEqual([
+      { id: "inv-1", amount: 100 },
+      { id: "inv-2", amount: 200 },
+      { id: "inv-3", amount: 300 },
+    ]);
+    expect(result.total).toBe(7);
+    expect(result.totalPages).toBe(3);
+    expect(result.hasNext).toBe(true);
+    expect(result.hasPrev).toBe(false);
+  });
+
+  it("returns a middle page correctly", () => {
+    const result = paginateArray(sampleItems, { page: 2, pageSize: 3 });
+    expect(result.data).toEqual([
+      { id: "inv-4", amount: 400 },
+      { id: "inv-5", amount: 500 },
+      { id: "inv-6", amount: 600 },
+    ]);
+    expect(result.total).toBe(7);
+    expect(result.totalPages).toBe(3);
+    expect(result.hasNext).toBe(true);
+    expect(result.hasPrev).toBe(true);
+  });
+
+  it("returns the last page correctly", () => {
+    const result = paginateArray(sampleItems, { page: 3, pageSize: 3 });
+    expect(result.data).toEqual([{ id: "inv-7", amount: 700 }]);
+    expect(result.total).toBe(7);
+    expect(result.totalPages).toBe(3);
+    expect(result.hasNext).toBe(false);
+    expect(result.hasPrev).toBe(true);
+  });
+
+  it("returns empty data without error for out-of-range page beyond totalPages", () => {
+    const result = paginateArray(sampleItems, { page: 4, pageSize: 3 });
+    expect(result.data).toEqual([]);
+    expect(result.total).toBe(7);
+    expect(result.totalPages).toBe(3);
+    expect(result.hasNext).toBe(false);
+    expect(result.hasPrev).toBe(true);
+
+    const resultFar = paginateArray(sampleItems, { page: 999, pageSize: 3 });
+    expect(resultFar.data).toEqual([]);
+    expect(resultFar.total).toBe(7);
+    expect(resultFar.totalPages).toBe(3);
+    expect(resultFar.hasNext).toBe(false);
+    expect(resultFar.hasPrev).toBe(true);
+  });
+
+  it("returns empty data without error for page < 1", () => {
+    const resultZero = paginateArray(sampleItems, { page: 0, pageSize: 3 });
+    expect(resultZero.data).toEqual([]);
+    expect(resultZero.total).toBe(7);
+    expect(resultZero.totalPages).toBe(3);
+    expect(resultZero.hasNext).toBe(false);
+    expect(resultZero.hasPrev).toBe(false);
+
+    const resultNeg = paginateArray(sampleItems, { page: -5, pageSize: 3 });
+    expect(resultNeg.data).toEqual([]);
+    expect(resultNeg.total).toBe(7);
+    expect(resultNeg.totalPages).toBe(3);
+    expect(resultNeg.hasNext).toBe(false);
+    expect(resultNeg.hasPrev).toBe(false);
+  });
+
+  it("handles a single item correctly", () => {
+    const single = [{ id: "solo" }];
+    const result = paginateArray(single, { page: 1, pageSize: 10 });
+    expect(result.data).toEqual([{ id: "solo" }]);
+    expect(result.total).toBe(1);
+    expect(result.totalPages).toBe(1);
+    expect(result.hasNext).toBe(false);
+    expect(result.hasPrev).toBe(false);
+  });
+
+  it("handles exactly pageSize items correctly", () => {
+    const items = ["a", "b", "c", "d", "e"];
+    const result = paginateArray(items, { page: 1, pageSize: 5 });
+    expect(result.data).toEqual(["a", "b", "c", "d", "e"]);
+    expect(result.total).toBe(5);
+    expect(result.totalPages).toBe(1);
+    expect(result.hasNext).toBe(false);
+    expect(result.hasPrev).toBe(false);
+  });
+
+  it("handles an empty array correctly", () => {
+    const result = paginateArray([], { page: 1, pageSize: 10 });
+    expect(result.data).toEqual([]);
+    expect(result.total).toBe(0);
+    expect(result.totalPages).toBe(0);
+    expect(result.hasNext).toBe(false);
+    expect(result.hasPrev).toBe(false);
+  });
+
+  it("verifies hasNext and hasPrev correctness across multiple pages", () => {
+    const fourItems = [1, 2, 3, 4];
+    const page1 = paginateArray(fourItems, { page: 1, pageSize: 2 });
+    expect(page1.data).toEqual([1, 2]);
+    expect(page1.hasNext).toBe(true);
+    expect(page1.hasPrev).toBe(false);
+
+    const page2 = paginateArray(fourItems, { page: 2, pageSize: 2 });
+    expect(page2.data).toEqual([3, 4]);
+    expect(page2.hasNext).toBe(false);
+    expect(page2.hasPrev).toBe(true);
+  });
+
+  it("throws SdkError with INVALID_RECIPIENT when pageSize < 1", () => {
+    expect(() => paginateArray(sampleItems, { page: 1, pageSize: 0 })).toThrowError(
+      SdkError,
+    );
+    try {
+      paginateArray(sampleItems, { page: 1, pageSize: 0 });
+    } catch (err) {
+      expect(err).toBeInstanceOf(SdkError);
+      expect((err as SdkError).code).toBe(SdkErrorCode.INVALID_RECIPIENT);
+    }
+
+    try {
+      paginateArray(sampleItems, { page: 1, pageSize: -10 });
+    } catch (err) {
+      expect(err).toBeInstanceOf(SdkError);
+      expect((err as SdkError).code).toBe(SdkErrorCode.INVALID_RECIPIENT);
+    }
+  });
+
+  it("throws SdkError with INVALID_RECIPIENT when pageSize > 200", () => {
+    expect(() => paginateArray(sampleItems, { page: 1, pageSize: 201 })).toThrowError(
+      SdkError,
+    );
+    try {
+      paginateArray(sampleItems, { page: 1, pageSize: 201 });
+    } catch (err) {
+      expect(err).toBeInstanceOf(SdkError);
+      expect((err as SdkError).code).toBe(SdkErrorCode.INVALID_RECIPIENT);
+    }
+  });
+
+  it("accepts pageSize at boundary values 1 and 200", () => {
+    const resultMin = paginateArray(sampleItems, { page: 1, pageSize: 1 });
+    expect(resultMin.data).toEqual([{ id: "inv-1", amount: 100 }]);
+    expect(resultMin.totalPages).toBe(7);
+
+    const resultMax = paginateArray(sampleItems, { page: 1, pageSize: 200 });
+    expect(resultMax.data).toHaveLength(7);
+    expect(resultMax.totalPages).toBe(1);
+  });
+
+  it("throws SdkError with INVALID_RECIPIENT when pageSize is not an integer or is NaN", () => {
+    expect(() =>
+      paginateArray(sampleItems, { page: 1, pageSize: 2.5 }),
+    ).toThrowError(SdkError);
+    try {
+      paginateArray(sampleItems, { page: 1, pageSize: 2.5 });
+    } catch (err) {
+      expect(err).toBeInstanceOf(SdkError);
+      expect((err as SdkError).code).toBe(SdkErrorCode.INVALID_RECIPIENT);
+    }
+
+    try {
+      paginateArray(sampleItems, { page: 1, pageSize: NaN });
+    } catch (err) {
+      expect(err).toBeInstanceOf(SdkError);
+      expect((err as SdkError).code).toBe(SdkErrorCode.INVALID_RECIPIENT);
+    }
+  });
+
+  it("returns empty data when page is not an integer", () => {
+    const result = paginateArray(sampleItems, { page: 1.5, pageSize: 3 });
+    expect(result.data).toEqual([]);
+    expect(result.total).toBe(7);
+    expect(result.totalPages).toBe(3);
+  });
+
+  it("handles generic arrays with custom interfaces (Invoice / Payment)", () => {
+    interface Invoice {
+      id: string;
+      recipient: string;
+      amount: bigint;
+    }
+    const invoices: Invoice[] = [
+      { id: "inv-1", recipient: "GAAA", amount: 1000n },
+      { id: "inv-2", recipient: "GBBB", amount: 2000n },
+    ];
+    const result = paginateArray<Invoice>(invoices, { page: 1, pageSize: 1 });
+    expect(result.data).toEqual([{ id: "inv-1", recipient: "GAAA", amount: 1000n }]);
+    expect(result.total).toBe(2);
+    expect(result.totalPages).toBe(2);
+    expect(result.hasNext).toBe(true);
+    expect(result.hasPrev).toBe(false);
+  });
+});
+

@@ -22,6 +22,29 @@
 
 import type { CollectionPage, HorizonPaginatorOptions } from "./types.js";
 import { buildCursorKey, getDefaultCursorStore } from "./cursorTracker.js";
+import { SdkError, SdkErrorCode } from "./errors.js";
+
+/** Options for in-memory array pagination. */
+export interface PaginateArrayOptions {
+  /** 1-indexed page number. */
+  page: number;
+  /** Number of items per page (must be between 1 and 200). */
+  pageSize: number;
+}
+
+/** Result of in-memory array pagination. */
+export interface PaginateArrayResult<T> {
+  /** Items for the current page. */
+  data: T[];
+  /** Total number of items in the array. */
+  total: number;
+  /** Total number of pages. */
+  totalPages: number;
+  /** Whether a subsequent page exists. */
+  hasNext: boolean;
+  /** Whether a preceding page exists. */
+  hasPrev: boolean;
+}
 
 /** Default namespace for cursor store keys. */
 const DEFAULT_NAMESPACE = "horizon";
@@ -183,3 +206,66 @@ export async function collectAll<T>(
   }
   return results;
 }
+
+/**
+ * Paginate a local in-memory array.
+ *
+ * @param items - The array of items to paginate.
+ * @param opts - Pagination options containing 1-indexed `page` and `pageSize` (1-200).
+ * @returns Object containing the page slice `data`, `total`, `totalPages`, `hasNext`, and `hasPrev`.
+ * @throws {@link SdkError} with `INVALID_RECIPIENT` code if `pageSize` is not between 1 and 200.
+ */
+export function paginateArray<T>(
+  items: T[],
+  opts: { page: number; pageSize: number },
+): {
+  data: T[];
+  total: number;
+  totalPages: number;
+  hasNext: boolean;
+  hasPrev: boolean;
+} {
+  if (
+    !opts ||
+    typeof opts.pageSize !== "number" ||
+    Number.isNaN(opts.pageSize) ||
+    !Number.isInteger(opts.pageSize) ||
+    opts.pageSize < 1 ||
+    opts.pageSize > 200
+  ) {
+    throw new SdkError(
+      `pageSize must be between 1 and 200 (received ${opts?.pageSize})`,
+      SdkErrorCode.INVALID_RECIPIENT,
+    );
+  }
+
+  const list = Array.isArray(items) ? items : [];
+  const total = list.length;
+  const totalPages = Math.ceil(total / opts.pageSize);
+  const page = opts.page;
+
+  const hasNext = page >= 1 && page < totalPages;
+  const hasPrev = page > 1 && totalPages > 0;
+
+  if (typeof page !== "number" || !Number.isInteger(page) || page < 1 || page > totalPages || total === 0) {
+    return {
+      data: [],
+      total,
+      totalPages,
+      hasNext,
+      hasPrev,
+    };
+  }
+
+  const startIndex = (page - 1) * opts.pageSize;
+  const data = list.slice(startIndex, startIndex + opts.pageSize);
+
+  return {
+    data,
+    total,
+    totalPages,
+    hasNext,
+    hasPrev,
+  };
+}
+
