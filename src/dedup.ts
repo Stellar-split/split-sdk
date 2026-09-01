@@ -1,3 +1,5 @@
+import { createHash } from "crypto";
+
 export class Deduplicator<T> {
   private _inflight = new Map<string, Promise<T>>();
   private _hits = 0;
@@ -24,3 +26,49 @@ export class Deduplicator<T> {
     return { deduped: this._hits, total: this._hits + this._misses };
   }
 }
+
+export interface IdempotencyKeyParams {
+  invoiceId: string;
+  payer: string;
+  amount: bigint;
+  nonce?: string;
+}
+
+const knownKeys = new Set<string>();
+
+/**
+ * Generates a canonical, deterministic idempotency key for payment deduplication.
+ * Returns a SHA-256 hex string of "{invoiceId}:{payer}:{amount}" (with optional ":{nonce}" suffix).
+ */
+export function generateIdempotencyKey(params: {
+  invoiceId: string;
+  payer: string;
+  amount: bigint;
+  nonce?: string;
+}): string {
+  const base = `${params.invoiceId}:${params.payer}:${params.amount.toString()}`;
+  const payload = params.nonce !== undefined ? `${base}:${params.nonce}` : base;
+  return createHash("sha256").update(payload).digest("hex");
+}
+
+/**
+ * Checks if an idempotency key is already registered.
+ */
+export function isKnownKey(key: string): boolean {
+  return knownKeys.has(key);
+}
+
+/**
+ * Registers an idempotency key in the module's in-memory set.
+ */
+export function registerKey(key: string): void {
+  knownKeys.add(key);
+}
+
+/**
+ * Clears all registered keys (primarily used for test teardown).
+ */
+export function clearKeys(): void {
+  knownKeys.clear();
+}
+
