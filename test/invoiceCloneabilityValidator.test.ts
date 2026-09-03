@@ -114,6 +114,15 @@ describe("InvoiceCloneabilityValidator — status check", () => {
     const statusField = report.fieldReports.find((f) => f.field === "status");
     expect(statusField).toBeUndefined();
   });
+
+  it("blocks cloning an already expired invoice", async () => {
+    const invoice = makeInvoice({ deadline: PAST_DEADLINE });
+    const validator = new InvoiceCloneabilityValidator({ rpcUrl: "https://rpc.example.com" });
+    const report = await validator.validate(invoice);
+
+    expect(report.cloneable).toBe(false);
+    expect(report.fieldReports.some((field) => field.field === "deadline")).toBe(true);
+  });
 });
 
 describe("InvoiceCloneabilityValidator — deadline check", () => {
@@ -128,8 +137,8 @@ describe("InvoiceCloneabilityValidator — deadline check", () => {
     const deadlineField = report.fieldReports.find((f) => f.field === "deadline");
     expect(deadlineField).toBeDefined();
     expect(deadlineField!.valid).toBe(false);
-    expect(deadlineField!.reason).toMatch(/past|buffer/i);
-    expect(deadlineField!.suggestedFix).toMatch(/newDeadline/);
+    expect(deadlineField!.reason).toMatch(/expired|past|buffer/i);
+    expect(deadlineField!.suggestedFix).toMatch(/newDeadline|new invoice/i);
   });
 
   it("passes when deadline is sufficiently in the future", async () => {

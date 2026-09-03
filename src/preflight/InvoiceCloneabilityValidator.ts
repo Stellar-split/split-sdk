@@ -179,12 +179,19 @@ export class InvoiceCloneabilityValidator {
     const deadlineMs = invoice.deadline * 1_000;
     const minFutureMs = nowMs + this._options.minDeadlineBufferMs;
 
-    if (deadlineMs <= minFutureMs) {
+    if (deadlineMs <= nowMs) {
+      reports.push({
+        field: "deadline",
+        valid: false,
+        reason: `Deadline (${new Date(deadlineMs).toISOString()}) is already expired as of the current ledger time (${new Date(nowMs).toISOString()}).`,
+        suggestedFix: "Create a new invoice or pass a newDeadline override that is set after the current ledger time.",
+      });
+    } else if (deadlineMs <= minFutureMs) {
       const shortfallSec = Math.ceil((minFutureMs - deadlineMs) / 1_000);
       reports.push({
         field: "deadline",
         valid: false,
-        reason: `Deadline (${new Date(deadlineMs).toISOString()}) is in the past or too close to now (buffer: ${this._options.minDeadlineBufferMs}ms). Shortfall: ${shortfallSec}s.`,
+        reason: `Deadline (${new Date(deadlineMs).toISOString()}) is too close to now (buffer: ${this._options.minDeadlineBufferMs}ms). Shortfall: ${shortfallSec}s.`,
         suggestedFix: `Pass a \`newDeadline\` override that is at least ${this._options.minDeadlineBufferMs / 1_000}s in the future when calling cloneInvoice().`,
       });
     }

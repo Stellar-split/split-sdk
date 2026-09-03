@@ -11,7 +11,12 @@
 
 import { describe, it, expect } from "vitest";
 import { auditSplitRounding, RoundingOverflowError } from "../src/invoice/rounding.js";
-import { calculateSplitAmounts, computeAmounts } from "../src/invoice/calculator.js";
+import {
+  calculateInvoiceBreakdown,
+  calculateInvoiceSubtotal,
+  calculateSplitAmounts,
+  computeAmounts,
+} from "../src/invoice/calculator.js";
 import type { SplitLine } from "../src/types.js";
 
 // ---------------------------------------------------------------------------
@@ -391,5 +396,29 @@ describe("calculateSplitAmounts (calculator integration)", () => {
       { recipientId: "B", ratio: 0.001 },
     ];
     expect(() => calculateSplitAmounts(1000n, splits)).toThrow(RoundingOverflowError);
+  });
+});
+
+describe("invoice subtotal and fee breakdown", () => {
+  it("calculates the subtotal before fees are applied", () => {
+    expect(calculateInvoiceSubtotal([10n, 15n, 25n, 5n])).toBe(55n);
+  });
+
+  it("returns subtotal, fee and total separately for downstream receipts", () => {
+    const result = calculateInvoiceBreakdown(1_000n, 250);
+
+    expect(result.subtotal).toBe(1_000n);
+    expect(result.fee).toBe(25n);
+    expect(result.total).toBe(1_025n);
+  });
+
+  it("supports configurable rounding mode", () => {
+    const result = auditSplitRounding(1n, [
+      { recipientId: "A", ratio: 0.5 },
+      { recipientId: "B", ratio: 0.5 },
+    ], { mode: "bankers" });
+
+    expect(sumAmounts(result.amounts)).toBe(1n);
+    expect(Object.values(result.amounts).sort((a, b) => Number(a - b))).toEqual([0n, 1n]);
   });
 });
