@@ -104,41 +104,46 @@ export function formatSplitPercentage(
 
   if (basisPoints < 0n || basisPoints > BASIS_POINTS_PER_UNIT) {
     throw new SdkError(
-      `basisPoints must be between 0 and 10000, got ${basisPoints.toString()}`,
+      `[${SdkErrorCode.INVALID_RECIPIENT}] basisPoints must be between 0 and 10000, got ${basisPoints.toString()}`,
       SdkErrorCode.INVALID_RECIPIENT,
       { basisPoints: basisPoints.toString() },
     );
   }
 
+  // General formula: scale basisPoints by 10^decimals, divide by 100, round.
+  // basisPoints / 100 = percentage; scaling preserves decimal places.
+  const scale = 10n ** BigInt(decimals);
+  const numerator = basisPoints * scale;
+  const quotient = numerator / 100n;
+  const remainder = numerator % 100n;
+  const rounded = remainder >= 50n ? quotient + 1n : quotient;
+
   if (decimals === 0) {
-    // Integer percentage, with standard rounding.
-    const scaled = basisPoints + BASIS_POINTS_PER_UNIT / 2n;
-    const whole = scaled / BASIS_POINTS_PER_UNIT;
-    return `${whole.toString()}%`;
+    return `${rounded}%`;
   }
 
-  // Compute whole and fractional parts without floating point.
-  const whole = basisPoints / BASIS_POINTS_PER_UNIT;
-  const remainder = basisPoints % BASIS_POINTS_PER_UNIT;
+  const wholePart = rounded / scale;
+  const fracPart = rounded % scale;
+  return `${wholePart}.${fracPart.toString().padStart(decimals, "0")}%`;
+}
 
-  // Scale remainder to the requested number of decimal places.
-  // e.g. decimals=2: remainder * 100 / 10000 = remainder / 100
-  const divisor = 10n ** BigInt(4 - decimals);
-  let fractional = remainder / divisor;
-  const remainderMod = remainder % divisor;
+/**
+ * Returns the sum of an array of line-item amounts (in stroops).
+ * This is the invoice subtotal before any fee is applied.
+ */
+export function calculateInvoiceSubtotal(amounts: bigint[]): bigint {
+  return amounts.reduce((acc, v) => acc + v, 0n);
+}
 
-  // Round to nearest at the last displayed decimal place.
-  const halfDivisor = divisor / 2n;
-  if (remainderMod >= halfDivisor) {
-    fractional += 1n;
-  }
-
-  // Handle carry-over that turns fractional into a whole unit (e.g. 99.995 → 100.00).
-  const maxFractional = 10n ** BigInt(decimals) - 1n;
-  if (fractional > maxFractional) {
-    return `${(whole + 1n).toString()}.${"0".repeat(decimals)}%`;
-  }
-
-  const fractionalStr = fractional.toString().padStart(decimals, "0");
-  return `${whole.toString()}.${fractionalStr}%`;
+/**
+ * Breaks an invoice total into subtotal, fee, and final total.
+ * @param subtotal - The pre-fee invoice amount in stroops
+ * @param feeBps   - Fee in basis points (e.g. 250 = 2.5%)
+ */
+export function calculateInvoiceBreakdown(
+  subtotal: bigint,
+  feeBps: number,
+): { subtotal: bigint; fee: bigint; total: bigint } {
+  const fee = (subtotal * BigInt(feeBps)) / 10000n;
+  return { subtotal, fee, total: subtotal + fee };
 }

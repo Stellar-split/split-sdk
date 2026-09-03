@@ -1,7 +1,7 @@
 import { rpc as SorobanRpc, Horizon } from "@stellar/stellar-sdk";
 import { inspectFlags } from "./accountFlagsInspector.js";
 import type { AccountFlagSet } from "./types.js";
-import { withTimeout, RequestTimeoutError } from "./timeout.js";
+import { withTimeout } from "./timeout.js";
 import { PreflightError } from "./errors.js";
 
 export type PayerReadinessReason =
@@ -375,17 +375,17 @@ export async function runPreflight(options: RunPreflightOptions): Promise<void> 
     throw new PreflightError(rpcUrl, "no fetch implementation available in this runtime");
   }
 
-  try {
-    await withTimeout(
-      (signal) => fetchImpl(rpcUrl, { method: "HEAD", signal }),
-      timeoutMs,
-      "runPreflight",
-    );
-  } catch (error) {
-    if (error instanceof RequestTimeoutError) {
+  const result = await withTimeout(
+    (signal) => fetchImpl(rpcUrl, { method: "HEAD", signal }),
+    timeoutMs,
+    "runPreflight",
+  );
+
+  if (!result.ok) {
+    if (result.reason === "timeout") {
       throw new PreflightError(rpcUrl, `endpoint did not respond within ${timeoutMs}ms`);
     }
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason = result.error instanceof Error ? result.error.message : String(result.error);
     throw new PreflightError(rpcUrl, reason);
   }
 }

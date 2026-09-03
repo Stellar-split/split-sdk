@@ -15,9 +15,10 @@ describe("RollbackCoordinator", () => {
       cleanup,
     });
 
+    // Attach rejection handler before advancing timers to avoid unhandled rejection warning.
+    const assertRejects = expect(promise).rejects.toBeInstanceOf(RollbackTimeoutError);
     await vi.advanceTimersByTimeAsync(100);
-
-    await expect(promise).rejects.toBeInstanceOf(RollbackTimeoutError);
+    await assertRejects;
     expect(coordinator.getRollbackRecord("split-1")).toBeUndefined();
     expect(coordinator.getCheckpointFor("split-1")).toBeUndefined();
 

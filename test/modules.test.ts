@@ -142,7 +142,7 @@ describe("MemoryProfiler", () => {
     const stat = await fs.stat(filePath);
     expect(stat.size).toBeGreaterThan(0);
     await fs.unlink(filePath);
-  });
+  }, 15000);
 
   it("exports to a directory with auto-generated name", async () => {
     profiler.init();

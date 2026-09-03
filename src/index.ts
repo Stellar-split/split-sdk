@@ -323,6 +323,7 @@ export type { RetryConfig } from "./resilientRpc.js";
 export { connectWallet, getPublicKey, signTransaction } from "./wallet.js";
 export { LobstrAdapter } from "./wallets/adapters/LobstrAdapter.js";
 export type { LobstrAdapterOptions } from "./wallets/adapters/LobstrAdapter.js";
+export { WalletConnectionTimeoutError, isWalletConnectionTimeoutError } from "./errors.js";
 
 export { checkRPCHealth } from "./health.js";
 export { FallbackChain, FallbackExhaustedError } from "./fallbackChain.js";
@@ -353,7 +354,13 @@ export {
   calculateSplitAmounts,
   computeAmounts,
   formatSplitPercentage,
+  calculateInvoiceSubtotal,
+  calculateInvoiceBreakdown,
 } from "./invoice/calculator.js";
+
+// Fee estimator
+export { estimateFeeForAmount } from "./feeEstimator.js";
+export type { FeeForAmountOpts } from "./feeEstimator.js";
 
 // AMM Calculator
 export { estimateSwapOutput, calculatePoolShare } from "./ammCalculator.js";

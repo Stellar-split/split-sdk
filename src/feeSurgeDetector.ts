@@ -182,11 +182,11 @@ export async function detectFeeSurge(
     const observedFee = feePercentileToBigInt(feeStats, percentile);
 
     // ── Moving-average baseline ────────────────────────────────────────────
-    // Add the observed fee to the sliding window and derive the baseline.
+    // Derive baseline from the existing window, then record the new sample.
     // Falls back to the static DEFAULT_BASE_FEE until the window is full.
-    addFeeSample(observedFee, windowSize);
     const maBaseline = movingAverageBaseline(windowSize);
     const baseFee = maBaseline ?? DEFAULT_BASE_FEE;
+    addFeeSample(observedFee, windowSize);
 
     const surgeActive = observedFee > baseFee * BigInt(Math.ceil(surgeMultiplier));
 

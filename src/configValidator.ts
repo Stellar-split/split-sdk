@@ -40,6 +40,14 @@ const KNOWN_CONFIG_KEYS = new Set([
   "rateLimit",
   "telemetry",
   "traceIdGenerator",
+  "signer",
+  "validatePassphrase",
+  "otel",
+  "rpcClient",
+  "adminKeypair",
+  "dexContractId",
+  "circuitBreaker",
+  "optimisticCache",
 ]);
 
 export class UnknownConfigKeyError extends StellarSplitError {

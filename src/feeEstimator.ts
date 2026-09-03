@@ -47,6 +47,43 @@ const feeStrategyRegistry = new Map<string, FeeEstimationStrategy<any>>([
   ["surge", { estimate: (params: { baseFee: number; multiplier: number }) => params.baseFee * params.multiplier }],
 ]);
 
+export interface FeeForAmountOpts {
+  feeBps?: number;
+  baseFee?: bigint | number;
+  roundUp?: boolean;
+}
+
+/**
+ * Estimate the fee for a given payment amount using basis points.
+ *
+ * @param amount  - Payment amount in stroops (must be >= 0)
+ * @param opts    - `feeBps`: fee rate in basis points (default 0); `baseFee`: flat
+ *                  base fee added on top (default 100n); `roundUp`: round up
+ *                  fractional stroop (default true)
+ * @returns Total fee in stroops (proportional + baseFee)
+ */
+export function estimateFeeForAmount(
+  amount: bigint,
+  opts: FeeForAmountOpts = {},
+): bigint {
+  const { feeBps = 0, baseFee = BigInt(BASE_FEE), roundUp = true } = opts;
+
+  if (amount < 0n) throw new RangeError("amount must be >= 0");
+  if (feeBps < 0) throw new RangeError("feeBps must be >= 0");
+
+  const base = typeof baseFee === "number" ? BigInt(baseFee) : baseFee;
+
+  if (feeBps === 0) return base;
+
+  const bps = BigInt(feeBps);
+  const numerator = amount * bps;
+  const proportional = numerator / 10000n;
+  const remainder = numerator % 10000n;
+  const rounded = roundUp && remainder > 0n ? proportional + 1n : proportional;
+
+  return base + rounded;
+}
+
 export function estimateFee(type: string, params: unknown): number {
   const strategy = feeStrategyRegistry.get(type);
   if (!strategy) {

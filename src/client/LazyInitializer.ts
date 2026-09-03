@@ -61,7 +61,7 @@ export class LazyInitializer<T> {
 
   constructor(factory: () => Promise<T>, options?: LazyInitializerOptions) {
     this.factory = factory;
-    this.maxRetries = options?.maxRetries ?? 3;
+    this.maxRetries = options?.maxRetries ?? 0;
     this.retryDelayMs = options?.retryDelayMs ?? 1_000;
   }
 

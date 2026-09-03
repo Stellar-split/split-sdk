@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { estimateFee, estimateOperationCost, type FeeEstimate } from "../src/feeEstimator.js";
+import { estimateFee, estimateOperationCost, estimateFeeForAmount, type FeeEstimate } from "../src/feeEstimator.js";
 import { rpc as SorobanRpc, BASE_FEE, Operation, Asset } from "@stellar/stellar-sdk";
 
 describe("estimateFeeForAmount", () => {
   it("returns the base fee when feeBps is zero", () => {
-    expect(estimateFeeForAmount(0n, { baseFee: BASE_FEE })).toBe(BASE_FEE);
-    expect(estimateFeeForAmount(123_456_789n, { baseFee: BASE_FEE })).toBe(BASE_FEE);
+    expect(estimateFeeForAmount(0n, { baseFee: BigInt(BASE_FEE) })).toBe(BigInt(BASE_FEE));
+    expect(estimateFeeForAmount(123_456_789n, { baseFee: BigInt(BASE_FEE) })).toBe(BigInt(BASE_FEE));
   });
 
   it("computes an exact fee for a whole-number bps using bigint", () => {
@@ -34,8 +34,9 @@ describe("estimateFeeForAmount", () => {
 
   it("handles large amounts without precision loss", () => {
     const huge = 123456789123456789n;
-    const fee = estimateFeeForAmount(huge, { feeBps: 250, baseFee: BASE_FEE });
-    expect(fee).toBe(BASE_FEE + (huge * 250n) / 10000n);
+    const fee = estimateFeeForAmount(huge, { feeBps: 250, baseFee: BigInt(BASE_FEE) });
+    // proportional = floor(huge * 250 / 10000) = 3086419728086419, remainder 7250 → round-up +1
+    expect(fee).toBe(BigInt(BASE_FEE) + (huge * 250n) / 10000n + 1n);
   });
 
   it("throws on negative amount", () => {

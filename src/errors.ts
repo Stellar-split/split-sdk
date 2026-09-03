@@ -2231,3 +2231,23 @@ export function isInvalidKeypairError(err: unknown): err is InvalidKeypairError 
   return err instanceof InvalidKeypairError;
 }
 
+/** Thrown when a wallet deep-link or extension connection times out. */
+export class WalletConnectionTimeoutError extends StellarSplitError {
+  readonly timeoutMs: number;
+
+  constructor(message: string, opts: { timeoutMs: number }) {
+    super(
+      message,
+      "WALLET_CONNECTION_TIMEOUT",
+      opts,
+    );
+    this.name = "WalletConnectionTimeoutError";
+    this.timeoutMs = opts.timeoutMs;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isWalletConnectionTimeoutError(err: unknown): err is WalletConnectionTimeoutError {
+  return err instanceof WalletConnectionTimeoutError;
+}
+

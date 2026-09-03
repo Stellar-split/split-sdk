@@ -128,20 +128,30 @@ export class RollbackCoordinator extends TypedEventEmitter<SplitRollbackEventMap
   ): Promise<SplitRollbackRecord> {
     const record = this.initiateRollback(splitId);
 
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new RollbackTimeoutError(splitId)), options.timeoutMs);
+    // Resolves with true on timeout (never rejects) to avoid unhandled-rejection warnings.
+    let timerId: ReturnType<typeof setTimeout>;
+    const timedOut = new Promise<boolean>((resolve) => {
+      timerId = setTimeout(() => resolve(true), options.timeoutMs);
     });
 
     try {
-      await Promise.race([options.execute(), timeoutPromise]);
+      const result = await Promise.race([
+        options.execute().then(() => false),
+        timedOut,
+      ]);
+      if (result) {
+        await this.cleanupTimedOutRollback(splitId, options.cleanup);
+        throw new RollbackTimeoutError(splitId);
+      }
       return record;
     } catch (error) {
-      if (!(error instanceof RollbackTimeoutError)) {
+      if (error instanceof RollbackTimeoutError) {
         throw error;
       }
-
-      await this.cleanupTimedOutRollback(splitId, options.cleanup);
+      clearTimeout(timerId!);
       throw error;
+    } finally {
+      clearTimeout(timerId!);
     }
   }
 
