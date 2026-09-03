@@ -83,6 +83,18 @@ describe("TypedEventEmitter", () => {
     expect(emitter.listenerCount("ping")).toBe(0);
   });
 
+  it("invokes wildcard listeners for every emitted event", () => {
+    const emitter = new TypedEventEmitter<TestEvents>();
+    const handler = vi.fn();
+    emitter.on("*", handler);
+
+    emitter.emit("greeting", { name: "Ada" });
+    emitter.emit("ping", undefined);
+
+    expect(handler).toHaveBeenNthCalledWith(1, "greeting", { name: "Ada" });
+    expect(handler).toHaveBeenNthCalledWith(2, "ping", undefined);
+  });
+
   describe("once()", () => {
     it("resolves with the payload of the next emission", async () => {
       const emitter = new TypedEventEmitter<TestEvents>();
