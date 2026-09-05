@@ -103,3 +103,39 @@ export class FeeTrendAnalyzer {
     this.buffer.evictOldestWhile((sample) => sample.capturedAt < cutoff);
   }
 }
+
+/**
+ * Compute a Simple Moving Average (SMA) series for an array of numbers.
+ *
+ * The first `windowSize - 1` entries are padded with `NaN` because a full
+ * window is not yet available. All calculations are pure: no side effects,
+ * no input mutation.
+ *
+ * @param samples    - Raw numeric series (e.g. fee samples over time).
+ * @param windowSize - Number of consecutive elements to average. Must be ≥ 1.
+ * @returns An array of the same length where each element `i` is the SMA of
+ *   `samples.slice(i - windowSize + 1, i + 1)` when `i >= windowSize - 1`,
+ *   otherwise `NaN`.
+ * @throws {RangeError} When `windowSize` is less than 1.
+ */
+export function computeMovingAverage(samples: number[], windowSize: number): number[] {
+  if (windowSize < 1) {
+    throw new RangeError(`windowSize must be at least 1, got ${windowSize}`);
+  }
+  if (samples.length === 0) return [];
+
+  const result: number[] = new Array(samples.length).fill(NaN);
+  let windowSum = 0;
+
+  for (let i = 0; i < samples.length; i++) {
+    windowSum += samples[i]!;
+    if (i >= windowSize) {
+      windowSum -= samples[i - windowSize]!;
+    }
+    if (i >= windowSize - 1) {
+      result[i] = windowSum / windowSize;
+    }
+  }
+
+  return result;
+}
