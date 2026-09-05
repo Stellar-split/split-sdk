@@ -10,46 +10,56 @@ import { createHmac, timingSafeEqual } from "crypto";
 
 const HEX_PATTERN = /^[0-9a-f]+$/i;
 
-/** Thrown by {@link verifyWebhookSignatureOrThrow} when the signature does not match. */
-export class WebhookVerificationError extends Error {
-  constructor(message = "Webhook signature verification failed") {
-    super(message);
-    this.name = "WebhookVerificationError";
-  }
-}
-
 /**
- * Verifies an HMAC-SHA256 webhook signature in constant time.
+ * Verifies a webhook payload against its HMAC-SHA256 signature.
  *
- * @param payload - The raw request body (exact bytes as received).
- * @param signature - The hex-encoded signature to verify against.
- * @param secret - The shared HMAC secret.
- * @returns `true` when the computed digest matches the provided signature.
- *          Returns `false` (never throws) on malformed input or mismatch.
+ * @param payload   - The raw request body / payload string.
+ * @param signature - The hex-encoded HMAC-SHA256 signature to verify.
+ * @param secret    - The shared secret key.
+ * @returns `true` when the signature is valid, `false` otherwise.
+ *          Never throws — malformed inputs return `false`.
  */
 export function verifyWebhookSignature(
   payload: string,
   signature: string,
   secret: string
 ): boolean {
-  if (!HEX_PATTERN.test(signature)) {
+  if (!HEX_PATTERN.test(signature) || signature.length % 2 !== 0) {
     return false;
   }
 
-  const expected = createHmac("sha256", secret).update(payload).digest("hex");
-  const expectedBuf = Buffer.from(expected, "utf-8");
-  const providedBuf = Buffer.from(signature, "utf-8");
+  const expected = createHmac("sha256", secret).update(payload).digest();
+  const provided = Buffer.from(signature, "hex");
 
-  if (expectedBuf.length !== providedBuf.length) {
+  if (expected.length !== provided.length) {
     return false;
   }
 
-  return timingSafeEqual(expectedBuf, providedBuf);
+  return timingSafeEqual(expected, provided);
 }
 
 /**
- * Wrapper around {@link verifyWebhookSignature} that throws
- * {@link WebhookVerificationError} instead of returning `false`.
+ * Thrown when a webhook signature fails verification.
+ *
+ * Wraps {@link verifyWebhookSignature} for consumers who prefer a throwing
+ * interface rather than checking a boolean return value.
+ */
+export class WebhookVerificationError extends Error {
+  constructor() {
+    super("Webhook signature verification failed");
+    this.name = "WebhookVerificationError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
+ * Verifies a webhook payload and throws {@link WebhookVerificationError}
+ * when the signature is invalid.
+ *
+ * @param payload   - The raw request body / payload string.
+ * @param signature - The hex-encoded HMAC-SHA256 signature to verify.
+ * @param secret    - The shared secret key.
+ * @throws {WebhookVerificationError} if the signature does not match.
  */
 export function verifyWebhookSignatureOrThrow(
   payload: string,

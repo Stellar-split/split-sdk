@@ -1,87 +1,72 @@
+import { describe, it, expect } from "vitest";
 import {
   verifyWebhookSignature,
-  verifyWebhookSignatureOrThrow,
   WebhookVerificationError,
+  verifyWebhookSignatureOrThrow,
 } from "../src/webhooks/verify.js";
+import { createHmac } from "crypto";
+
+const TEST_SECRET = "my-super-secret";
+
+function sign(payload: string, secret: string): string {
+  return createHmac("sha256", secret).update(payload).digest("hex");
+}
 
 describe("verifyWebhookSignature", () => {
-  const secret = "my-secret-key";
-  const payload = '{"event":"invoice.paid","data":{"id":"123"}}';
-
   it("returns true for a valid signature", () => {
-    const crypto = require("crypto");
-    const expected = crypto
-      .createHmac("sha256", secret)
-      .update(payload)
-      .digest("hex");
-    expect(verifyWebhookSignature(payload, expected, secret)).toBe(true);
+    const payload = '{"event":"invoice.created"}';
+    const signature = sign(payload, TEST_SECRET);
+    expect(verifyWebhookSignature(payload, signature, TEST_SECRET)).toBe(true);
   });
 
   it("returns false for a wrong secret", () => {
-    const crypto = require("crypto");
-    const expected = crypto
-      .createHmac("sha256", secret)
-      .update(payload)
-      .digest("hex");
-    expect(verifyWebhookSignature(payload, expected, "wrong-secret")).toBe(
-      false,
-    );
+    const payload = '{"event":"invoice.created"}';
+    const signature = sign(payload, TEST_SECRET);
+    expect(verifyWebhookSignature(payload, signature, "wrong-secret")).toBe(false);
   });
 
   it("returns false for a tampered payload", () => {
-    const crypto = require("crypto");
-    const expected = crypto
-      .createHmac("sha256", secret)
-      .update(payload)
-      .digest("hex");
-    expect(
-      verifyWebhookSignature(payload + "x", expected, secret),
-    ).toBe(false);
+    const payload = '{"event":"invoice.created"}';
+    const signature = sign(payload, TEST_SECRET);
+    expect(verifyWebhookSignature(payload + "x", signature, TEST_SECRET)).toBe(false);
   });
 
-  it("returns false for a malformed signature (non-hex)", () => {
-    expect(verifyWebhookSignature(payload, "not-hex!", secret)).toBe(false);
+  it("returns false when signature length mismatches", () => {
+    const payload = '{"event":"invoice.created"}';
+    expect(verifyWebhookSignature(payload, "abcd", TEST_SECRET)).toBe(false);
   });
 
-  it("returns false when signature lengths differ", () => {
-    expect(verifyWebhookSignature(payload, "abcd", secret)).toBe(false);
+  it("returns false for malformed hex signature", () => {
+    const payload = '{"event":"invoice.created"}';
+    expect(verifyWebhookSignature(payload, "not-hex!", TEST_SECRET)).toBe(false);
   });
 
-  it("never throws", () => {
-    expect(() =>
-      verifyWebhookSignature(payload, "bad-sig", secret),
-    ).not.toThrow();
+  it("returns false for odd-length hex", () => {
+    const payload = '{"event":"invoice.created"}';
+    expect(verifyWebhookSignature(payload, "abc", TEST_SECRET)).toBe(false);
   });
 });
 
 describe("verifyWebhookSignatureOrThrow", () => {
-  const secret = "my-secret-key";
-  const payload = "test-payload";
-
   it("does not throw for a valid signature", () => {
-    const crypto = require("crypto");
-    const sig = crypto
-      .createHmac("sha256", secret)
-      .update(payload)
-      .digest("hex");
-    expect(() => verifyWebhookSignatureOrThrow(payload, sig, secret)).not.toThrow();
+    const payload = '{"event":"invoice.created"}';
+    const signature = sign(payload, TEST_SECRET);
+    expect(() => verifyWebhookSignatureOrThrow(payload, signature, TEST_SECRET)).not.toThrow();
   });
 
   it("throws WebhookVerificationError for an invalid signature", () => {
+    const payload = '{"event":"invoice.created"}';
+    const signature = sign(payload, TEST_SECRET);
     expect(() =>
-      verifyWebhookSignatureOrThrow(payload, "bad-sig", secret),
+      verifyWebhookSignatureOrThrow(payload, signature, "wrong-secret")
     ).toThrow(WebhookVerificationError);
   });
 });
 
 describe("WebhookVerificationError", () => {
-  it("has the correct name", () => {
+  it("has the correct name and message", () => {
     const err = new WebhookVerificationError();
     expect(err.name).toBe("WebhookVerificationError");
-  });
-
-  it("accepts a custom message", () => {
-    const err = new WebhookVerificationError("custom msg");
-    expect(err.message).toBe("custom msg");
+    expect(err.message).toBe("Webhook signature verification failed");
   });
 });
