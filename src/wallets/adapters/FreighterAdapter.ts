@@ -3,6 +3,7 @@
  */
 
 import type { WalletAdapter } from "../../types.js";
+import { FreighterNotInstalledError } from "../../errors.js";
 
 type Unsubscribe = () => void;
 
@@ -24,7 +25,7 @@ export class FreighterAdapter implements WalletAdapter {
 
   async connect(): Promise<string> {
     if (!window.freighter) {
-      throw new Error("Freighter wallet not installed");
+      throw new FreighterNotInstalledError();
     }
 
     const address = await window.freighter.getPublicKey();
@@ -38,7 +39,7 @@ export class FreighterAdapter implements WalletAdapter {
 
   async sign(xdr: string, network: string): Promise<string> {
     if (!window.freighter) {
-      throw new Error("Freighter wallet not installed");
+      throw new FreighterNotInstalledError();
     }
 
     return await window.freighter.signTransaction(xdr, network);
@@ -46,7 +47,7 @@ export class FreighterAdapter implements WalletAdapter {
 
   async getAddress(): Promise<string> {
     if (!window.freighter) {
-      throw new Error("Freighter wallet not installed");
+      throw new FreighterNotInstalledError();
     }
 
     return await window.freighter.getPublicKey();
