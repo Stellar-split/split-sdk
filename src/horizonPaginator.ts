@@ -95,3 +95,62 @@ export async function collectAll<T>(
   }
   return results;
 }
+
+import { SdkError, SdkErrorCode } from "./errors.js";
+
+export interface PaginateArrayResult<T> {
+  data: T[];
+  total: number;
+  totalPages: number;
+  hasNext: boolean;
+  hasPrev: boolean;
+}
+
+/**
+ * Paginate a local in-memory array.
+ *
+ * @param items - The full array to paginate.
+ * @param opts - `page` is 1-indexed; `pageSize` must be 1–200.
+ * @returns A slice of the array plus pagination metadata.
+ * @throws {SdkError} When `pageSize` is outside the 1–200 range.
+ */
+export function paginateArray<T>(
+  items: T[],
+  opts: { page: number; pageSize: number },
+): PaginateArrayResult<T> {
+  const page = opts.page;
+  const pageSize = opts.pageSize;
+
+  if (pageSize < 1 || pageSize > 200) {
+    throw new SdkError(
+      "pageSize must be between 1 and 200",
+      SdkErrorCode.INVALID_RECIPIENT,
+      { pageSize },
+    );
+  }
+
+  const total = items.length;
+  const totalPages = Math.ceil(total / pageSize) || 1;
+  const startIndex = (page - 1) * pageSize;
+
+  if (startIndex >= total) {
+    return {
+      data: [],
+      total,
+      totalPages,
+      hasNext: false,
+      hasPrev: page > 1,
+    };
+  }
+
+  const endIndex = Math.min(startIndex + pageSize, total);
+  const data = items.slice(startIndex, endIndex);
+
+  return {
+    data,
+    total,
+    totalPages,
+    hasNext: endIndex < total,
+    hasPrev: page > 1,
+  };
+}

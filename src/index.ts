@@ -341,6 +341,10 @@ export type {
   HorizonProberConfig,
 } from "./horizonProber.js";
 
+// Horizon paginator helpers (#618)
+export { paginateArray } from "./horizonPaginator.js";
+export type { PaginateArrayResult } from "./horizonPaginator.js";
+
 // AMM Calculator
 export { estimateSwapOutput, calculatePoolShare } from "./ammCalculator.js";
 
