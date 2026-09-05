@@ -2069,7 +2069,21 @@ export class StellarTomlFetchError extends StellarSplitError {
     this.name = "StellarTomlFetchError";
     this.domain = domain;
     Object.setPrototypeOf(this, new.target.prototype);
-  }
+}
+
+/** Thrown when a stellar.toml file has an unsupported VERSION field. */
+export class UnsupportedTomlVersionError extends StellarSplitError {
+  readonly version: string;
+
+  constructor(version: string, supportedVersions: string[] = []) {
+    super(
+      `Unsupported stellar.toml schema version: ${version}. Supported: ${supportedVersions.join(", ")}`,
+      "UNSUPPORTED_TOML_VERSION",
+      { version, supportedVersions },
+    );
+    this.name = "UnsupportedTomlVersionError";
+    this.version = version;
+    Object.setPrototypeOf(this, new.target.prototype);
 }
 
 /** Thrown when all channel accounts in the pool are busy and the acquire timeout elapses. */

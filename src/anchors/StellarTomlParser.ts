@@ -10,10 +10,14 @@
 
 // `toml` is a CommonJS package — we import it as a namespace.
 import * as toml from "toml";
+import { UnsupportedTomlVersionError } from "../errors.js";
 
 // ---------------------------------------------------------------------------
-// SEP-1 typed structures
+// Supported stellar.toml schema versions (SEP-1)
 // ---------------------------------------------------------------------------
+//** Accepted VERSION values. TOML documents with other versions are rejected. */
+export const SUPPORTED_TOML_VERSIONS = ["2.0", "2.1"];
+
 
 /** A single currency entry in the CURRENCIES array. */
 export interface TomlCurrency {
@@ -87,8 +91,18 @@ export interface TomlMetadata {
 }
 
 // ---------------------------------------------------------------------------
+// Supported stellar.toml schema versions (SEP-1)
+// ---------------------------------------------------------------------------
+//** Accepted VERSION values. TOML documents with other versions are rejected. */
+export const SUPPORTED_TOML_VERSIONS = ["2.0", "2.1"];
+
 // Cache entry
 // ---------------------------------------------------------------------------
+// Supported stellar.toml schema versions (SEP-1)
+// ---------------------------------------------------------------------------
+//** Accepted VERSION values. TOML documents with other versions are rejected. */
+export const SUPPORTED_TOML_VERSIONS = ["2.0", "2.1"];
+
 
 interface CacheEntry {
   metadata: TomlMetadata;
@@ -96,8 +110,18 @@ interface CacheEntry {
 }
 
 // ---------------------------------------------------------------------------
+// Supported stellar.toml schema versions (SEP-1)
+// ---------------------------------------------------------------------------
+//** Accepted VERSION values. TOML documents with other versions are rejected. */
+export const SUPPORTED_TOML_VERSIONS = ["2.0", "2.1"];
+
 // StellarTomlParser
 // ---------------------------------------------------------------------------
+// Supported stellar.toml schema versions (SEP-1)
+// ---------------------------------------------------------------------------
+//** Accepted VERSION values. TOML documents with other versions are rejected. */
+export const SUPPORTED_TOML_VERSIONS = ["2.0", "2.1"];
+
 
 /** Options accepted by `StellarTomlParser`. */
 export interface StellarTomlParserOptions {
@@ -233,6 +257,12 @@ export class StellarTomlParser {
         new Error(`Failed to parse stellar.toml for domain "${domain}": ${msg}`),
         { code: "STELLAR_TOML_FETCH_ERROR", domain },
       );
+    }
+
+    // Validate VERSION before accepting the document
+    const version = parsed.VERSION;
+    if (version !== undefined && !SUPPORTED_TOML_VERSIONS.includes(String(version))) {
+      throw new UnsupportedTomlVersionError(String(version), SUPPORTED_TOML_VERSIONS);
     }
 
     return {
