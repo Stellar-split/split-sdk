@@ -141,3 +141,50 @@ export function createCompressionResponseInterceptor(_config: CompressionConfig)
     };
   };
 }
+
+import { SdkError, SdkErrorCode } from "./errors.js";
+
+/**
+ * Encode a JSON-serialisable object as a compact base64url string.
+ *
+ * @param obj - Any JSON-serialisable value.
+ * @param maxBytes - Maximum allowed length of the encoded string (default 512).
+ * @returns Base64url-encoded JSON (no padding).
+ * @throws {SdkError} When the encoded result exceeds `maxBytes`.
+ */
+export function compressMetadata(
+  obj: Record<string, unknown>,
+  maxBytes = 512,
+): string {
+  const json = JSON.stringify(obj);
+  // base64url: replace + with -, / with _, remove = padding
+  const encoded = Buffer.from(json, "utf-8")
+    .toString("base64url");
+  if (encoded.length > maxBytes) {
+    throw new SdkError(
+      `Metadata compressed size (${encoded.length}) exceeds maxBytes (${maxBytes})`,
+      SdkErrorCode.CONTRACT_REJECTED,
+      { encodedLength: encoded.length, maxBytes },
+    );
+  }
+  return encoded;
+}
+
+/**
+ * Decode a base64url string back to its original JSON object.
+ *
+ * @param encoded - Base64url-encoded JSON string.
+ * @returns The parsed JSON object.
+ * @throws {SdkError} When the input is not valid base64url or not valid JSON.
+ */
+export function decompressMetadata(encoded: string): Record<string, unknown> {
+  try {
+    const json = Buffer.from(encoded, "base64url").toString("utf-8");
+    return JSON.parse(json) as Record<string, unknown>;
+  } catch {
+    throw new SdkError(
+      "Invalid metadata encoding: not valid base64url or JSON",
+      SdkErrorCode.CONTRACT_REJECTED,
+    );
+  }
+}

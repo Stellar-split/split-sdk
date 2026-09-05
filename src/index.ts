@@ -8,6 +8,12 @@ import type { ExportFormat } from "./export.js";
 
 export { StellarSplitClient } from "./client.js";
 export { FinalityChecker } from "./finalityChecker.js";
+
+// Metadata compression helpers (#619)
+export {
+  compressMetadata,
+  decompressMetadata,
+} from "./compression.js";
 export type {
   StellarSplitClientConfig,
   NetworkConfig,

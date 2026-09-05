@@ -1,32 +1,58 @@
-import { describe, expect, it } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
-  compressPayload,
-  createCompressionRequestInterceptor,
-  decompressPayload,
+  compressMetadata,
+  decompressMetadata,
 } from "../src/compression.js";
+import { SdkError, SdkErrorCode } from "../src/errors.js";
 
-describe("compression middleware", () => {
-  it("compresses payloads smaller than the original and decompresses them", async () => {
-    const original = "invoice-response:".repeat(200);
-    const compressed = await compressPayload(original, "gzip");
-    const decompressed = await decompressPayload(compressed);
-    const decoded = new TextDecoder().decode(decompressed);
-
-    expect(compressed.body.byteLength).toBeLessThan(new TextEncoder().encode(original).byteLength);
-    expect(decoded).toBe(original);
+describe("compressMetadata / decompressMetadata", () => {
+  it("round-trips a simple object", () => {
+    const obj = { name: "Invoice #1", amount: 1000, tags: ["urgent"] };
+    const encoded = compressMetadata(obj);
+    expect(typeof encoded).toBe("string");
+    expect(encoded).not.toContain("=");
+    expect(decompressMetadata(encoded)).toEqual(obj);
   });
 
-  it("leaves small request bodies unchanged and compresses bodies over 1KB when enabled", async () => {
-    const interceptor = createCompressionRequestInterceptor({
-      enabled: true,
-      algorithm: "gzip",
-    });
-    const large = "x".repeat(2_048);
+  it("round-trips nested objects", () => {
+    const obj = { a: { b: { c: 1 } }, list: [1, 2, 3] };
+    expect(decompressMetadata(compressMetadata(obj))).toEqual(obj);
+  });
 
-    const smallResult = await interceptor({ method: "test", params: ["small"] });
-    const largeResult = await interceptor({ method: "test", params: [large] });
+  it("produces base64url output (no padding)", () => {
+    const encoded = compressMetadata({ test: true });
+    expect(encoded).not.toContain("=");
+    expect(encoded).not.toContain("+");
+    expect(encoded).not.toContain("/");
+  });
 
-    expect(smallResult.params[0]).toBe("small");
-    expect(largeResult.params[0]).toMatchObject({ compressed: true, algorithm: "gzip" });
+  it("throws SdkError when exceeding maxBytes", () => {
+    const big = { data: "x".repeat(1000) };
+    expect(() => compressMetadata(big, 10)).toThrow(SdkError);
+    try {
+      compressMetadata(big, 10);
+    } catch (err) {
+      expect((err as SdkError).code).toBe(SdkErrorCode.CONTRACT_REJECTED);
+    }
+  });
+
+  it("allows custom maxBytes when within limit", () => {
+    const obj = { a: 1 };
+    expect(() => compressMetadata(obj, 5)).toThrow(SdkError);
+    expect(() => compressMetadata(obj, 100)).not.toThrow();
+  });
+
+  it("throws SdkError on invalid base64url input", () => {
+    expect(() => decompressMetadata("!!!")).toThrow(SdkError);
+    try {
+      decompressMetadata("!!!");
+    } catch (err) {
+      expect((err as SdkError).code).toBe(SdkErrorCode.CONTRACT_REJECTED);
+    }
+  });
+
+  it("throws SdkError on valid base64url but invalid JSON", () => {
+    const encoded = Buffer.from("not-json").toString("base64url");
+    expect(() => decompressMetadata(encoded)).toThrow(SdkError);
   });
 });
