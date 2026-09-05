@@ -155,6 +155,26 @@ export class NftGateRequiredError extends StellarSplitError {
   }
 }
 
+/** Thrown when a browser extension wallet is installed but its version is too old. */
+export class ExtensionVersionTooOldError extends StellarSplitError {
+  readonly extension: string;
+  readonly requiredVersion: string;
+  readonly actualVersion: string;
+
+  constructor(extension: string, requiredVersion: string, actualVersion: string) {
+    super(
+      `${extension} version ${actualVersion} is too old. Minimum required: ${requiredVersion}`,
+      "EXTENSION_VERSION_TOO_OLD",
+      { extension, requiredVersion, actualVersion }
+    );
+    this.name = "ExtensionVersionTooOldError";
+    this.extension = extension;
+    this.requiredVersion = requiredVersion;
+    this.actualVersion = actualVersion;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Thrown when the wallet is not connected or not available. */
 export class WalletNotConnectedError extends StellarSplitError {
   constructor(message: string = "Wallet is not connected", raw?: string) {
