@@ -12,10 +12,14 @@
 
 import { checkSubentryCapacity, SubentryCapacityGuardError } from "../account/subentryGuard.js";
 import type { SubentryCapacityResult } from "../types.js";
+import { SplitRatioSumError } from "../errors.js";
 
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
+
+/** Tolerance for floating-point ratio-sum comparison. Exported for callers. */
+export const SPLIT_RATIO_TOLERANCE = 1e-9;
 
 /** A single recipient leg in a split payment. */
 export interface SplitRecipient {
@@ -23,6 +27,8 @@ export interface SplitRecipient {
   address: string;
   /** Amount to send in stroops. */
   amount: bigint;
+  /** Optional share ratio (0.0–1.0). When provided, splitExecutor validates that all ratios sum to 1.0. */
+  ratio?: number;
   /**
    * Number of new subentry slots this recipient will consume as a result of
    * this operation (e.g., 1 for a new trustline, 1 for a new data entry).
@@ -64,6 +70,23 @@ export interface SplitExecutionResult {
 // ---------------------------------------------------------------------------
 
 /**
+ * Validates that any provided recipient ratios sum to 1.0 within tolerance.
+ * @throws {SplitRatioSumError} When ratios are provided and do not sum to 1.0.
+ */
+function validateRecipientRatios(recipients: SplitRecipient[]): void {
+  const ratios = recipients
+    .map((r) => r.ratio)
+    .filter((r): r is number => r !== undefined);
+
+  if (ratios.length === 0) return;
+
+  const sum = ratios.reduce((acc, r) => acc + r, 0);
+  if (Math.abs(sum - 1.0) > SPLIT_RATIO_TOLERANCE) {
+    throw new SplitRatioSumError(sum, SPLIT_RATIO_TOLERANCE);
+  }
+}
+
+/**
  * Executes a multi-recipient split payment after running subentry capacity
  * pre-flight checks for each recipient.
  *
@@ -74,6 +97,7 @@ export interface SplitExecutionResult {
  *
  * @throws {SubentryCapacityGuardError} When any recipient's account cannot
  *   accommodate the required subentry slots and `skipCapacityCheck` is not set.
+ * @throws {SplitRatioSumError} When recipient ratios are provided and do not sum to 1.0.
  *
  * @example
  * ```ts
@@ -98,6 +122,9 @@ export async function splitExecutor(
     skipCapacityCheck = false,
     horizonUrl = "https://horizon.stellar.org",
   } = options;
+
+  // Ratio validation (issue #778)
+  validateRecipientRatios(recipients);
 
   const capacityChecks: Record<string, SubentryCapacityResult> = {};
 

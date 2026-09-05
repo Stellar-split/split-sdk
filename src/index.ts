@@ -57,6 +57,7 @@ export {
   ContractError,
   CircuitOpenError,
   ValidationError,
+  SplitRatioSumError,
   PluginAlreadyRegisteredError,
   InvalidBatchSizeError,
   InvoiceNotReleasedError,
