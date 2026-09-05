@@ -46,3 +46,27 @@ export async function searchInvoices(
     throw new SearchFailedError(error instanceof Error ? error.message : String(error));
   }
 }
+import type { Invoice } from "./types.js";
+
+/**
+ * Search a local array of invoices by memo content.
+ *
+ * @param invoices - Array of invoices to search
+ * @param query - Substring to match against `invoice.memo`
+ * @param opts - Optional flags (caseSensitive defaults to false)
+ * @returns Invoices whose memo contains the query substring
+ */
+export function searchByMemo(
+  invoices: Invoice[],
+  query: string,
+  opts?: { caseSensitive?: boolean }
+): Invoice[] {
+  if (!query) return invoices;
+
+  const target = opts?.caseSensitive ? query : query.toLowerCase();
+  return invoices.filter((invoice) => {
+    if (invoice.memo == null) return false;
+    const memo = opts?.caseSensitive ? invoice.memo : invoice.memo.toLowerCase();
+    return memo.includes(target);
+  });
+}
