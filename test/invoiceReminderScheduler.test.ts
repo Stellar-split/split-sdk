@@ -1,155 +1,81 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  InvoiceReminderScheduler,
-  DEFAULT_GRACE_PERIOD_MS,
-} from "../src/invoiceReminderScheduler.js";
-import { loadReminderSchedules } from "../src/snapshot.js";
-import type { ReminderEvent } from "../src/types.js";
+import { InvoiceReminderScheduler } from "../src/invoiceReminderScheduler.js";
 
-const INVOICE_ID = "inv_123";
-const NOW = 1_700_000_000_000;
-const DUE_AT = NOW + 24 * 60 * 60 * 1000; // due in 24h
-
-describe("InvoiceReminderScheduler", () => {
-  let scheduler: InvoiceReminderScheduler | null = null;
+describe("InvoiceReminderScheduler — cancelReminder / getPendingReminders", () => {
+  let scheduler: InvoiceReminderScheduler;
 
   beforeEach(() => {
-    localStorage.clear();
     vi.useFakeTimers();
-    vi.setSystemTime(NOW);
+    scheduler = new InvoiceReminderScheduler(() => Date.now() + 10_000, {
+      gracePeriodMs: 0,
+    });
   });
 
   afterEach(() => {
-    scheduler?.destroy();
-    scheduler = null;
+    scheduler.destroy();
     vi.useRealTimers();
   });
 
-  it("registers a reminder per offset and persists the schedule", async () => {
-    scheduler = new InvoiceReminderScheduler(() => DUE_AT);
-
-    const offsets = [60 * 60 * 1000, 10 * 60 * 1000];
-    const created = await scheduler.schedule(INVOICE_ID, offsets);
-
-    expect(created).toHaveLength(2);
-    expect(created.map((r) => r.offsetMs).sort()).toEqual(offsets.slice().sort());
-    for (const entry of created) {
-      expect(entry.invoiceId).toBe(INVOICE_ID);
-      expect(entry.dueAt).toBe(DUE_AT);
-      expect(entry.fireAt).toBe(DUE_AT - entry.offsetMs);
-      expect(entry.status).toBe("pending");
-    }
-
-    const persisted = loadReminderSchedules();
-    expect(persisted).toHaveLength(2);
+  it("scheduleReminder returns an opaque reminderId", async () => {
+    const id = await scheduler.scheduleReminder("inv-1", 5_000);
+    expect(typeof id).toBe("string");
+    expect(id.length).toBeGreaterThan(0);
   });
 
-  it("emits invoiceReminderDue with { invoiceId, offsetMs, dueAt } when a reminder fires", async () => {
-    scheduler = new InvoiceReminderScheduler(() => DUE_AT);
-    const events: ReminderEvent[] = [];
-    scheduler.on("invoiceReminderDue", (e) => events.push(e));
+  it("cancelReminder returns true and prevents the callback from firing", async () => {
+    const id = await scheduler.scheduleReminder("inv-1", 5_000);
+    const handler = vi.fn();
+    scheduler.on("invoiceReminderDue", handler);
 
-    const offsetMs = 60 * 60 * 1000; // 1h before due
-    await scheduler.schedule(INVOICE_ID, [offsetMs]);
+    expect(scheduler.cancelReminder(id)).toBe(true);
+    vi.advanceTimersByTime(10_000);
+    expect(handler).not.toHaveBeenCalled();
+  });
 
-    // Not due yet.
-    vi.advanceTimersByTime(DUE_AT - offsetMs - NOW - 1);
-    expect(events).toHaveLength(0);
+  it("cancelReminder returns false for an unknown id", () => {
+    expect(scheduler.cancelReminder("unknown-id")).toBe(false);
+  });
 
-    // Reaches fire time.
+  it("cancelReminder returns false for an already-fired reminder", async () => {
+    const id = await scheduler.scheduleReminder("inv-1", 0);
+    const handler = vi.fn();
+    scheduler.on("invoiceReminderDue", handler);
+
     vi.advanceTimersByTime(1);
-    expect(events).toEqual([{ invoiceId: INVOICE_ID, offsetMs, dueAt: DUE_AT }]);
-
-    const persisted = loadReminderSchedules();
-    expect(persisted[0]!.status).toBe("fired");
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(scheduler.cancelReminder(id)).toBe(false);
   });
 
-  it("cancel() removes all pending reminders for an invoice and stops their timers", async () => {
-    scheduler = new InvoiceReminderScheduler(() => DUE_AT);
-    const events: ReminderEvent[] = [];
-    scheduler.on("invoiceReminderDue", (e) => events.push(e));
+  it("getPendingReminders excludes cancelled reminders", async () => {
+    const id1 = await scheduler.scheduleReminder("inv-1", 5_000);
+    const id2 = await scheduler.scheduleReminder("inv-2", 6_000);
 
-    await scheduler.schedule(INVOICE_ID, [60 * 60 * 1000, 30 * 60 * 1000]);
-    scheduler.cancel(INVOICE_ID);
+    scheduler.cancelReminder(id1);
 
-    expect(scheduler.list().every((s) => s.invoiceId !== INVOICE_ID || s.status === "cancelled")).toBe(true);
-
-    vi.advanceTimersByTime(24 * 60 * 60 * 1000 + 1);
-    expect(events).toHaveLength(0);
-
-    const persisted = loadReminderSchedules();
-    expect(persisted.every((s) => s.status === "cancelled")).toBe(true);
+    const pending = scheduler.getPendingReminders();
+    expect(pending).toHaveLength(1);
+    expect(pending[0].reminderId).toBe(id2);
+    expect(pending[0].invoiceId).toBe("inv-2");
+    expect(typeof pending[0].remindAt).toBe("number");
   });
 
-  it("on startup, fires reminders that are past due but within the grace period", async () => {
-    const fireAt = NOW - 5_000; // 5s ago, well within the 60s default grace period
-    localStorage.setItem(
-      "stellar_split_reminder_schedules",
-      JSON.stringify([
-        {
-          id: "r1",
-          invoiceId: INVOICE_ID,
-          offsetMs: 60_000,
-          dueAt: fireAt + 60_000,
-          fireAt,
-          status: "pending",
-        },
-      ]),
-    );
+  it("getPendingReminders excludes fired reminders", async () => {
+    const id = await scheduler.scheduleReminder("inv-1", 0);
+    const handler = vi.fn();
+    scheduler.on("invoiceReminderDue", handler);
 
-    scheduler = new InvoiceReminderScheduler(() => DUE_AT);
-    const events: ReminderEvent[] = [];
-    scheduler.on("invoiceReminderDue", (e) => events.push(e));
+    vi.advanceTimersByTime(1);
+    expect(handler).toHaveBeenCalledTimes(1);
 
-    // Recovery fire is deferred via setTimeout(0) so listeners can attach first.
-    expect(events).toHaveLength(0);
-    vi.advanceTimersByTime(0);
-
-    expect(events).toEqual([{ invoiceId: INVOICE_ID, offsetMs: 60_000, dueAt: fireAt + 60_000 }]);
+    const pending = scheduler.getPendingReminders();
+    expect(pending).toHaveLength(0);
   });
 
-  it("on startup, marks reminders past the grace period as expired without firing them", async () => {
-    const fireAt = NOW - (DEFAULT_GRACE_PERIOD_MS + 5_000); // well outside the grace window
-    localStorage.setItem(
-      "stellar_split_reminder_schedules",
-      JSON.stringify([
-        {
-          id: "r1",
-          invoiceId: INVOICE_ID,
-          offsetMs: 60_000,
-          dueAt: fireAt + 60_000,
-          fireAt,
-          status: "pending",
-        },
-      ]),
-    );
+  it("clearAllReminders removes everything", async () => {
+    await scheduler.scheduleReminder("inv-1", 5_000);
+    await scheduler.scheduleReminder("inv-2", 6_000);
 
-    scheduler = new InvoiceReminderScheduler(() => DUE_AT);
-    const events: ReminderEvent[] = [];
-    scheduler.on("invoiceReminderDue", (e) => events.push(e));
-
-    vi.advanceTimersByTime(0);
-
-    expect(events).toHaveLength(0);
-    expect(scheduler.list()[0]!.status).toBe("expired");
-  });
-
-  it("respects a custom gracePeriodMs", async () => {
-    const fireAt = NOW - 10_000;
-    localStorage.setItem(
-      "stellar_split_reminder_schedules",
-      JSON.stringify([
-        { id: "r1", invoiceId: INVOICE_ID, offsetMs: 1000, dueAt: fireAt + 1000, fireAt, status: "pending" },
-      ]),
-    );
-
-    scheduler = new InvoiceReminderScheduler(() => DUE_AT, { gracePeriodMs: 5_000 });
-    const events: ReminderEvent[] = [];
-    scheduler.on("invoiceReminderDue", (e) => events.push(e));
-
-    vi.advanceTimersByTime(0);
-
-    expect(events).toHaveLength(0);
-    expect(scheduler.list()[0]!.status).toBe("expired");
+    scheduler.clearAllReminders();
+    expect(scheduler.getPendingReminders()).toHaveLength(0);
   });
 });

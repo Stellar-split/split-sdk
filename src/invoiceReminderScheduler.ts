@@ -99,6 +99,67 @@ export class InvoiceReminderScheduler extends TypedEventEmitter<InvoiceReminderS
     return created;
   }
 
+  /**
+   * Schedule a single reminder for an invoice.
+   * Returns an opaque reminderId that can be used with {@link cancelReminder}.
+   */
+  async scheduleReminder(invoiceId: string, offsetMs: number): Promise<string> {
+    const dueAt = await this.getDueAt(invoiceId);
+    const id = randomUUID();
+    const entry: ReminderSchedule = {
+      id,
+      invoiceId,
+      offsetMs,
+      dueAt,
+      fireAt: dueAt - offsetMs,
+      status: "pending",
+    };
+    this.schedules.push(entry);
+    this._arm(entry);
+    this._persist();
+    return id;
+  }
+
+  /**
+   * Cancel a single reminder by its opaque id.
+   * Returns `true` if the reminder was pending and is now cancelled;
+   * returns `false` if the id is unknown or the reminder already fired.
+   */
+  cancelReminder(reminderId: string): boolean {
+    const entry = this.schedules.find((s) => s.id === reminderId);
+    if (!entry || entry.status !== "pending") return false;
+
+    const timer = this.timers.get(reminderId);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.timers.delete(reminderId);
+    }
+    entry.status = "cancelled";
+    this._persist();
+    return true;
+  }
+
+  /**
+   * Return all not-yet-fired, not-cancelled reminders.
+   */
+  getPendingReminders(): Array<{ reminderId: string; invoiceId: string; remindAt: number }> {
+    return this.schedules
+      .filter((s) => s.status === "pending")
+      .map((s) => ({
+        reminderId: s.id,
+        invoiceId: s.invoiceId,
+        remindAt: s.fireAt,
+      }));
+  }
+
+  /** Clear every reminder (all statuses) and stop all timers. For test teardown. */
+  clearAllReminders(): void {
+    for (const timer of this.timers.values()) clearTimeout(timer);
+    this.timers.clear();
+    this.schedules = [];
+    this._persist();
+  }
+
   /** Remove all pending reminders for an invoice from the store. */
   cancel(invoiceId: string): void {
     const cancelled = this.schedules.filter(
