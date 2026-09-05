@@ -27,6 +27,13 @@ export interface GraphCheckResult {
   paths: Map<string, PaymentPath[]>;
 }
 
+export class GraphValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GraphValidationError";
+  }
+}
+
 export class UnreachableRecipientError extends Error {
   constructor(
     public readonly unreachableRecipients: string[],
@@ -77,6 +84,15 @@ export class PaymentGraphChecker {
     options?: { allowUnreachable?: boolean }
   ): Promise<GraphCheckResult> {
     const recipients = invoice.recipients || [];
+
+    // Detect negative-weight edges (amounts) before path-finding
+    for (const recipient of recipients) {
+      if (recipient.amount < 0n) {
+        throw new GraphValidationError(
+          `Negative-weight edge detected: ${sourceAccount} -> ${recipient.address} (amount: ${recipient.amount})`
+        );
+      }
+    }
     const sourceAccount = invoice.creator || invoice.payer || "";
     const sourceAsset = this.extractAssetFromInvoice(invoice);
 

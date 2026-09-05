@@ -2125,3 +2125,15 @@ export class SdkError extends Error {
 export function isSdkError(err: unknown): err is SdkError {
   return err instanceof SdkError;
 }
+
+/** Thrown when the Freighter wallet extension is not installed. */
+export class FreighterNotInstalledError extends StellarSplitError {
+  constructor() {
+    super(
+      "Freighter wallet is not installed. Install it from https://www.freighter.app",
+      "FREIGHTER_NOT_INSTALLED",
+    );
+    this.name = "FreighterNotInstalledError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
