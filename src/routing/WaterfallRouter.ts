@@ -29,6 +29,9 @@ export class WaterfallRouter {
       }
     }
 
+    // Sort tiers by score descending; stable sort preserves declaration order on ties
+    const sortedTiers = [...config.tiers].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+
     let remaining = availableAmount;
     let blocked = false;
     const steps: WaterfallStep[] = [];
