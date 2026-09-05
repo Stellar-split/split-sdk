@@ -1427,3 +1427,14 @@ export type {
   SubmitTransactionOptions,
   SubmitServer,
 } from "./transaction/submit.js";
+
+// ---------------------------------------------------------------------------
+// #618 - Local array pagination helper (paginateArray)
+// Spec + resolved anomalies: RESOLUCION_ANOMALIAS_618.md (experimento_autonomia).
+// ---------------------------------------------------------------------------
+
+export { paginateArray } from "./horizonPaginator.js";
+export type {
+  PaginateArrayOptions,
+  PaginateArrayResult,
+} from "./horizonPaginator.js";

@@ -5,7 +5,13 @@ import {
   getDefaultCursorStore,
   buildCursorKey,
 } from "../src/cursorTracker.js";
-import { paginate, collectAll, HorizonPaginator } from "../src/horizonPaginator.js";
+import {
+  paginate,
+  collectAll,
+  HorizonPaginator,
+  paginateArray,
+} from "../src/horizonPaginator.js";
+import { SdkError } from "../src/errors.js";
 import type { CollectionPage } from "../src/types.js";
 
 describe("InMemoryCursorStore", () => {
@@ -247,5 +253,114 @@ describe("paginate – page-size negotiation integration (#692)", () => {
 
     // All records from page1 (3) and page2 (5) should be collected
     expect(results).toHaveLength(8);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #618 — paginateArray (local array pagination)
+// Spec + resolved anomalies: RESOLUCION_ANOMALIAS_618.md (experimento_autonomia).
+
+describe("paginateArray (#618)", () => {
+  // 1..10
+  const TEN = Array.from({ length: 10 }, (_, i) => i + 1);
+
+  // ---- Spec: first page / last page / ranges ----
+  it("returns the first page (1-indexed)", () => {
+    const r = paginateArray(TEN, { page: 1, pageSize: 5 });
+    expect(r.data).toEqual([1, 2, 3, 4, 5]);
+    expect(r.total).toBe(10);
+    expect(r.totalPages).toBe(2);
+    expect(r.hasNext).toBe(true);
+    expect(r.hasPrev).toBe(false);
+  });
+
+  it("returns the last page", () => {
+    const r = paginateArray(TEN, { page: 2, pageSize: 5 });
+    expect(r.data).toEqual([6, 7, 8, 9, 10]);
+    expect(r.hasNext).toBe(false);
+    expect(r.hasPrev).toBe(true);
+  });
+
+  it("handles a page smaller than pageSize on the last page", () => {
+    const r = paginateArray([1, 2, 3, 4, 5, 6, 7], { page: 2, pageSize: 5 });
+    expect(r.data).toEqual([6, 7]);
+    expect(r.totalPages).toBe(2);
+    expect(r.hasNext).toBe(false);
+    expect(r.hasPrev).toBe(true);
+  });
+
+  // ---- Spec: out-of-range page → data: [], no error ----
+  it("returns data: [] for a page beyond totalPages", () => {
+    const r = paginateArray(TEN, { page: 99, pageSize: 5 });
+    expect(r.data).toEqual([]);
+    expect(r.total).toBe(10);
+    expect(r.totalPages).toBe(2);
+    expect(r.hasNext).toBe(false);
+    expect(r.hasPrev).toBe(false);
+  });
+
+  it("returns data: [] for page 0 (1-indexed invariant, anomaly resolved)", () => {
+    const r = paginateArray(TEN, { page: 0, pageSize: 5 });
+    expect(r.data).toEqual([]);
+    expect(r.totalPages).toBe(2);
+    expect(r.hasNext).toBe(false);
+    expect(r.hasPrev).toBe(false);
+  });
+
+  it("returns data: [] for a negative page (anomaly resolved)", () => {
+    const r = paginateArray(TEN, { page: -3, pageSize: 5 });
+    expect(r.data).toEqual([]);
+  });
+
+  // ---- Spec: pageSize bounds → throw SdkError ----
+  it("throws SdkError for pageSize 0", () => {
+    expect(() => paginateArray(TEN, { page: 1, pageSize: 0 }))
+      .toThrowError(SdkError);
+  });
+
+  it("throws SdkError for pageSize 201", () => {
+    expect(() => paginateArray(TEN, { page: 1, pageSize: 201 }))
+      .toThrowError(SdkError);
+  });
+
+  it("throws SdkError with INVALID_RECIPIENT code (enum-closed decision)", () => {
+    try {
+      paginateArray(TEN, { page: 1, pageSize: 0 });
+      expect.unreachable("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(SdkError);
+      expect((err as SdkError).code).toBe("INVALID_RECIPIENT");
+    }
+  });
+
+  it("accepts pageSize 200 (upper bound inclusive)", () => {
+    const r = paginateArray(TEN, { page: 1, pageSize: 200 });
+    expect(r.data).toEqual(TEN);
+    expect(r.totalPages).toBe(1);
+    expect(r.hasNext).toBe(false);
+  });
+
+  // ---- Anomaly: empty array ----
+  it("returns totalPages 0 and data [] for an empty array (anomaly resolved)", () => {
+    const r = paginateArray([], { page: 1, pageSize: 5 });
+    expect(r.data).toEqual([]);
+    expect(r.total).toBe(0);
+    expect(r.totalPages).toBe(0);
+    expect(r.hasNext).toBe(false);
+    expect(r.hasPrev).toBe(false);
+  });
+
+  // ---- Purity: does not mutate input ----
+  it("does not mutate the input array", () => {
+    const src = [1, 2, 3, 4, 5, 6, 7];
+    const snapshot = [...src];
+    paginateArray(src, { page: 2, pageSize: 3 });
+    expect(src).toEqual(snapshot);
+  });
+
+  // ---- Non-integer page/pageSize ----
+  it("treats a non-integer page as out-of-range (data: [])", () => {
+    const r = paginateArray(TEN, { page: 1.5, pageSize: 5 });
+    expect(r.data).toEqual([]);
   });
 });

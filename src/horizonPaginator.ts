@@ -22,6 +22,7 @@
 
 import type { CollectionPage, HorizonPaginatorOptions } from "./types.js";
 import { buildCursorKey, getDefaultCursorStore } from "./cursorTracker.js";
+import { SdkError, SdkErrorCode } from "./errors.js";
 
 /** Default namespace for cursor store keys. */
 const DEFAULT_NAMESPACE = "horizon";
@@ -182,4 +183,75 @@ export async function collectAll<T>(
     results.push(record);
   }
   return results;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #618 — Local array pagination helper (paginateArray)
+// -----------------------------------------------------------------------------
+// Spec + resolved anomalies: RESOLUCION_ANOMALIAS_618.md (experimento_autonomia).
+
+/** Options for {@link paginateArray}. */
+export interface PaginateArrayOptions {
+  /** 1-indexed page number. */
+  page: number;
+  /** Page size; must be between 1 and 200 inclusive. */
+  pageSize: number;
+}
+
+/** Result of paginating a local array. */
+export interface PaginateArrayResult<T> {
+  /** Items for the requested page. */
+  data: T[];
+  /** Total number of items in the source array. */
+  total: number;
+  /** Total number of pages. */
+  totalPages: number;
+  /** Whether a next page exists. */
+  hasNext: boolean;
+  /** Whether a previous page exists. */
+  hasPrev: boolean;
+}
+
+/**
+ * Paginate a local in-memory array into 1-indexed pages.
+ *
+ * Pure function: the input array is never mutated. An out-of-range `page`
+ * (including 0, negatives and non-integers) returns `data: []` without
+ * throwing. An empty array yields `totalPages: 0`.
+ *
+ * @param items - The full array to paginate.
+ * @param opts  - Page number (1-indexed) and page size.
+ * @returns The requested page plus pagination metadata.
+ * @throws {SdkError} if `pageSize` is not an integer between 1 and 200.
+ */
+export function paginateArray<T>(
+  items: T[],
+  opts: PaginateArrayOptions,
+): PaginateArrayResult<T> {
+  const { page, pageSize } = opts;
+
+  // Spec: pageSize must be between 1 and 200 (inclusive).
+  if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 200) {
+    // SdkErrorCode only exposes INVALID_RECIPIENT as the closest
+    // invalid-argument code (issue #607 enum is intentionally closed).
+    // Extending the enum is out of scope for this issue (see PR notes).
+    throw new SdkError(
+      `pageSize must be an integer between 1 and 200, got ${pageSize}`,
+      SdkErrorCode.INVALID_RECIPIENT,
+      { page, pageSize },
+    );
+  }
+
+  const total = items.length;
+  const totalPages = Math.ceil(total / pageSize);
+
+  // Out-of-range page (page < 1 or beyond totalPages) → empty page, no error.
+  if (!Number.isInteger(page) || page < 1 || page > totalPages) {
+    return { data: [], total, totalPages, hasNext: false, hasPrev: false };
+  }
+
+  const start = (page - 1) * pageSize;
+  const data = items.slice(start, start + pageSize);
+
+  return { data, total, totalPages, hasNext: page < totalPages, hasPrev: page > 1 };
 }
