@@ -289,8 +289,15 @@ export {
   buildRevealTransactionFromStorage,
 } from "./confidential.js";
 
-export { Deduplicator } from "./dedup.js";
+export {
+  Deduplicator,
+  generateIdempotencyKey,
+  isKnownKey,
+  registerKey,
+  clearKeys,
+} from "./dedup.js";
 
+export { searchByMemo } from "./search.js";
 export { TxQueue } from "./queue.js";
 
 export { replayEvents } from "./events.js";
@@ -610,7 +617,8 @@ export type { WebhookRecord, WebhookReplayStore } from "./webhookReplay.js";
 export {
   createWebhookMiddleware,
   generateWebhookSignature,
-  verifyWebhookSignature,
+  // verifyWebhookSignature moved to ./webhooks/verify.js
+
   parseWebhookPayload,
   isValidEventType,
   isWebhookRequest,
@@ -635,6 +643,14 @@ export type {
   InvoiceCancelledData,
   InvoiceExpiredData,
 } from "./webhookMiddleware.js";
+
+// Standalone webhook signature verifier (#617)
+export {
+  verifyWebhookSignature,
+  verifyWebhookSignatureOrThrow,
+  WebhookVerificationError,
+} from "./webhooks/verify.js";
+
 // ---------------------------------------------------------------------------
 // Lazy factories for heavy modules
 // ---------------------------------------------------------------------------
