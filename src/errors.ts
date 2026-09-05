@@ -316,6 +316,22 @@ export class ValidationError extends StellarSplitError {
   }
 }
 
+/** Thrown when split recipient ratios do not sum to exactly 1.0. */
+export class SplitRatioSumError extends StellarSplitError {
+  readonly actualSum: number;
+
+  constructor(actualSum: number, tolerance: number) {
+    super(
+      `Split ratios sum to ${actualSum} but must equal 1.0 (tolerance: ±${tolerance})`,
+      "SPLIT_RATIO_SUM_ERROR",
+      { actualSum, tolerance },
+    );
+    this.name = "SplitRatioSumError";
+    this.actualSum = actualSum;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Thrown when a plugin with the same name is already registered. */
 export class PluginAlreadyRegisteredError extends StellarSplitError {
   readonly pluginName: string;
