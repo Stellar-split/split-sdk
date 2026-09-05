@@ -595,6 +595,24 @@ export class NoSignerProvidedError extends StellarSplitError {
   }
 }
 
+/** Thrown when the Ledger device firmware (or Stellar app) is too old for the requested operation. */
+export class LedgerFirmwareTooOldError extends StellarSplitError {
+  readonly requiredVersion: string;
+  readonly actualVersion: string;
+
+  constructor(requiredVersion: string, actualVersion: string) {
+    super(
+      `Ledger firmware/app version ${actualVersion} is too old. Minimum required: ${requiredVersion}`,
+      "LEDGER_FIRMWARE_TOO_OLD",
+      { requiredVersion, actualVersion }
+    );
+    this.name = "LedgerFirmwareTooOldError";
+    this.requiredVersion = requiredVersion;
+    this.actualVersion = actualVersion;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 /** Thrown when connection pool is improperly configured. */
 export class ConnectionPoolConfigError extends StellarSplitError {
   readonly issue: string;
