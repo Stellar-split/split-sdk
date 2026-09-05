@@ -2125,3 +2125,23 @@ export class SdkError extends Error {
 export function isSdkError(err: unknown): err is SdkError {
   return err instanceof SdkError;
 }
+
+/** Thrown when an anchor's TLS certificate fingerprint does not match the pinned value. */
+export class CertificatePinningError extends StellarSplitError {
+  readonly domain: string;
+  readonly expectedFingerprint: string;
+  readonly actualFingerprint?: string;
+
+  constructor(domain: string, expected: string, actual?: string) {
+    super(
+      `Certificate pinning failed for ${domain}: expected ${expected}, got ${actual ?? "unknown"}`,
+      "CERTIFICATE_PINNING_ERROR",
+      { domain, expectedFingerprint: expected, actualFingerprint: actual },
+    );
+    this.name = "CertificatePinningError";
+    this.domain = domain;
+    this.expectedFingerprint = expected;
+    this.actualFingerprint = actual;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
