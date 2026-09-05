@@ -61,6 +61,24 @@ export class SimpleCache<T> {
 
     this.hits++;
     return entry.value;
+
+  /**
+   * Peek at the raw cache entry for `key` without updating hit counters
+   * or evicting expired entries. Returns `undefined` when the key is absent.
+   */
+  peek(key: string): MethodCacheEntry | undefined {
+    if (!this.enabled) return undefined;
+    return this.store.get(key);
+  }
+
+  /** Return the TTL (in ms) that would be applied to `method`. */
+  resolveTtl(method: string): number {
+    return this.ttlConfig[method] ?? this.ttlConfig["default"] ?? 0;
+  }
+
+  get enabledState(): boolean {
+    return this.enabled;
+  }
   }
 
   set(key: string, value: T): void {
