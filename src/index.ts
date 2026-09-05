@@ -285,6 +285,7 @@ export {
   clearKeys,
 } from "./dedup.js";
 
+export { searchByMemo } from "./search.js";
 export { TxQueue } from "./queue.js";
 
 export { replayEvents } from "./events.js";
