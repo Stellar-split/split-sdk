@@ -90,6 +90,11 @@ export class XBullAdapter implements WalletAdapter {
   private setupAccountChangeListener(): void {
     if (!window.xbull) return;
 
+    if (this.unsubscribe) {
+      this.unsubscribe();
+      this.unsubscribe = null;
+    }
+
     this.unsubscribe = window.xbull.onAccountChange((publicKey: string) => {
       this.currentPublicKey = publicKey;
       
