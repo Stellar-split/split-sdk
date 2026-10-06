@@ -77,7 +77,11 @@ export class AnomalyDetector {
     this.rapidCycleSeconds = options.rapidCycleSeconds ?? 300;
     this.maxAmountVariance = options.maxAmountVariance ?? 0.8;
     this.sensitivityThreshold = options.sensitivityThreshold ?? 0.8;
-    if (this.sensitivityThreshold <= 0 || this.sensitivityThreshold > 1) {
+    if (
+      !Number.isFinite(this.sensitivityThreshold) ||
+      this.sensitivityThreshold <= 0 ||
+      this.sensitivityThreshold > 1
+    ) {
       throw new RangeError("sensitivityThreshold must be in the range (0, 1]");
     }
     this.now = options.now ?? (() => Math.floor(Date.now() / 1000));
