@@ -82,7 +82,42 @@ export function sumRecipientRatios(recipients: SplitRecipient[]): number {
 }
 
 /**
+ * Thrown when a recipient's individual ratio is not a finite number in the
+ * valid [0, 1] range. Covers NaN, ±Infinity, and out-of-range values such as
+ * negative ratios or ratios greater than 1.
+ */
+export class SplitRatioLegError extends StellarSplitError {
+  /** The address of the recipient whose ratio is invalid. */
+  readonly address: string;
+  /** The invalid ratio value that was provided. */
+  readonly ratio: number;
+
+  constructor(address: string, ratio: number) {
+    const reason = !Number.isFinite(ratio)
+      ? `not a finite number (${ratio})`
+      : ratio < 0
+      ? `negative (${ratio})`
+      : `greater than 1 (${ratio})`;
+    super(
+      `Split recipient ${address} has an invalid ratio: ${reason}. ` +
+        `Each ratio must be a finite number in [0, 1].`,
+      "SPLIT_RATIO_LEG_INVALID",
+      { address, ratio },
+    );
+    this.name = "SplitRatioLegError";
+    this.address = address;
+    this.ratio = ratio;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/**
  * Assert that the declared recipient ratios sum to 1.0 within `tolerance`.
+ *
+ * Also validates that every individual ratio is a finite number in the
+ * [0, 1] range before checking the aggregate. This catches negative ratios,
+ * ratios greater than 1, NaN, and ±Infinity — any of which could silently
+ * produce a sum of 1.0 that is actually invalid (e.g. `[-1, 2]`).
  *
  * @param recipients - Recipient legs of the split; each should declare `ratio`.
  * @param tolerance  - Absolute tolerance for the comparison.
@@ -90,13 +125,32 @@ export function sumRecipientRatios(recipients: SplitRecipient[]): number {
  *
  * @returns The actual sum of the declared ratios (useful for logging/metrics).
  *
+ * @throws {SplitRatioLegError} When any individual ratio is not finite or
+ *   outside [0, 1].
  * @throws {SplitRatioSumError} When `|sum - 1| > tolerance`.
  */
 export function validateSplitRatioSum(
   recipients: SplitRecipient[],
   tolerance: number = SPLIT_RATIO_TOLERANCE,
 ): number {
+  // Issue #1012 — validate each leg individually first so that invalid
+  // values like [-1, 2], NaN, or Infinity cannot slip through just because
+  // their aggregate happens to equal 1.0 (or NaN, which always evades the
+  // tolerance check since NaN comparisons return false).
+  for (const recipient of recipients) {
+    if (recipient.ratio !== undefined) {
+      const r = recipient.ratio;
+      if (!Number.isFinite(r) || r < 0 || r > 1) {
+        throw new SplitRatioLegError(recipient.address, r);
+      }
+    }
+  }
+
   const actualSum = sumRecipientRatios(recipients);
+  // Also guard against non-finite sums from missing legs or other edge cases.
+  if (!Number.isFinite(actualSum)) {
+    throw new SplitRatioSumError(actualSum, SPLIT_RATIO_EXPECTED_SUM, tolerance);
+  }
   if (Math.abs(actualSum - SPLIT_RATIO_EXPECTED_SUM) > tolerance) {
     throw new SplitRatioSumError(actualSum, SPLIT_RATIO_EXPECTED_SUM, tolerance);
   }
