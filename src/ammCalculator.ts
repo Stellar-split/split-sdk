@@ -83,9 +83,11 @@ export function estimateSwapOutput(
     };
   }
 
-  // Check against max ratio threshold
-  const ratio = Number(amountIn) / Number(reserveIn);
-  if (ratio > maxRatio) {
+  // Issue #1007 — Check against max ratio threshold without coercing
+  // arbitrary-size BigInts to Number. Both operands can exceed
+  // Number.MAX_VALUE, where Infinity / Infinity would otherwise become NaN
+  // and silently bypass this guard.
+  if (ratioExceedsLimit(amountIn, reserveIn, maxRatio)) {
     throw new InsufficientLiquidityError(
       `Input amount exceeds ${(maxRatio * 100).toFixed(0)}% of pool reserves`,
       inputReserve.amount,
@@ -407,6 +409,31 @@ function formatScaled(value: bigint, decimals: number): string {
   const fracPart = value % SCALE;
   if (decimals === 0) return intPart.toString();
   return `${intPart}.${fracPart.toString().padStart(decimals, "0")}`;
+}
+
+// Issue #1007 — cross-multiply BigInts against the limit ratio so that
+// arbitrary-size inputs (e.g. 10^400) are not coerced to Infinity and then
+// NaN by Number(). This replaces the prior `Number(amountIn) / Number(reserveIn) > maxRatio`.
+function ratioExceedsLimit(amount: bigint, reserve: bigint, limit: number): boolean {
+  if (!Number.isFinite(limit)) {
+    // Preserve the prior comparison semantics for non-finite caller values:
+    // NaN/+Infinity never reject, while -Infinity rejects every positive ratio.
+    return limit === -Infinity;
+  }
+
+  const [coefficient, exponentText] = limit.toString().toLowerCase().split("e");
+  const [integerPart, fractionalPart = ""] = coefficient!.split(".");
+  let numerator = BigInt(`${integerPart}${fractionalPart}`);
+  let denominator = 10n ** BigInt(fractionalPart.length);
+  const exponent = Number(exponentText ?? "0");
+
+  if (exponent > 0) {
+    numerator *= 10n ** BigInt(exponent);
+  } else if (exponent < 0) {
+    denominator *= 10n ** BigInt(-exponent);
+  }
+
+  return amount * denominator > reserve * numerator;
 }
 
 function computeSpotPrice(reserveIn: bigint, reserveOut: bigint): string {
