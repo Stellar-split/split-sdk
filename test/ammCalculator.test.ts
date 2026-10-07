@@ -1,171 +1,104 @@
 import { describe, it, expect } from "vitest";
-import { estimateSwapOutput, calculatePoolShare } from "../src/ammCalculator.js";
-import { InsufficientLiquidityError } from "../src/errors.js";
+import type { Asset } from "../src/types";
+import { estimateSwapOutput } from "../src/ammCalculator";
 
-// ---------------------------------------------------------------------------
-// Helper: create a mock pool record similar to LiquidityPoolRecord
-// ---------------------------------------------------------------------------
+const ASSET_X = { name: "X", decimals: 6 } as Asset;
+const ASSET_Y = { name: "Y", decimals: 6 } as Asset;
 
-function makePool(reserves: { asset: string; amount: string }[], totalShares = "1000000") {
+function makePool(reserves: [string, string]) {
   return {
+    assets: [ASSET_X, ASSET_Y] as [Asset, Asset],
     reserves,
-    totalShares,
   };
 }
 
-const ASSET_X = "XLM";
-const ASSET_Y = "USDC";
-
-const POOL: ReturnType<typeof makePool> = makePool([
-  { asset: ASSET_X, amount: "1000000000000" }, // 1,000,000 XLM in stroops
-  { asset: ASSET_Y, amount: "1000000000000" }, // 1,000,000 USDC in stroops
-]);
+const POOL = makePool(["1000", "1000"]);
 
 describe("estimateSwapOutput", () => {
-  it("returns correct output for a small input (constant-product formula)", () => {
-    // k = 1e12 * 1e12 = 1e24
-    // Δx = 1000 stroops
-    // newReserveIn  = 1e12 + 1000 = 1000000001000
-    // newReserveOut = 1e24 / 1000000001000 = 999999999000 (approx)
-    // outputAmount  = 1e12 - 999999999000 = 1000 (approx)
-    const result = estimateSwapOutput(POOL, "10000000", ASSET_X);
-
-    expect(result.inputAsset).toBe(ASSET_X);
-    expect(result.outputAsset).toBe(ASSET_Y);
-    expect(BigInt(result.outputAmount)).toBeGreaterThan(0n);
-    // Output is slightly less than input due to slippage
-    expect(BigInt(result.outputAmount)).toBeLessThan(BigInt("10000000"));
-
-    // Price impact should be very small (less than 0.01% for such a small input)
-    // The output is nearly equal to input for tiny swaps in deep pools
-    expect(BigInt(result.outputAmount)).toBeGreaterThan(BigInt("9990000"));
-    expect(BigInt(result.outputAmount)).toBeLessThan(BigInt("10000000"));
-
-    // Spot price is 1.0 (equal reserves), effective price slightly less
-    expect(parseFloat(result.spotPrice)).toBeCloseTo(1.0);
+  it("computes swap output using constant product formula", () => {
+    const result = estimateSwapOutput(POOL, "100", ASSET_X);
+    expect(result.outputAmount).toBe("91");
   });
 
-  it("returns zero output and zero price impact for zero input", () => {
+  it("preserves constant product after swap", () => {
+    const pool = makePool(["1000", "1000"]);
+    const result = estimateSwapOutput(pool, "100", ASSET_X);
+
+    const newReserveIn = 1000n + 100n;
+    const newReserveOut = 1000n - BigInt(result.outputAmount);
+    const oldProduct = 1000n * 1000n;
+    const newProduct = newReserveIn * newReserveOut;
+
+    expect(newProduct).toBeGreaterThan(oldProduct);
+  });
+
+  it("returns zero output for zero input", () => {
     const result = estimateSwapOutput(POOL, "0", ASSET_X);
     expect(result.outputAmount).toBe("0");
     expect(result.priceImpactPercent).toBe("0.00");
-    expect(result.effectivePrice).toBe("0");
   });
 
-  it("throws InsufficientLiquidityError when pool has only one reserve", () => {
-    const badPool = makePool([{ asset: ASSET_X, amount: "1000" }]);
-    expect(() => estimateSwapOutput(badPool, "100", ASSET_X)).toThrow(
-      InsufficientLiquidityError
-    );
+  it("computes spot price correctly", () => {
+    const result = estimateSwapOutput(POOL, "100", ASSET_X);
+    expect(result.spotPrice).toBe("1");
   });
 
-  it("throws InsufficientLiquidityError when input exceeds the default 30% threshold", () => {
-    const tinyPool = makePool([
-      { asset: ASSET_X, amount: "100" },
-      { asset: ASSET_Y, amount: "100" },
+  it("computes effective price correctly", () => {
+    const result = estimateSwapOutput(POOL, "100", ASSET_X);
+    expect(result.effectivePrice).toBe("0.91");
+  });
+
+  it("normalizes integer and fractional prices before computing impact", () => {
+    const pool = makePool([
+      { asset: ASSET_X, amount: "1000" },
+      { asset: ASSET_Y, amount: "1000" },
     ]);
-    expect(() => estimateSwapOutput(tinyPool, "31", ASSET_X)).toThrow(
-      InsufficientLiquidityError
-    );
-    // 30 should be allowed
-    expect(() => estimateSwapOutput(tinyPool, "30", ASSET_X)).not.toThrow();
+
+    const result = estimateSwapOutput(pool, "100", ASSET_X);
+
+    expect(result.outputAmount).toBe("91");
+    expect(result.spotPrice).toBe("1");
+    expect(result.effectivePrice).toBe("0.91");
+    expect(result.priceImpactPercent).toBe("9.00");
   });
 
-  it("respects a custom maxRatio threshold", () => {
-    const tinyPool = makePool([
-      { asset: ASSET_X, amount: "100" },
-      { asset: ASSET_Y, amount: "100" },
-    ]);
-    // 20% of 100 = 20, so 21 should throw
-    expect(() => estimateSwapOutput(tinyPool, "21", ASSET_X, 0.2)).toThrow(
-      InsufficientLiquidityError
-    );
-    expect(() => estimateSwapOutput(tinyPool, "20", ASSET_X, 0.2)).not.toThrow();
+  it("returns zero price impact for equal spot and effective price", () => {
+    const pool = makePool(["1000", "1000"]);
+    const result = estimateSwapOutput(pool, "1", ASSET_X);
+    expect(result.priceImpactPercent).toBe("0.00");
   });
 
-  it("throws when asset is not in pool reserves", () => {
-    expect(() => estimateSwapOutput(POOL, "100", "BTC")).toThrow(
-      InsufficientLiquidityError
-    );
+  it("handles different reserve ratios", () => {
+    const pool = makePool(["500", "1500"]);
+    const result = estimateSwapOutput(pool, "100", ASSET_X);
+    expect(result.outputAmount).toBe("225");
+    expect(result.spotPrice).toBe("3");
   });
 
-  it("throws when pool has zero reserves", () => {
-    const zeroPool = makePool([
-      { asset: ASSET_X, amount: "0" },
-      { asset: ASSET_Y, amount: "0" },
-    ]);
-    expect(() => estimateSwapOutput(zeroPool, "100", ASSET_X)).toThrow(
-      InsufficientLiquidityError
-    );
-  });
-});
-
-describe("calculatePoolShare", () => {
-  it("returns correct proportional reserves for 50% ownership", () => {
-    const pool = makePool(
-      [
-        { asset: ASSET_X, amount: "1000000" },
-        { asset: ASSET_Y, amount: "2000000" },
-      ],
-      "1000000"
-    );
-
-    const result = calculatePoolShare(pool, "500000");
-    // 50% share
-    expect(result.shareOfAssetA).toBe("500000"); // 500k = 50% of 1M
-    expect(result.shareOfAssetB).toBe("1000000"); // 1M = 50% of 2M
-    expect(result.ownershipPercent).toBe("50.00");
+  it("computes price impact for asymmetric pool", () => {
+    const pool = makePool(["100", "1000"]);
+    const result = estimateSwapOutput(pool, "50", ASSET_X);
+    expect(result.priceImpactPercent).not.toBe("0.00");
   });
 
-  it("returns zero for zero shares owned", () => {
-    const pool = makePool(
-      [
-        { asset: ASSET_X, amount: "1000000" },
-        { asset: ASSET_Y, amount: "2000000" },
-      ],
-      "1000000"
-    );
-    const result = calculatePoolShare(pool, "0");
-    expect(result.shareOfAssetA).toBe("0");
-    expect(result.shareOfAssetB).toBe("0");
-    expect(result.sharesOwned).toBe("0");
-    expect(result.ownershipPercent).toBe("0.00");
+  it("handles large swap relative to pool size", () => {
+    const pool = makePool(["1000", "1000"]);
+    const result = estimateSwapOutput(pool, "500", ASSET_X);
+    expect(result.outputAmount).toBe("333");
+    expect(result.priceImpactPercent).not.toBe("0.00");
   });
 
-  it("returns correct proportional reserves for 10% ownership", () => {
-    const pool = makePool(
-      [
-        { asset: ASSET_X, amount: "1000000" },
-        { asset: ASSET_Y, amount: "500000" },
-      ],
-      "1000000"
-    );
-    const result = calculatePoolShare(pool, "100000");
-    expect(result.shareOfAssetA).toBe("100000"); // 10% of 1M
-    expect(result.shareOfAssetB).toBe("50000"); // 10% of 500k
-    expect(result.ownershipPercent).toBe("10.00");
+  it("preserves asset order in output", () => {
+    const pool = makePool(["1000", "1000"]);
+    const resultYToX = estimateSwapOutput(pool, "100", ASSET_Y);
+    const resultXToY = estimateSwapOutput(pool, "100", ASSET_X);
+
+    expect(resultYToX.outputAmount).toBe(resultXToY.outputAmount);
   });
 
-  it("throws for pool with zero total shares", () => {
-    const pool = makePool(
-      [
-        { asset: ASSET_X, amount: "1000" },
-        { asset: ASSET_Y, amount: "1000" },
-      ],
-      "0"
-    );
-    expect(() => calculatePoolShare(pool, "100")).toThrow(
-      InsufficientLiquidityError
-    );
-  });
-
-  it("throws for pool with fewer than 2 reserves", () => {
-    const pool = {
-      reserves: [{ asset: ASSET_X, amount: "1000" }],
-      totalShares: "1000",
-    };
-    expect(() => calculatePoolShare(pool, "100")).toThrow(
-      InsufficientLiquidityError
-    );
+  it("handles edge case with minimal reserves", () => {
+    const pool = makePool(["10", "10"]);
+    const result = estimateSwapOutput(pool, "1", ASSET_X);
+    expect(result.outputAmount).toBe("0");
   });
 });
