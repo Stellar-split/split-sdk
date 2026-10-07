@@ -10,10 +10,10 @@
  * entirely without altering any other pre-flight behaviour.
  *
  * Issue #778 — when recipients declare a `ratio`, the executor first verifies
- * that the ratios sum to exactly 1.0 (within {@link SPLIT_RATIO_TOLERANCE})
- * and throws {@link SplitRatioSumError} otherwise, so floating-point rounding
- * errors or user input mistakes can never silently over- or underpay a split.
- * Splits without ratios behave exactly as before.
+ * that every declared ratio is a finite fraction in `[0, 1]` and that the
+ * ratios sum to exactly 1.0 (within {@link SPLIT_RATIO_TOLERANCE}), throwing
+ * {@link SplitRatioSumError} otherwise. Splits without ratios behave exactly
+ * as before.
  */
 
 import { checkSubentryCapacity, SubentryCapacityGuardError } from "../account/subentryGuard.js";
@@ -35,12 +35,14 @@ export const SPLIT_RATIO_TOLERANCE = 1e-9;
 const SPLIT_RATIO_EXPECTED_SUM = 1;
 
 /**
- * Thrown when the sum of all recipient ratios does not equal 1.0 within
+ * Thrown when a declared recipient ratio is not a finite fraction in `[0, 1]`,
+ * or when the sum of all recipient ratios does not equal 1.0 within
  * {@link SPLIT_RATIO_TOLERANCE}. The offending sum is exposed on
- * {@link SplitRatioSumError.actualSum} so callers can report the exact drift.
+ * {@link SplitRatioSumError.actualSum}; malformed runtime ratio values that
+ * prevent a numeric total report `NaN`.
  */
 export class SplitRatioSumError extends StellarSplitError {
-  /** The sum of all declared recipient ratios. */
+  /** The sum of all declared recipient ratios, or NaN for malformed runtime values. */
   readonly actualSum: number;
   /** The sum the ratios were expected to add up to (always `1`). */
   readonly expectedSum: number;
@@ -82,7 +84,8 @@ export function sumRecipientRatios(recipients: SplitRecipient[]): number {
 }
 
 /**
- * Assert that the declared recipient ratios sum to 1.0 within `tolerance`.
+ * Assert that declared recipient ratios are finite fractions in `[0, 1]` and
+ * sum to 1.0 within `tolerance`.
  *
  * @param recipients - Recipient legs of the split; each should declare `ratio`.
  * @param tolerance  - Absolute tolerance for the comparison.
@@ -90,16 +93,44 @@ export function sumRecipientRatios(recipients: SplitRecipient[]): number {
  *
  * @returns The actual sum of the declared ratios (useful for logging/metrics).
  *
- * @throws {SplitRatioSumError} When `|sum - 1| > tolerance`.
+ * @throws {SplitRatioSumError} When a declared ratio is non-numeric,
+ *   non-finite, outside `[0, 1]`, or when the numeric sum is outside the
+ *   allowed tolerance.
  */
 export function validateSplitRatioSum(
   recipients: SplitRecipient[],
   tolerance: number = SPLIT_RATIO_TOLERANCE,
 ): number {
-  const actualSum = sumRecipientRatios(recipients);
-  if (Math.abs(actualSum - SPLIT_RATIO_EXPECTED_SUM) > tolerance) {
+  let actualSum = 0;
+  let hasInvalidRatio = false;
+
+  for (const recipient of recipients) {
+    const ratio: unknown = recipient.ratio;
+    if (ratio === undefined) {
+      continue;
+    }
+
+    if (typeof ratio !== "number" || !Number.isFinite(ratio)) {
+      hasInvalidRatio = true;
+      actualSum = Number.NaN;
+      break;
+    }
+
+    actualSum += ratio;
+    if (ratio < 0 || ratio > 1) {
+      hasInvalidRatio = true;
+    }
+  }
+
+  // Negating <= is deliberate: unlike a plain "> tolerance" comparison it
+  // fails closed if future arithmetic ever produces NaN.
+  if (
+    hasInvalidRatio ||
+    !(Math.abs(actualSum - SPLIT_RATIO_EXPECTED_SUM) <= tolerance)
+  ) {
     throw new SplitRatioSumError(actualSum, SPLIT_RATIO_EXPECTED_SUM, tolerance);
   }
+
   return actualSum;
 }
 
@@ -120,8 +151,8 @@ export interface SplitRecipient {
    */
   requiredSlots?: number;
   /**
-   * The recipient's share of the split as a decimal ratio (a fraction of the
-   * total, e.g. `0.25` for 25 %).
+   * The recipient's share of the split as a finite decimal fraction in
+   * `[0, 1]` (e.g. `0.25` for 25 %).
    *
    * When at least one recipient declares a `ratio`, every recipient must do so
    * and the ratios must sum to 1.0 within {@link SPLIT_RATIO_TOLERANCE};
@@ -167,16 +198,17 @@ export interface SplitExecutionResult {
  * Executes a multi-recipient split payment after running subentry capacity
  * pre-flight checks for each recipient.
  *
- * When any recipient declares a `ratio`, the ratios are validated to sum to
- * 1.0 (within {@link SPLIT_RATIO_TOLERANCE}) before any transaction is built.
+ * When any recipient declares a `ratio`, every declared ratio is validated as
+ * a finite fraction in `[0, 1]` and the ratios are validated to sum to 1.0
+ * (within {@link SPLIT_RATIO_TOLERANCE}) before any transaction is built.
  *
  * @param recipients - Array of recipient addresses, amounts, and required slots.
  * @param options    - Execution options including the opt-out skip flag and Horizon URL.
  *
  * @returns {@link SplitExecutionResult} with capacity check outcomes.
  *
- * @throws {SplitRatioSumError} When recipient ratios are declared but do not
- *   sum to 1.0 within {@link SPLIT_RATIO_TOLERANCE}.
+ * @throws {SplitRatioSumError} When recipient ratios are declared but any ratio
+ *   is invalid or their sum is outside {@link SPLIT_RATIO_TOLERANCE}.
  * @throws {SubentryCapacityGuardError} When any recipient's account cannot
  *   accommodate the required subentry slots and `skipCapacityCheck` is not set.
  *
@@ -211,8 +243,8 @@ export async function splitExecutor(
     horizonUrl = "https://horizon.stellar.org",
   } = options;
 
-  // Issue #778 — fail fast on malformed ratios instead of processing (and
-  // paying out) a split whose shares silently over- or underpay the total.
+  // Issue #778 / #1012 — fail fast on malformed ratios instead of processing
+  // a split whose shares silently over- or underpay the total.
   if (recipients.some((recipient) => recipient.ratio !== undefined)) {
     validateSplitRatioSum(recipients);
   }
