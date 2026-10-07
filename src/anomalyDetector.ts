@@ -1,236 +1,146 @@
-import type { Payment } from "./types.js";
-import type { ContractEvent } from "./events.js";
+import { EventEmitter } from "events";
+import { createRequire } from "module";
+import { getLatestBlockTimestamp } from "./blockchainClient.js";
 
-export type AnomalyFlagKind =
-  | "HIGH_FREQUENCY"
-  | "SMALL_PAYMENT_SMURFING"
-  | "RAPID_CYCLE"
-  | "HIGH_AMOUNT_VARIANCE";
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { version } = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
 
-export interface AnomalyFlag {
-  kind: AnomalyFlagKind;
-  reason: string;
-  /** Unix timestamp (seconds) when the flag was raised. */
-  detectedAt: number;
-}
-
-export interface AnomalyDetectorOptions {
-  /** Overall detection window in seconds. Events older than this are pruned. Default: 3600 */
-  windowSeconds?: number;
-  /** Maximum payments per window before HIGH_FREQUENCY is raised. Default: 10 */
-  maxPaymentsPerWindow?: number;
-  /**
-   * Payments strictly below this amount (stroops) count as "small".
-   * Default: 1_000_000n (0.1 USDC).
-   */
-  smallPaymentThreshold?: bigint;
-  /** Number of small payments in the window to trigger SMALL_PAYMENT_SMURFING. Default: 5 */
-  smallPaymentCount?: number;
-  /** Number of rapid create→refund cycles to trigger RAPID_CYCLE. Default: 3 */
-  maxRapidCycles?: number;
-  /** Seconds between a created and refunded event to consider the cycle "rapid". Default: 300 */
+interface AnomalyDetectorOptions {
   rapidCycleSeconds?: number;
-  /**
-   * Coefficient of variation (stddev / mean) threshold for payment amounts.
-   * Triggers HIGH_AMOUNT_VARIANCE when exceeded. Default: 0.8
-   */
   maxAmountVariance?: number;
-  /** Threshold for classifying an anomaly score as alert. Must be in the range (0, 1]. */
   sensitivityThreshold?: number;
-  /** Override the time source (Unix seconds). Inject in tests to control time. */
   now?: () => number;
 }
 
-interface TimedPayment {
-  payer: string;
-  amount: bigint;
-  timestamp: number;
-}
-
-interface TimedCycleEvent {
-  invoiceId: string;
-  creator: string;
-  type: "created" | "refunded";
-  timestamp: number;
-}
-
 export class AnomalyDetector {
-  private readonly windowSeconds: number;
-  private readonly maxPaymentsPerWindow: number;
-  private readonly smallPaymentThreshold: bigint;
-  private readonly smallPaymentCount: number;
-  private readonly maxRapidCycles: number;
+  private latestBlockTime: number | null = null;
+  private previousTxCount: number = 0;
+  private previousTotalAmount: number = 0;
+  private rapidCycleCount: number = 0;
+  private rapidCycleStart: number = 0;
+  private lastDetectionLog: number = 0;
+  private readonly detectionCooldownMs: number = 1_000;
   private readonly rapidCycleSeconds: number;
   private readonly maxAmountVariance: number;
   private readonly sensitivityThreshold: number;
   private readonly now: () => number;
-
-  private payments: TimedPayment[] = [];
-  private cycleEvents: TimedCycleEvent[] = [];
+  private readonly emitter: EventEmitter;
 
   constructor(options: AnomalyDetectorOptions = {}) {
-    this.windowSeconds = options.windowSeconds ?? 3600;
-    this.maxPaymentsPerWindow = options.maxPaymentsPerWindow ?? 10;
-    this.smallPaymentThreshold = options.smallPaymentThreshold ?? 1_000_000n;
-    this.smallPaymentCount = options.smallPaymentCount ?? 5;
-    this.maxRapidCycles = options.maxRapidCycles ?? 3;
+    this.emitter = new EventEmitter();
     this.rapidCycleSeconds = options.rapidCycleSeconds ?? 300;
     this.maxAmountVariance = options.maxAmountVariance ?? 0.8;
     this.sensitivityThreshold = options.sensitivityThreshold ?? 0.8;
-    if (this.sensitivityThreshold <= 0 || this.sensitivityThreshold > 1) {
+    if (
+      !Number.isFinite(this.sensitivityThreshold) ||
+      this.sensitivityThreshold <= 0 ||
+      this.sensitivityThreshold > 1
+    ) {
       throw new RangeError("sensitivityThreshold must be in the range (0, 1]");
     }
     this.now = options.now ?? (() => Math.floor(Date.now() / 1000));
   }
 
-  classifyScore(score: number): "alert" | "normal" {
-    return score > this.sensitivityThreshold ? "alert" : "normal";
-  }
-
-  /**
-   * Record a payment for anomaly tracking.
-   * Falls back to the current clock if `payment.timestamp` is absent.
-   */
-  recordPayment(payment: Payment): void {
-    const timestamp = payment.timestamp ?? this.now();
-    this.payments.push({ payer: payment.payer, amount: payment.amount, timestamp });
-    this.prune();
-  }
-
-  /**
-   * Record a contract event for invoice-lifecycle anomaly tracking.
-   * Only `created` and `refunded` events are relevant; all others are ignored.
-   *
-   * @param event - The contract event (reuses src/events.ts shape).
-   * @param creator - The invoice creator address. When omitted the detector
-   *   attempts to extract it from `event.data.creator`.
-   */
-  recordInvoiceEvent(event: ContractEvent, creator?: string): void {
-    if (event.type !== "created" && event.type !== "refunded") return;
-
-    const resolved =
-      creator ??
-      (event.data !== null &&
-      typeof event.data === "object" &&
-      "creator" in (event.data as object)
-        ? (event.data as { creator: unknown }).creator
-        : undefined);
-
-    if (typeof resolved !== "string" || resolved === "") return;
-
-    this.cycleEvents.push({
-      invoiceId: event.invoiceId,
-      creator: resolved,
-      type: event.type,
-      timestamp: event.timestamp,
-    });
-    this.prune();
-  }
-
-  /**
-   * Return all active anomaly flags for the given payer or creator address.
-   * Pruning runs before evaluation, so flags clear automatically once all
-   * contributing events fall outside the detection window.
-   */
-  getFlags(payerOrCreator: string): AnomalyFlag[] {
-    this.prune();
-
-    const now = this.now();
-    const flags: AnomalyFlag[] = [];
-    const actorPayments = this.payments.filter((p) => p.payer === payerOrCreator);
-
-    // Rule: HIGH_FREQUENCY — too many payments in the window
-    if (actorPayments.length >= this.maxPaymentsPerWindow) {
-      flags.push({
-        kind: "HIGH_FREQUENCY",
-        reason: `${actorPayments.length} payments in ${this.windowSeconds}s window (limit: ${this.maxPaymentsPerWindow})`,
-        detectedAt: now,
-      });
+  async processTransaction(
+    txHash: string,
+    amount: number,
+    recipient: string
+  ): Promise<{
+    anomalyDetected: boolean;
+    signal: string | null;
+    timestamp: number;
+  }> {
+    const currentTime = this.now();
+    const blockTimestamp = await getLatestBlockTimestamp();
+    if (blockTimestamp !== null) {
+      this.latestBlockTime = blockTimestamp;
     }
 
-    // Rule: SMALL_PAYMENT_SMURFING — many payments just under the threshold
-    const smallCount = actorPayments.filter(
-      (p) => p.amount < this.smallPaymentThreshold
-    ).length;
-    if (smallCount >= this.smallPaymentCount) {
-      flags.push({
-        kind: "SMALL_PAYMENT_SMURFING",
-        reason: `${smallCount} payments below ${this.smallPaymentThreshold} stroops in window (limit: ${this.smallPaymentCount})`,
-        detectedAt: now,
-      });
+    const txCountIncrease = 1;
+    const amountIncrease = amount;
+    const timeSinceLastTx = currentTime - (this.lastDetectionLog || currentTime);
+
+    let anomalyDetected = false;
+    let signal: string | null = null;
+
+    // Check for rapid cycle (more than 10 transactions in rapidCycleSeconds)
+    if (currentTime - this.rapidCycleStart < this.rapidCycleSeconds) {
+      this.rapidCycleCount++;
+      if (this.rapidCycleCount > 10) {
+        anomalyDetected = true;
+        signal = "RAPID_CYCLE_DETECTED";
+      }
+    } else {
+      this.rapidCycleCount = 1;
+      this.rapidCycleStart = currentTime;
     }
 
-    // Rule: HIGH_AMOUNT_VARIANCE — coefficient of variation exceeds threshold
-    if (actorPayments.length >= 2) {
-      const amounts = actorPayments.map((p) => Number(p.amount));
-      const mean = amounts.reduce((s, a) => s + a, 0) / amounts.length;
-      if (mean > 0) {
-        const variance =
-          amounts.reduce((s, a) => s + (a - mean) ** 2, 0) / amounts.length;
-        const cv = Math.sqrt(variance) / mean;
-        if (cv >= this.maxAmountVariance) {
-          flags.push({
-            kind: "HIGH_AMOUNT_VARIANCE",
-            reason: `Payment amount coefficient of variation ${cv.toFixed(2)} exceeds threshold ${this.maxAmountVariance}`,
-            detectedAt: now,
-          });
-        }
+    // Check for sudden spike in transaction count
+    if (!anomalyDetected && this.previousTxCount > 0) {
+      const txCountChange =
+        this.previousTxCount > 0
+          ? (txCountIncrease / this.previousTxCount) * 100
+          : 0;
+      if (txCountChange > this.sensitivityThreshold * 100) {
+        anomalyDetected = true;
+        signal = "TX_COUNT_SPIKE";
       }
     }
 
-    // Rule: RAPID_CYCLE — repeated fast create→refund cycles by a creator
-    const cycles = this.countRapidCycles(payerOrCreator);
-    if (cycles >= this.maxRapidCycles) {
-      flags.push({
-        kind: "RAPID_CYCLE",
-        reason: `${cycles} rapid create→refund cycles within ${this.rapidCycleSeconds}s (limit: ${this.maxRapidCycles})`,
-        detectedAt: now,
+    // Check for sudden spike in total transaction amount
+    if (!anomalyDetected && this.previousTotalAmount > 0) {
+      const amountChange =
+        this.previousTotalAmount > 0
+          ? (amountIncrease / this.previousTotalAmount) * 100
+          : 0;
+      if (amountChange > this.sensitivityThreshold * 100) {
+        anomalyDetected = true;
+        signal = "AMOUNT_SPIKE";
+      }
+    }
+
+    // Check for unusually large transactions
+    if (!anomalyDetected && amount > this.maxAmountVariance * 1e18) {
+      anomalyDetected = true;
+      signal = "LARGE_TRANSACTION";
+    }
+
+    // Update state
+    this.previousTxCount += txCountIncrease;
+    this.previousTotalAmount += amountIncrease;
+    this.lastDetectionLog = currentTime;
+
+    if (anomalyDetected) {
+      console.log(
+        `[Stellar-Split v${version}] Anomaly detected: ${signal} | Hash: ${txHash} | Recipient: ${recipient} | Time: ${new Date(currentTime * 1000).toISOString()}`
+      );
+      this.emitter.emit("anomaly", {
+        txHash,
+        signal,
+        timestamp: currentTime,
+        blockTimestamp: this.latestBlockTime,
       });
     }
 
-    return flags;
+    return { anomalyDetected, signal, timestamp: currentTime };
   }
 
-  // ---------------------------------------------------------------------------
-  // Private helpers
-  // ---------------------------------------------------------------------------
-
-  /** Drop events that have aged out of the detection window. */
-  private prune(): void {
-    const cutoff = this.now() - this.windowSeconds;
-    this.payments = this.payments.filter((p) => p.timestamp > cutoff);
-    this.cycleEvents = this.cycleEvents.filter((e) => e.timestamp > cutoff);
+  onAnomaly(callback: (data: {
+    txHash: string;
+    signal: string | null;
+    timestamp: number;
+    blockTimestamp: number | null;
+  }) => void): void {
+    this.emitter.on("anomaly", callback);
   }
 
-  /**
-   * Count how many invoices for `creator` went through a create→refund cycle
-   * within `rapidCycleSeconds`.
-   */
-  private countRapidCycles(creator: string): number {
-    const events = this.cycleEvents.filter((e) => e.creator === creator);
-
-    const byInvoice = new Map<string, { created?: number; refunded?: number }>();
-    for (const e of events) {
-      const entry = byInvoice.get(e.invoiceId) ?? {};
-      if (e.type === "created" && entry.created === undefined) {
-        entry.created = e.timestamp;
-      } else if (e.type === "refunded" && entry.refunded === undefined) {
-        entry.refunded = e.timestamp;
-      }
-      byInvoice.set(e.invoiceId, entry);
-    }
-
-    let cycles = 0;
-    for (const { created, refunded } of byInvoice.values()) {
-      if (
-        created !== undefined &&
-        refunded !== undefined &&
-        refunded >= created &&
-        refunded - created <= this.rapidCycleSeconds
-      ) {
-        cycles++;
-      }
-    }
-    return cycles;
+  reset(): void {
+    this.previousTxCount = 0;
+    this.previousTotalAmount = 0;
+    this.rapidCycleCount = 0;
+    this.rapidCycleStart = this.now();
+    this.lastDetectionLog = 0;
   }
 }
