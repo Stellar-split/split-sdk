@@ -11,29 +11,66 @@ import { createHmac, timingSafeEqual } from "crypto";
 const HEX_PATTERN = /^[0-9a-f]+$/i;
 
 /**
- * Verifies the `X-Stellar-Split-Signature` header against the raw request
- * body using a timing-safe comparison.
+ * Error thrown by {@link WebhookVerificationError} when a signature cannot
+ * be verified. Consumers who prefer throwing over boolean returns can catch
+ * this error instead of checking the return value of
+ * {@link verifyWebhookSignature}.
+ */
+export class WebhookVerificationError extends Error {
+  public readonly name = "WebhookVerificationError";
+
+  constructor(message: string) {
+    super(message);
+    Object.setPrototypeOf(this, WebhookVerificationError.prototype);
+  }
+}
+
+/**
+ * Verifies an HMAC-SHA256 webhook signature against a payload using a
+ * timing-safe comparison.
  *
+ * @param payload - The raw payload string to verify.
+ * @param signature - The hex-encoded signature to check against.
  * @param secret - The shared HMAC secret configured for the webhook.
- * @param rawBody - The exact, unparsed request body bytes as received.
- * @param signatureHeader - The hex-encoded signature from the request header.
- * @returns `true` only when the computed digest matches the header value.
+ * @returns `true` when the computed digest matches the signature,
+ *   `false` when the signature is malformed, lengths differ, or the digest
+ *   does not match. Never throws.
  */
 export function verifyWebhookSignature(
+  payload: string,
+  signature: string,
   secret: string,
-  rawBody: string,
-  signatureHeader: string
 ): boolean {
-  if (!HEX_PATTERN.test(signatureHeader) || signatureHeader.length % 2 !== 0) {
+  if (!HEX_PATTERN.test(signature) || signature.length % 2 !== 0) {
     return false;
   }
 
-  const expected = createHmac("sha256", secret).update(rawBody).digest();
-  const provided = Buffer.from(signatureHeader, "hex");
+  const expected = createHmac("sha256", secret).update(payload).digest();
+  const provided = Buffer.from(signature, "hex");
 
   if (expected.length !== provided.length) {
     return false;
   }
 
   return timingSafeEqual(expected, provided);
+}
+
+/**
+ * Verifies an HMAC-SHA256 webhook signature and throws if it does not match.
+ *
+ * @param payload - The raw payload string to verify.
+ * @param signature - The hex-encoded signature to check against.
+ * @param secret - The shared HMAC secret configured for the webhook.
+ * @throws {WebhookVerificationError} If the signature is invalid.
+ * @returns `true` when the signature is valid.
+ */
+export function verifyWebhookSignatureOrThrow(
+  payload: string,
+  signature: string,
+  secret: string,
+): boolean {
+  if (!verifyWebhookSignature(payload, signature, secret)) {
+    throw new WebhookVerificationError("Invalid webhook signature");
+  }
+  return true;
 }

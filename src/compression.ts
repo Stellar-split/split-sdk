@@ -8,6 +8,7 @@
 import zlib from "node:zlib";
 import { promisify } from "node:util";
 import type { RequestInterceptor, ResponseInterceptor } from "./interceptors.js";
+import { SdkError } from "./errors.js";
 
 const gzipAsync = promisify(zlib.gzip);
 const gunzipAsync = promisify(zlib.gunzip);
@@ -213,4 +214,75 @@ export function createCompressionResponseInterceptor(): ResponseInterceptor {
       return response;
     }
   };
+}
+
+/**
+ * Serialize an object to JSON and encode as base64url (no padding).
+ *
+ * Throws {@link SdkError} with code `CONTRACT_REJECTED` if the resulting
+ * base64 string exceeds `maxBytes` (default 512 bytes).
+ *
+ * @param obj - The object to compress.
+ * @param maxBytes - Maximum allowed encoded size in bytes (default 512).
+ * @returns The base64url-encoded JSON string (no padding).
+ * @throws {SdkError} with code `CONTRACT_REJECTED` if the encoded string
+ *   exceeds `maxBytes`.
+ */
+export function compressMetadata(
+  obj: Record<string, unknown>,
+  maxBytes: number = 512,
+): string {
+  const json = JSON.stringify(obj);
+  const encoded = Buffer.from(json).toString("base64url");
+
+  if (encoded.length > maxBytes) {
+    throw new SdkError(
+      `Encoded metadata exceeds ${maxBytes} bytes (got ${encoded.length})`,
+      "CONTRACT_REJECTED",
+    );
+  }
+
+  return encoded;
+}
+
+/**
+ * Decode a base64url-encoded string and parse as JSON.
+ *
+ * Throws {@link SdkError} with code `CONTRACT_REJECTED` if the input is
+ * not valid base64url or does not contain valid JSON.
+ *
+ * @param encoded - The base64url-encoded string to decode.
+ * @returns The parsed object.
+ * @throws {SdkError} with code `CONTRACT_REJECTED` if decoding or parsing
+ *   fails.
+ */
+export function decompressMetadata(encoded: string): Record<string, unknown> {
+  let json: string;
+  try {
+    json = Buffer.from(encoded, "base64url").toString("utf8");
+  } catch {
+    throw new SdkError(
+      "Invalid base64url input",
+      "CONTRACT_REJECTED",
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new SdkError(
+      "Invalid JSON in decoded metadata",
+      "CONTRACT_REJECTED",
+    );
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new SdkError(
+      "Decoded metadata is not a plain object",
+      "CONTRACT_REJECTED",
+    );
+  }
+
+  return parsed as Record<string, unknown>;
 }

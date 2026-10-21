@@ -22,6 +22,7 @@
 
 import type { CollectionPage, HorizonPaginatorOptions } from "./types.js";
 import { buildCursorKey, getDefaultCursorStore } from "./cursorTracker.js";
+import { SdkError } from "./errors.js";
 
 /** Default namespace for cursor store keys. */
 const DEFAULT_NAMESPACE = "horizon";
@@ -182,4 +183,56 @@ export async function collectAll<T>(
     results.push(record);
   }
   return results;
+}
+
+/**
+ * Paginate a local in-memory array of items.
+ *
+ * Generic helper for consumers who filter locally and then need to page the
+ * result. Works for `Invoice[]`, `Payment[]`, or any array type.
+ *
+ * @param items - The array to paginate.
+ * @param opts - Pagination options: `page` (1-indexed) and `pageSize` (1-200).
+ * @returns An object with the page data and pagination metadata.
+ * @throws {SdkError} with code `INVALID_RECIPIENT` if `pageSize` is outside
+ *   the range [1, 200].
+ *
+ * @example
+ * ```typescript
+ * const result = paginateArray(invoices, { page: 1, pageSize: 50 });
+ * // result.data — first 50 invoices
+ * // result.totalPages — total number of pages
+ * // result.hasNext — true if more pages exist
+ * ```
+ */
+export function paginateArray<T>(
+  items: T[],
+  opts: { page: number; pageSize: number },
+): {
+  data: T[];
+  total: number;
+  totalPages: number;
+  hasNext: boolean;
+  hasPrev: boolean;
+} {
+  const { page, pageSize } = opts;
+
+  if (pageSize < 1 || pageSize > 200) {
+    throw new SdkError("pageSize must be between 1 and 200", "INVALID_RECIPIENT");
+  }
+
+  const total = items.length;
+  const totalPages = Math.ceil(total / pageSize);
+  const start = (page - 1) * pageSize;
+  const end = Math.min(start + pageSize, total);
+
+  const data = page < 1 || start >= total ? [] : items.slice(start, end);
+
+  return {
+    data,
+    total,
+    totalPages,
+    hasNext: page < totalPages,
+    hasPrev: page > 1,
+  };
 }
