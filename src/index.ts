@@ -531,7 +531,7 @@ export { watchContractUpgrade } from "./upgrade.js";
 
 export { calculateFee } from "./fee.js";
 
-export { formatAddress, parseAmount, formatAmount } from "./utils.js";
+export { formatAddress } from "./utils.js";
 
 export { resolveToken } from "./token.js";
 
@@ -1156,3 +1156,20 @@ export type { MemoryReport } from "./memoryOptimizer.js";
 // Streaming Datasets (#1139)
 export { StreamingDatasetIterator } from "./streamingDataset.js";
 export type { PageResult, StreamingDatasetOptions } from "./streamingDataset.js";
+
+// Invoice Reminder Scheduler (#616)
+export {
+  InvoiceReminderScheduler,
+  DEFAULT_GRACE_PERIOD_MS,
+  scheduleReminder,
+  cancelReminder,
+  getPendingReminders,
+  clearAllReminders,
+} from "./invoiceReminderScheduler.js";
+export type {
+  InvoiceReminderSchedulerEventMap,
+  InvoiceDueAtResolver,
+  InvoiceReminderSchedulerOptions,
+  PendingReminder,
+  ScheduleReminderOptions,
+} from "./invoiceReminderScheduler.js";

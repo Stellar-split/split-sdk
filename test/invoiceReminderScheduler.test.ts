@@ -2,7 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   InvoiceReminderScheduler,
   DEFAULT_GRACE_PERIOD_MS,
+  scheduleReminder,
+  cancelReminder,
+  getPendingReminders,
+  clearAllReminders,
 } from "../src/invoiceReminderScheduler.js";
+import * as sdkIndex from "../src/index.js";
 import { loadReminderSchedules } from "../src/snapshot.js";
 import type { ReminderEvent } from "../src/types.js";
 
@@ -151,5 +156,113 @@ describe("InvoiceReminderScheduler", () => {
 
     expect(events).toHaveLength(0);
     expect(scheduler.list()[0]!.status).toBe("expired");
+  });
+
+  it("supports cancelReminder, getPendingReminders, and clearAllReminders on InvoiceReminderScheduler instance", async () => {
+    scheduler = new InvoiceReminderScheduler(() => DUE_AT);
+    const events: ReminderEvent[] = [];
+    scheduler.on("invoiceReminderDue", (e) => events.push(e));
+
+    const created = await scheduler.schedule(INVOICE_ID, [60 * 60 * 1000, 30 * 60 * 1000]);
+    expect(scheduler.getPendingReminders()).toHaveLength(2);
+
+    const firstId = created[0]!.id;
+    const secondId = created[1]!.id;
+    expect(scheduler.cancelReminder(firstId)).toBe(true);
+    expect(scheduler.cancelReminder(firstId)).toBe(false);
+    expect(scheduler.cancelReminder("unknown-id")).toBe(false);
+
+    const pending = scheduler.getPendingReminders();
+    expect(pending).toEqual([
+      {
+        reminderId: secondId,
+        invoiceId: INVOICE_ID,
+        remindAt: DUE_AT - 30 * 60 * 1000,
+      },
+    ]);
+
+    vi.advanceTimersByTime(24 * 60 * 60 * 1000 + 1);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.offsetMs).toBe(30 * 60 * 1000);
+    expect(scheduler.cancelReminder(secondId)).toBe(false);
+
+    await scheduler.schedule("inv_456", [10 * 60 * 1000]);
+    expect(scheduler.getPendingReminders()).toHaveLength(1);
+    scheduler.clearAllReminders();
+    expect(scheduler.getPendingReminders()).toEqual([]);
+  });
+});
+
+describe("scheduleReminder / cancelReminder / getPendingReminders / clearAllReminders (#616)", () => {
+  beforeEach(() => {
+    clearAllReminders();
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    clearAllReminders();
+    vi.useRealTimers();
+  });
+
+  it("re-exports reminder helpers from src/index.ts", () => {
+    expect(typeof sdkIndex.scheduleReminder).toBe("function");
+    expect(typeof sdkIndex.cancelReminder).toBe("function");
+    expect(typeof sdkIndex.getPendingReminders).toBe("function");
+    expect(typeof sdkIndex.clearAllReminders).toBe("function");
+  });
+
+  it("cancelling before fire prevents callback execution and excludes it from getPendingReminders()", () => {
+    const callback = vi.fn();
+    const remindAt = NOW + 60_000;
+    const reminderId = scheduleReminder(INVOICE_ID, remindAt, callback);
+
+    expect(typeof reminderId).toBe("string");
+    expect(reminderId.length).toBeGreaterThan(0);
+    expect(getPendingReminders()).toEqual([
+      { reminderId, invoiceId: INVOICE_ID, remindAt },
+    ]);
+
+    expect(cancelReminder(reminderId)).toBe(true);
+    expect(getPendingReminders()).toEqual([]);
+
+    vi.advanceTimersByTime(120_000);
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it("returns false when cancelling an unknown ID or an already-cancelled ID", () => {
+    const remindAt = NOW + 60_000;
+    const reminderId = scheduleReminder(INVOICE_ID, remindAt);
+
+    expect(cancelReminder("non-existent-id")).toBe(false);
+    expect(cancelReminder(reminderId)).toBe(true);
+    expect(cancelReminder(reminderId)).toBe(false);
+  });
+
+  it("returns false when cancelling an already-fired reminder and excludes fired reminders from getPendingReminders()", () => {
+    const callback = vi.fn();
+    const remindAt = NOW + 30_000;
+    const reminderId = scheduleReminder(INVOICE_ID, remindAt, callback);
+
+    vi.advanceTimersByTime(30_000);
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(callback).toHaveBeenCalledWith(INVOICE_ID);
+    expect(getPendingReminders()).toEqual([]);
+    expect(cancelReminder(reminderId)).toBe(false);
+  });
+
+  it("clearAllReminders() stops all pending timers and empties getPendingReminders()", () => {
+    const cb1 = vi.fn();
+    const cb2 = vi.fn();
+    scheduleReminder("inv_1", NOW + 10_000, cb1);
+    scheduleReminder({ invoiceId: "inv_2", remindAt: NOW + 20_000, callback: cb2 });
+
+    expect(getPendingReminders()).toHaveLength(2);
+    clearAllReminders();
+    expect(getPendingReminders()).toEqual([]);
+
+    vi.advanceTimersByTime(30_000);
+    expect(cb1).not.toHaveBeenCalled();
+    expect(cb2).not.toHaveBeenCalled();
   });
 });
