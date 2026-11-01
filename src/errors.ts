@@ -2871,3 +2871,55 @@ export function isDelegateLimitReachedError(err: unknown): err is DelegateLimitR
   return err instanceof DelegateLimitReachedError;
 }
 
+/** Thrown when deadline validation fails. */
+export class DeadlineValidationError extends ValidationError {
+  constructor(message: string) {
+    super(message);
+    this.name = "DeadlineValidationError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isDeadlineValidationError(err: unknown): err is DeadlineValidationError {
+  return err instanceof DeadlineValidationError;
+}
+
+/** Thrown when amount validation fails. */
+export class AmountValidationError extends ValidationError {
+  constructor(message: string) {
+    super(message);
+    this.name = "AmountValidationError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isAmountValidationError(err: unknown): err is AmountValidationError {
+  return err instanceof AmountValidationError;
+}
+
+/** Thrown when address validation fails. */
+export class AddressValidationError extends ValidationError {
+  constructor(message: string) {
+    super(message);
+    this.name = "AddressValidationError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isAddressValidationError(err: unknown): err is AddressValidationError {
+  return err instanceof AddressValidationError;
+}
+
+/** Thrown when signature validation fails. */
+export class SignatureValidationError extends ValidationError {
+  constructor(message: string) {
+    super(message);
+    this.name = "SignatureValidationError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isSignatureValidationError(err: unknown): err is SignatureValidationError {
+  return err instanceof SignatureValidationError;
+}
+

@@ -171,3 +171,5 @@ export class RpcConnectionPool {
     this.updateStats();
   }
 }
+
+export { RpcConnectionPool as ConnectionPool };

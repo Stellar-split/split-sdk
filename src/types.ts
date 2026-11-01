@@ -2297,6 +2297,26 @@ export interface Attestation {
   revoked: boolean;
 }
 
+/** Protocol-level statistics and aggregates. */
+export interface ProtocolStats {
+  /** Total number of invoices created. */
+  totalInvoices: number;
+  /** Total amount released to recipients (in stroops). */
+  totalReleased?: bigint;
+  /** Total amount released to recipients (in stroops). */
+  totalReleasedAmount?: bigint;
+  /** Total amount paid across all invoices (in stroops). */
+  totalPaidAmount?: bigint;
+  /** Total amount refunded to payers (in stroops). */
+  totalRefundedAmount?: bigint;
+  /** Number of pending invoices. */
+  pendingInvoices?: number;
+  /** Number of unique invoice creators. */
+  uniqueCreators?: number;
+  /** Number of unique invoice payers. */
+  uniquePayers?: number;
+}
+
 // ---------------------------------------------------------------------------
 // Type definitions improvements & utilities (issue #1080)
 // ---------------------------------------------------------------------------

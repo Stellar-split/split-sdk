@@ -25,6 +25,8 @@ export type {
   StellarSplitPlugin,
 } from "./client.js";
 
+import type { HealthCheckResult } from "./healthCheck.js";
+
 export {
   NetworkEnvironment,
   NETWORK_PRESETS,
@@ -261,27 +263,6 @@ export {
   // Batch operations errors (issue #855)
   BatchTooLargeError,
   isBatchTooLargeError,
-  // Invoice versioning errors (#1056)
-  InvoiceVersionNotFoundError,
-  isInvoiceVersionNotFoundError,
-  UnsafeRollbackError,
-  isUnsafeRollbackError,
-  InvalidVersionError,
-  isInvalidVersionError,
-  // Smart contract ABI cache errors (#1054)
-  AbiFetchError,
-  isAbiFetchError,
-  AbiNotFoundError,
-  isAbiNotFoundError,
-  // Invoice collaboration errors (#1053)
-  CollaborationError,
-  isCollaborationError,
-  CommentNotFoundError,
-  isCommentNotFoundError,
-  ApprovalRequestNotFoundError,
-  isApprovalRequestNotFoundError,
-  UnauthorizedCollaborationError,
-  isUnauthorizedCollaborationError,
 } from "./errors.js";
 
 // Invoice metadata JSON Schema validator (issue #533)
@@ -531,7 +512,7 @@ export { watchContractUpgrade } from "./upgrade.js";
 
 export { calculateFee } from "./fee.js";
 
-export { formatAddress, parseAmount, formatAmount } from "./utils.js";
+export { formatAddress } from "./utils.js";
 
 export { resolveToken } from "./token.js";
 
@@ -559,7 +540,6 @@ export type {
   StrictReceiveQueryParams,
   PathQueryBuilderConfig,
 } from "./pathQueryBuilder.js";
-export type { PathQuery, PathQueryResult, StrictSendPathQuery, StrictReceivePathQuery } from "./types.js";
 
 export { OfferTracker } from "./offerTracker.js";
 export type { OfferTrackerConfig, OfferTrackerEventMap } from "./offerTracker.js";
@@ -630,12 +610,7 @@ export type {
   DecodedTransactionMeta,
   DecodedLedgerEntry,
   DecodedOperation,
-  FinalityStatus,
-  FinalityCheckConfig,
-  MultiSigPolicy,
-  ApprovalSessionResult,
-  BatchPaymentResult,
-  ChunkSubmitter,
+  ProtocolStats,
 } from "./types.js";
 export { InvalidTransitionError } from "./types.js";
 
@@ -838,8 +813,8 @@ export class HealthCheckRegistry {
 
     let status: HealthStatus = 'healthy';
     for (let i = 0; i < results.length; i++) {
-      const result = results[i];
-      const check = checks[i];
+      const result = results[i]!;
+      const check = checks[i]!;
       // Non-critical checks can only degrade overall health, never fail it.
       if (!check.critical && result.status === 'unhealthy') {
         status = worstStatus(status, 'degraded');
@@ -1105,12 +1080,12 @@ export class Histogram {
     this.samples.push(value);
     let idx = this.buckets.length;
     for (let i = 0; i < this.buckets.length; i++) {
-      if (value <= this.buckets[i]) {
+      if (value <= this.buckets[i]!) {
         idx = i;
         break;
       }
     }
-    this.counts[idx]++;
+    this.counts[idx]!++;
     return this;
   }
 
@@ -1123,7 +1098,7 @@ export class Histogram {
         continue;
       }
       const rank = Math.ceil((p / 100) * sorted.length) - 1;
-      pct[`p${p}`] = sorted[Math.min(Math.max(rank, 0), sorted.length - 1)];
+      pct[`p${p}`] = sorted[Math.min(Math.max(rank, 0), sorted.length - 1)]!;
     }
     return {
       count: this.count,
