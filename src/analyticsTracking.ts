@@ -467,10 +467,78 @@ export class AnalyticsCollector {
         p95DurationMs: this.calculatePercentile(sorted, 95),
         p99DurationMs: this.calculatePercentile(sorted, 99),
       };
-      totalMethodCalls += rec.count;
-      totalErrors += rec.errors;
     }
     return out;
+  }
+
+  getTotalMethodCalls(): number {
+    let total = 0;
+    for (const rec of this.methods.values()) {
+      total += rec.count;
+    }
+    return total;
+  }
+
+  getTotalErrors(): number {
+    let total = 0;
+    for (const rec of this.methods.values()) {
+      total += rec.errors;
+    }
+    return total;
+  }
+
+  recordCacheHit(): void {
+    this.cacheHits += 1;
+  }
+
+  recordCacheMiss(): void {
+    this.cacheMisses += 1;
+  }
+
+  getCacheMetric(): CacheMetric {
+    const total = this.cacheHits + this.cacheMisses;
+    return {
+      hits: this.cacheHits,
+      misses: this.cacheMisses,
+      hitRate: total === 0 ? 0 : this.cacheHits / total,
+    };
+  }
+
+  recordBatch(operationCount: number, itemCount: number, durationMs: number, failed: boolean): void {
+    this.batch.operations += operationCount;
+    this.batch.totalItems += itemCount;
+    this.batch.totalDurationMs += durationMs;
+    if (durationMs > this.batch.maxDurationMs) {
+      this.batch.maxDurationMs = durationMs;
+    }
+    if (failed) {
+      this.batch.failures += 1;
+    }
+  }
+
+  getBatchMetric(): BatchMetric {
+    return {
+      operations: this.batch.operations,
+      failures: this.batch.failures,
+      failureRate: this.batch.operations === 0 ? 0 : this.batch.failures / this.batch.operations,
+      totalItems: this.batch.totalItems,
+      avgDurationMs:
+        this.batch.operations === 0 ? 0 : this.batch.totalDurationMs / this.batch.operations,
+      avgBatchSize:
+        this.batch.operations === 0 ? 0 : this.batch.totalItems / this.batch.operations,
+      maxDurationMs: this.batch.maxDurationMs,
+    };
+  }
+
+  getPerformanceSnapshot(): PerformanceMetricsSnapshot {
+    return {
+      generatedAt: Date.now(),
+      uptimeMs: this.getPeriodMs(),
+      methods: this.getMethodMetrics(),
+      cache: this.getCacheMetric(),
+      batch: this.getBatchMetric(),
+      counters: this.getMetrics(),
+    };
   }
 
   getCategoryCounts(): Record<string, number> {
@@ -486,6 +554,213 @@ export class AnalyticsCollector {
     this.methods.clear();
     this.metrics.clear();
     this.categoryCounts.clear();
+    this.cacheHits = 0;
+    this.cacheMisses = 0;
+    this.batch.operations = 0;
+    this.batch.failures = 0;
+    this.batch.totalItems = 0;
+    this.batch.totalDurationMs = 0;
+    this.batch.maxDurationMs = 0;
     this.startTime = Date.now();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Analytics Tracker
+// ---------------------------------------------------------------------------
+
+/**
+ * High-level analytics tracker. Strictly opt-in: when `enabled` is false (the
+ * default) or `optOut` is true, no events or metrics are recorded and flushes
+ * are no-ops.
+ */
+export class AnalyticsTracker {
+  private enabled: boolean;
+  private optedOut: boolean;
+  private readonly privacy: PrivacyController;
+  private readonly collector: AnalyticsCollector;
+  private readonly endpoint?: string;
+  private readonly onReport?: (report: AnalyticsReport) => void;
+  private readonly fetchFn?: typeof fetch;
+  private readonly debug: DebugController;
+  private flushTimer?: ReturnType<typeof setInterval>;
+  private readonly sessionId: string;
+
+  constructor(options?: AnalyticsTrackerOptions) {
+    this.enabled = options?.enabled ?? false;
+    this.optedOut = false;
+    this.privacy = new PrivacyController(options?.privacy);
+    this.collector = new AnalyticsCollector(options?.maxQueueSize ?? 1000);
+    this.endpoint = options?.endpoint;
+    this.onReport = options?.onReport;
+    this.fetchFn = options?.fetchFn;
+    this.debug = new DebugController(options?.debug);
+    this.sessionId = randomBytes(8).toString("hex");
+
+    if (this.privacy.isDoNotTrackEnabled()) {
+      this.enabled = false;
+    }
+
+    const interval = options?.flushIntervalMs ?? 0;
+    if (interval > 0 && this.isActive()) {
+      this.flushTimer = setInterval(() => {
+        void this.flush();
+      }, interval);
+      if (typeof this.flushTimer === "object" && "unref" in this.flushTimer) {
+        (this.flushTimer as { unref?: () => void }).unref?.();
+      }
+    }
+  }
+
+  /** Whether tracking is currently active (enabled and not opted out). */
+  isActive(): boolean {
+    return this.enabled && !this.optedOut;
+  }
+
+  isEnabled(): boolean {
+    return this.enabled;
+  }
+
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
+    if (!enabled) {
+      this.stopAutoFlush();
+    }
+  }
+
+  /** Permanently opt out of all tracking for this tracker instance. */
+  optOut(): void {
+    this.optedOut = true;
+    this.enabled = false;
+    this.stopAutoFlush();
+    this.collector.reset();
+  }
+
+  /** Re-enable tracking after an opt-out. */
+  optIn(): void {
+    this.optedOut = false;
+    this.enabled = true;
+  }
+
+  isOptedOut(): boolean {
+    return this.optedOut;
+  }
+
+  getSessionId(): string {
+    return this.sessionId;
+  }
+
+  /** Track a usage event. No-op when tracking is inactive. */
+  trackEvent(input: AnalyticsEventInput): void {
+    if (!this.isActive()) return;
+    const event: AnalyticsEvent = {
+      name: input.name,
+      category: input.category ?? "general",
+      properties: this.privacy.sanitizeProperties(input.properties),
+      timestamp: input.timestamp ?? Date.now(),
+    };
+    this.collector.recordEvent(event);
+    this.debug.debug("event tracked", { name: event.name, category: event.category });
+  }
+
+  /** Record a numeric counter metric. No-op when tracking is inactive. */
+  recordMetric(name: string, value: number): void {
+    if (!this.isActive()) return;
+    this.collector.recordMetric(name, value);
+  }
+
+  /** Record a method invocation with duration and outcome. No-op when inactive. */
+  recordMethod(method: string, durationMs: number, success = true): void {
+    if (!this.isActive()) return;
+    this.collector.recordMethod(method, durationMs, success);
+  }
+
+  /** Time an async operation and record it as a method metric. */
+  async timeMethod<T>(method: string, fn: () => Promise<T>): Promise<T> {
+    const start = Date.now();
+    try {
+      const result = await fn();
+      this.recordMethod(method, Date.now() - start, true);
+      return result;
+    } catch (err) {
+      this.recordMethod(method, Date.now() - start, false);
+      throw err;
+    }
+  }
+
+  recordCacheHit(): void {
+    if (!this.isActive()) return;
+    this.collector.recordCacheHit();
+  }
+
+  recordCacheMiss(): void {
+    if (!this.isActive()) return;
+    this.collector.recordCacheMiss();
+  }
+
+  recordBatch(operationCount: number, itemCount: number, durationMs: number, failed = false): void {
+    if (!this.isActive()) return;
+    this.collector.recordBatch(operationCount, itemCount, durationMs, failed);
+  }
+
+  /** Build a usage report from collected data. */
+  getReport(): AnalyticsReport {
+    const methods = this.collector.getMethodMetrics();
+    const totalMethodCalls = this.collector.getTotalMethodCalls();
+    const totalErrors = this.collector.getTotalErrors();
+    return {
+      generatedAt: Date.now(),
+      periodMs: this.collector.getPeriodMs(),
+      privacyLevel: this.privacy.level,
+      totalEvents: this.collector.getEvents().length,
+      totalMethodCalls,
+      totalErrors,
+      overallErrorRate: totalMethodCalls === 0 ? 0 : totalErrors / totalMethodCalls,
+      methods,
+      eventsByCategory: this.collector.getCategoryCounts(),
+      metrics: this.collector.getMetrics(),
+      events: this.collector.getEvents(),
+    };
+  }
+
+  /** Usage statistics snapshot (performance metrics). */
+  getStats(): PerformanceMetricsSnapshot {
+    return this.collector.getPerformanceSnapshot();
+  }
+
+  /**
+   * Flush collected data to the configured reporter/endpoint.
+   * Returns the report that was flushed, or null when tracking is inactive.
+   */
+  async flush(): Promise<AnalyticsReport | null> {
+    if (!this.isActive()) return null;
+    const report = this.getReport();
+    this.onReport?.(report);
+
+    if (this.endpoint) {
+      const fetchImpl = this.fetchFn ?? (typeof fetch !== "undefined" ? fetch : undefined);
+      if (fetchImpl) {
+        try {
+          await fetchImpl(this.endpoint, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(report),
+          });
+        } catch (err) {
+          this.debug.warn("analytics flush failed", { error: String(err) });
+        }
+      }
+    }
+
+    this.collector.reset();
+    return report;
+  }
+
+  /** Stop the auto-flush timer if running. */
+  stopAutoFlush(): void {
+    if (this.flushTimer) {
+      clearInterval(this.flushTimer);
+      this.flushTimer = undefined;
+    }
   }
 }
