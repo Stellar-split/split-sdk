@@ -1,4 +1,8 @@
-import type { WalletAdapter } from "./types.js";
+import type {
+  WalletAdapter,
+  WalletAccountChangeListener,
+  WalletConnectResult,
+} from "./types.js";
 
 /** Options for constructing a WalletConnectAdapter. */
 export interface WalletConnectAdapterOptions {
@@ -54,9 +58,14 @@ const STORAGE_KEY = "stellarsplit:wc:session";
  * scan a QR code again. `disconnect()` clears the stored data.
  */
 export class WalletConnectAdapter implements WalletAdapter {
+  /** Stable identifier used for wallet detection and switching. */
+  readonly name = "walletconnect";
+
   private readonly opts: WalletConnectAdapterOptions;
   private readonly delegations = new Map<string, SigningDelegation>();
   private readonly listeners = new Set<SigningDelegationListener>();
+  private readonly accountListeners = new Set<WalletAccountChangeListener>();
+  private connected = true;
 
   constructor(opts: WalletConnectAdapterOptions) {
     this.opts = opts;
@@ -68,8 +77,52 @@ export class WalletConnectAdapter implements WalletAdapter {
   // WalletAdapter interface
   // ---------------------------------------------------------------------------
 
+  /**
+   * A WalletConnect adapter is available when it holds a live client and an
+   * active session topic.
+   */
+  isAvailable(): boolean {
+    return Boolean(this.opts.client && this.opts.topic);
+  }
+
+  /**
+   * Establish (or re-establish) the WalletConnect session.
+   *
+   * When the adapter already holds a valid session this resolves immediately
+   * with the current address. Otherwise it attempts to restore a persisted
+   * session; if none is valid the caller must perform a fresh pairing and
+   * construct a new adapter.
+   */
+  async connect(): Promise<WalletConnectResult> {
+    if (this.connected && this.isAvailable()) {
+      return { address: this.opts.address, chainId: this.opts.chainId };
+    }
+
+    const restored = WalletConnectAdapter.restore(this.opts.client);
+    if (restored) {
+      this.connected = true;
+      this.emitAccountChange(restored.opts.address);
+      return { address: restored.opts.address, chainId: restored.opts.chainId };
+    }
+
+    throw new Error(
+      "WalletConnect session is not available; a new pairing is required."
+    );
+  }
+
   async getAddress(): Promise<string> {
     return this.opts.address;
+  }
+
+  /**
+   * Subscribe to account/session changes so wallet switching can react to
+   * updates pushed by the WalletConnect session.
+   */
+  onAccountChange(listener: WalletAccountChangeListener): () => void {
+    this.accountListeners.add(listener);
+    return () => {
+      this.accountListeners.delete(listener);
+    };
   }
 
   /**
@@ -122,7 +175,9 @@ export class WalletConnectAdapter implements WalletAdapter {
    * state so the user must reconnect after the next page load.
    */
   disconnect(): void {
+    this.connected = false;
     WalletConnectAdapter.clearStoredSession();
+    this.emitAccountChange(null);
   }
 
   // ---------------------------------------------------------------------------
@@ -190,6 +245,17 @@ export class WalletConnectAdapter implements WalletAdapter {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  /** Notify account-change listeners of a new address (or null on disconnect). */
+  private emitAccountChange(address: string | null): void {
+    for (const listener of this.accountListeners) {
+      try {
+        listener(address);
+      } catch {
+        // Listener failures must not break the adapter.
+      }
+    }
+  }
 
   /** Write current session data to localStorage. */
   private persistSession(): void {
