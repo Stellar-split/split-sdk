@@ -6,10 +6,23 @@
  */
 
 import type { Invoice, Payment } from "./types.js";
+import { AnalyticsTracker } from "./analyticsTracking.js";
+import { MetricsRegistry } from "./metrics.js";
+import { AnalyticsDashboardExporter } from "./analyticsDashboardExporter.js";
 
 // ---------------------------------------------------------------------------
 // Types & Interfaces
 // ---------------------------------------------------------------------------
+
+/** Options for wiring analytics tracking and metrics into the engine. */
+export interface PaymentAnalyticsEngineOptions {
+  /** Optional analytics tracker for emitting analytics events. */
+  tracker?: AnalyticsTracker;
+  /** Optional metrics registry for recording counters and histograms. */
+  metrics?: MetricsRegistry;
+  /** Optional dashboard exporter for CSV/JSON serialization. */
+  exporter?: AnalyticsDashboardExporter;
+}
 
 /** Filter criteria for payment analytics queries. */
 export interface PaymentAnalyticsFilter {
@@ -194,6 +207,52 @@ function calculateMedian(values: bigint[]): bigint {
  * payer behavior, and lifecycle performance.
  */
 export class PaymentAnalyticsEngine {
+  private readonly tracker?: AnalyticsTracker;
+  private readonly metrics?: MetricsRegistry;
+  private readonly exporter?: AnalyticsDashboardExporter;
+
+  constructor(options?: PaymentAnalyticsEngineOptions) {
+    this.tracker = options?.tracker;
+    this.metrics = options?.metrics;
+    this.exporter = options?.exporter;
+  }
+
+  /**
+   * Emit an analytics tracking event, tolerating a missing tracker.
+   */
+  private track(event: string, properties?: Record<string, unknown>): void {
+    if (!this.tracker) return;
+    try {
+      this.tracker.track(event, properties);
+    } catch {
+      // Tracking must never break analytics computation.
+    }
+  }
+
+  /**
+   * Record a counter metric, tolerating a missing registry.
+   */
+  private incrementCounter(name: string, value = 1, tags?: Record<string, string>): void {
+    if (!this.metrics) return;
+    try {
+      this.metrics.incrementCounter(name, value, tags);
+    } catch {
+      // Metrics must never break analytics computation.
+    }
+  }
+
+  /**
+   * Record a histogram observation, tolerating a missing registry.
+   */
+  private observeHistogram(name: string, value: number, tags?: Record<string, string>): void {
+    if (!this.metrics) return;
+    try {
+      this.metrics.observeHistogram(name, value, tags);
+    } catch {
+      // Metrics must never break analytics computation.
+    }
+  }
+
   /**
    * Normalize an invoice or array of invoices into a filtered array.
    */
@@ -235,9 +294,17 @@ export class PaymentAnalyticsEngine {
     input: Invoice | Invoice[],
     filter?: PaymentAnalyticsFilter,
   ): PaymentAnalyticsSummary {
+    const startedAt = Date.now();
     const invoices = this.filterInvoices(input, filter);
 
+    this.track("payment_analytics.aggregate", {
+      invoiceCount: invoices.length,
+      hasFilter: Boolean(filter),
+    });
+
     if (invoices.length === 0) {
+      this.incrementCounter("payment_analytics.aggregate.empty");
+      this.observeHistogram("payment_analytics.aggregate.duration_ms", Date.now() - startedAt);
       return {
         totalInvoices: 0,
         totalTarget: 0n,
@@ -364,6 +431,12 @@ export class PaymentAnalyticsEngine {
     const totalTimed = onTimePayments + latePayments;
     const onTimeRate = totalTimed > 0 ? Number(((onTimePayments / totalTimed) * 100).toFixed(2)) : 100;
 
+    this.incrementCounter("payment_analytics.aggregate.completed");
+    this.incrementCounter("payment_analytics.payments.count", totalPayments);
+    this.observeHistogram("payment_analytics.funding_rate_percent", fundingRatePercent);
+    this.observeHistogram("payment_analytics.on_time_rate", onTimeRate);
+    this.observeHistogram("payment_analytics.aggregate.duration_ms", Date.now() - startedAt);
+
     return {
       totalInvoices: invoices.length,
       totalTarget,
@@ -398,7 +471,12 @@ export class PaymentAnalyticsEngine {
     input: Invoice | Invoice[],
     limit = 10,
   ): PayerCohortSummary {
+    const startedAt = Date.now();
     const invoices = Array.isArray(input) ? input : [input];
+    this.track("payment_analytics.aggregate_payers", {
+      invoiceCount: invoices.length,
+      limit,
+    });
     const payerMap = new Map<string, {
       totalPaid: bigint;
       payments: number;
@@ -459,6 +537,10 @@ export class PaymentAnalyticsEngine {
     const repeatPayerRate =
       allPayers.length > 0 ? Number(((repeatPayers / allPayers.length) * 100).toFixed(2)) : 0;
 
+    this.incrementCounter("payment_analytics.payers.unique", allPayers.length);
+    this.observeHistogram("payment_analytics.repeat_payer_rate", repeatPayerRate);
+    this.observeHistogram("payment_analytics.aggregate_payers.duration_ms", Date.now() - startedAt);
+
     return {
       totalUniquePayers: allPayers.length,
       repeatPayers,
@@ -474,7 +556,12 @@ export class PaymentAnalyticsEngine {
     input: Invoice | Invoice[],
     options?: { interval?: "hour" | "day" | "week" | "month"; bucketCount?: number },
   ): TimeSeriesDataPoint[] {
+    const startedAt = Date.now();
     const invoices = Array.isArray(input) ? input : [input];
+    this.track("payment_analytics.aggregate_time_series", {
+      invoiceCount: invoices.length,
+      interval: options?.interval ?? "day",
+    });
     type FlatPayment = { amount: bigint; timestamp: number; payer: string };
     const payments: FlatPayment[] = [];
 
@@ -533,6 +620,9 @@ export class PaymentAnalyticsEngine {
       points[i]!.uniquePayers = bucketPayers[i]!.size;
     }
 
+    this.observeHistogram("payment_analytics.time_series.buckets", points.length);
+    this.observeHistogram("payment_analytics.aggregate_time_series.duration_ms", Date.now() - startedAt);
+
     return points;
   }
 
@@ -540,10 +630,14 @@ export class PaymentAnalyticsEngine {
    * Evaluate health and completion performance for individual invoices.
    */
   analyzeInvoicePerformance(input: Invoice | Invoice[]): InvoicePerformanceRecord[] {
+    const startedAt = Date.now();
     const invoices = Array.isArray(input) ? input : [input];
     const now = Date.now();
+    this.track("payment_analytics.analyze_invoice_performance", {
+      invoiceCount: invoices.length,
+    });
 
-    return invoices.map((inv) => {
+    const records = invoices.map((inv) => {
       const target = inv.recipients.reduce((s, r) => s + r.amount, 0n);
       const fundingPct = target > 0n ? Number(((inv.funded * 100n) / target)) : 0;
       const deadlineMs = normalizeTimestamp(inv.deadline) ?? 0;
@@ -576,6 +670,17 @@ export class PaymentAnalyticsEngine {
         health,
       };
     });
+
+    const healthCounts = records.reduce<Record<string, number>>((acc, r) => {
+      acc[r.health] = (acc[r.health] ?? 0) + 1;
+      return acc;
+    }, {});
+    for (const [health, count] of Object.entries(healthCounts)) {
+      this.incrementCounter("payment_analytics.invoice_health", count, { health });
+    }
+    this.observeHistogram("payment_analytics.analyze_invoice_performance.duration_ms", Date.now() - startedAt);
+
+    return records;
   }
 
   /**
@@ -585,18 +690,105 @@ export class PaymentAnalyticsEngine {
     input: Invoice | Invoice[],
     filter?: PaymentAnalyticsFilter,
   ): PaymentAnalyticsReport {
+    const startedAt = Date.now();
     const invoices = this.filterInvoices(input, filter);
+    this.track("payment_analytics.generate_report", {
+      invoiceCount: invoices.length,
+      hasFilter: Boolean(filter),
+    });
+
     const summary = this.aggregate(invoices);
     const payers = this.aggregatePayers(invoices);
     const timeSeries = this.aggregateTimeSeries(invoices);
     const invoicePerformance = this.analyzeInvoicePerformance(invoices);
 
-    return {
+    const report: PaymentAnalyticsReport = {
       generatedAt: Date.now(),
       summary,
       payers,
       timeSeries,
       invoices: invoicePerformance,
+    };
+
+    this.incrementCounter("payment_analytics.reports.generated");
+    this.observeHistogram("payment_analytics.generate_report.duration_ms", Date.now() - startedAt);
+
+    return report;
+  }
+
+  /**
+   * Build a dashboard bundle of chart-ready series from a report.
+   *
+   * Produces structured chart data for volume trends, status distribution,
+   * token distribution, and payer leaderboards, suitable for direct rendering
+   * by Chart.js / Recharts.
+   */
+  buildDashboard(report: PaymentAnalyticsReport): {
+    volumeTrend: StructuredChartData;
+    statusDistribution: StructuredChartData;
+    tokenDistribution: StructuredChartData;
+    payerLeaderboard: StructuredChartData;
+    summary: PaymentAnalyticsSummary;
+  } {
+    this.track("payment_analytics.build_dashboard", {
+      invoiceCount: report.summary.totalInvoices,
+    });
+
+    const volumeTrend = this.exportChartData(report.summary, report.timeSeries);
+
+    const statusDistribution: StructuredChartData = {
+      labels: report.summary.statusBreakdown.map((s) => s.status),
+      datasets: [
+        {
+          label: "Invoices by Status",
+          data: report.summary.statusBreakdown.map((s) => s.count),
+          unit: "invoices",
+        },
+        {
+          label: "Funded by Status",
+          data: report.summary.statusBreakdown.map((s) => Number(s.totalFunded / 10_000_000n)),
+          unit: "tokens",
+        },
+      ],
+    };
+
+    const tokenDistribution: StructuredChartData = {
+      labels: report.summary.tokenBreakdown.map((t) => t.token),
+      datasets: [
+        {
+          label: "Funded by Token",
+          data: report.summary.tokenBreakdown.map((t) => Number(t.totalFunded / 10_000_000n)),
+          unit: "tokens",
+        },
+        {
+          label: "Payments by Token",
+          data: report.summary.tokenBreakdown.map((t) => t.paymentCount),
+          unit: "count",
+        },
+      ],
+    };
+
+    const payerLeaderboard: StructuredChartData = {
+      labels: report.payers.topPayers.map(
+        (p) => `${p.address.slice(0, 4)}...${p.address.slice(-4)}`,
+      ),
+      datasets: [
+        {
+          label: "Paid by Payer",
+          data: report.payers.topPayers.map((p) => Number(p.totalPaid / 10_000_000n)),
+          unit: "tokens",
+        },
+      ],
+    };
+
+    this.incrementCounter("payment_analytics.dashboards.built");
+
+    return {
+      volumeTrend,
+      statusDistribution,
+      tokenDistribution,
+      payerLeaderboard,
+      summary: report.summary,
     };
   }
 
@@ -759,6 +951,17 @@ export class PaymentAnalyticsEngine {
    * Export the full report as a JSON string.
    */
   exportJson(report: PaymentAnalyticsReport, pretty = true): string {
+    this.track("payment_analytics.export_json", { pretty });
+    this.incrementCounter("payment_analytics.reports.exported", 1, { format: "json" });
+
+    if (this.exporter) {
+      try {
+        return this.exporter.toJson(report, { pretty });
+      } catch {
+        // Fall through to built-in serializer.
+      }
+    }
+
     return JSON.stringify(
       report,
       (_, val) => (typeof val === "bigint" ? val.toString() : val),
@@ -770,6 +973,19 @@ export class PaymentAnalyticsEngine {
    * Export invoice performance data as CSV.
    */
   exportCsv(report: PaymentAnalyticsReport): string {
+    this.track("payment_analytics.export_csv", {
+      invoiceCount: report.invoices.length,
+    });
+    this.incrementCounter("payment_analytics.reports.exported", 1, { format: "csv" });
+
+    if (this.exporter) {
+      try {
+        return this.exporter.toCsv(report);
+      } catch {
+        // Fall through to built-in serializer.
+      }
+    }
+
     const headers = [
       "InvoiceId",
       "Status",
