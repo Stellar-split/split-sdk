@@ -1131,3 +1131,90 @@ export type { MemoryReport } from "./memoryOptimizer.js";
 // Streaming Datasets (#1139)
 export { StreamingDatasetIterator } from "./streamingDataset.js";
 export type { PageResult, StreamingDatasetOptions } from "./streamingDataset.js";
+
+// Input Sanitization (#1251)
+export {
+  InputSanitizer,
+  defaultInputSanitizer,
+  sanitizeInput,
+  sanitizeObject,
+  registerSanitizationRule,
+  configureSanitization,
+  getSanitizationConfig,
+  resetSanitizationConfig,
+  getSanitizationEvents,
+  clearSanitizationEvents,
+  SanitizationError,
+  isSanitizationError,
+} from "./security/inputSanitizer.js";
+export type {
+  SanitizationRule,
+  SanitizationRuleOptions,
+  SanitizationConfig,
+  SanitizationEvent,
+  SanitizationResult,
+  SanitizationValidator,
+  SanitizationWhitelist,
+} from "./security/inputSanitizer.js";
+
+// Rate Limiting (#1252)
+export {
+  RateLimiter,
+  defaultRateLimiter,
+  configureRateLimiting,
+  getRateLimitingConfig,
+  resetRateLimitingConfig,
+  getRateLimitEvents,
+  clearRateLimitEvents,
+  RateLimitExceededError,
+  isRateLimitExceededError,
+} from "./security/rateLimiter.js";
+export type {
+  RateLimitConfig,
+  RateLimitRule,
+  RateLimitEvent,
+  RateLimitResult,
+  RateLimitKeyResolver,
+} from "./security/rateLimiter.js";
+
+// CSRF Protection (#1253)
+export {
+  CsrfProtector,
+  defaultCsrfProtector,
+  generateCsrfToken,
+  validateCsrfToken,
+  refreshCsrfToken,
+  configureCsrfProtection,
+  getCsrfProtectionConfig,
+  resetCsrfProtectionConfig,
+  getCsrfEvents,
+  clearCsrfEvents,
+  CsrfError,
+  isCsrfError,
+} from "./security/csrfProtection.js";
+export type {
+  CsrfConfig,
+  CsrfToken,
+  CsrfEvent,
+  CsrfValidationResult,
+} from "./security/csrfProtection.js";
+
+// Secure Key Storage (#1254)
+export {
+  SecureKeyStore,
+  defaultSecureKeyStore,
+  configureSecureKeyStore,
+  getSecureKeyStoreConfig,
+  resetSecureKeyStoreConfig,
+  getKeyUsageEvents,
+  clearKeyUsageEvents,
+  KeyStoreError,
+  isKeyStoreError,
+} from "./security/secureKeyStore.js";
+export type {
+  SecureKeyStoreConfig,
+  KeyStoreEntry,
+  KeyUsageEvent,
+  KeyAccessPolicy,
+  KeyRotationResult,
+} from "./security/secureKeyStore.js";
