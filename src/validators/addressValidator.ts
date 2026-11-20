@@ -32,6 +32,11 @@
 
 import { StrKey } from "@stellar/stellar-sdk";
 import { AddressValidationError } from "../errors.js";
+import {
+  validateContractAddress as validateSorobanContractAddress,
+  isSorobanContractAddress as isSorobanContractAddressShared,
+  type ContractAddressValidationResult,
+} from "../contractAddressValidator.js";
 
 /** Valid Stellar address types supported by the validator. */
 export type StellarAddressType = "account" | "contract" | "muxed";
@@ -76,6 +81,11 @@ export interface AddressValidationOptions {
    * Defaults to true.
    */
   rejectSecretKeys?: boolean;
+  /**
+   * When true, restricts validation to Soroban contract addresses ('C...') only.
+   * Delegates to the shared contract validator in `src/contractAddressValidator.ts`.
+   */
+  contractOnly?: boolean;
 }
 
 /**
@@ -144,6 +154,17 @@ export function validateAddress(
   address: unknown,
   options?: AddressValidationOptions
 ): AddressValidationResult {
+  // Contract-only mode delegates to the shared Soroban contract validator.
+  if (options?.contractOnly === true) {
+    const contractResult = validateSorobanContractAddress(address);
+    return {
+      valid: contractResult.valid,
+      type: contractResult.valid ? "contract" : undefined,
+      errors: contractResult.errors,
+      normalizedAddress: contractResult.normalizedAddress,
+    };
+  }
+
   const errors: string[] = [];
 
   // 1. Type check
@@ -279,6 +300,30 @@ export function isStellarAddress(address: unknown, options?: AddressValidationOp
 }
 
 /**
+ * Validate a Soroban contract address ('C...').
+ *
+ * Enforces the C-prefix, 56-character length, RFC 4648 Base32 alphabet, and
+ * CRC16-XModem checksum by delegating to the shared contract validator in
+ * `src/contractAddressValidator.ts`.
+ *
+ * @param address - The candidate contract address.
+ * @returns A {@link ContractAddressValidationResult} object.
+ */
+export function validateContractAddress(address: unknown): ContractAddressValidationResult {
+  return validateSorobanContractAddress(address);
+}
+
+/**
+ * Convenience helper returning `true` if an address is a valid Soroban contract address.
+ *
+ * @param address - Candidate contract address.
+ * @returns `true` if valid, `false` otherwise.
+ */
+export function isSorobanContractAddress(address: unknown): boolean {
+  return isSorobanContractAddressShared(address);
+}
+
+/**
  * Reusable validator instance for validating addresses with pre-configured rules.
  */
 export class AddressValidator {
@@ -296,5 +341,12 @@ export class AddressValidator {
    */
   validateOrThrow(address: unknown, options?: AddressValidationOptions): string {
     return validateAddressOrThrow(address, { ...this.defaultOptions, ...options });
+  }
+
+  /**
+   * Validate a Soroban contract address ('C...') using the shared contract validator.
+   */
+  validateContract(address: unknown): ContractAddressValidationResult {
+    return validateSorobanContractAddress(address);
   }
 }

@@ -9,11 +9,18 @@ import { rpc as SorobanRpc } from "@stellar/stellar-sdk";
 import { checkRPCHealth } from "./health.js";
 import { LoadBalancer } from "./loadBalancer.js";
 import type { StellarSplitClient } from "./client.js";
+import {
+  ErrorRecoveryRunner,
+  type RecoveryStats,
+  type RecoveryStrategyOptions,
+} from "./errorRecovery.js";
 
 export interface AutoRecoveryOptions {
   failureThreshold?: number;
   pollingIntervalMs?: number;
   onSwitch?: (fromUrl: string, toUrl: string, reason: string) => void;
+  /** Optional retry/backoff strategy used when switching endpoints. */
+  recoveryStrategy?: RecoveryStrategyOptions;
 }
 
 /**
@@ -24,11 +31,20 @@ export class AutoRecoveryMonitor {
   private readonly failureThreshold: number;
   private readonly pollingIntervalMs: number;
   private readonly onSwitch: (fromUrl: string, toUrl: string, reason: string) => void;
+  private readonly recoveryRunner: ErrorRecoveryRunner;
 
   constructor(options: AutoRecoveryOptions = {}) {
     this.failureThreshold = options.failureThreshold ?? 3;
     this.pollingIntervalMs = options.pollingIntervalMs ?? 30_000;
     this.onSwitch = options.onSwitch ?? (() => {});
+    this.recoveryRunner = new ErrorRecoveryRunner(options.recoveryStrategy);
+  }
+
+  /**
+   * Snapshot of recovery statistics collected while switching endpoints.
+   */
+  getRecoveryStats(): RecoveryStats {
+    return this.recoveryRunner.getStats();
   }
 
   /**
@@ -54,8 +70,19 @@ export class AutoRecoveryMonitor {
         const currentState = client.loadBalancer.getEndpointStates();
         for (const endpoint of currentState) {
           if (endpoint.consecutiveFailures >= this.failureThreshold && endpoint.healthy) {
-            const nextEndpoint = client.loadBalancer.selectEndpoint();
-            this.onSwitch(endpoint.url, nextEndpoint, `Sustained unhealthy: ${health.status}`);
+            const reason = `Sustained unhealthy: ${health.status}`;
+            try {
+              await this.recoveryRunner.run(async () => {
+                const nextEndpoint = client.loadBalancer.selectEndpoint();
+                if (!nextEndpoint || nextEndpoint === endpoint.url) {
+                  throw new Error("No alternative endpoint available");
+                }
+                this.onSwitch(endpoint.url, nextEndpoint, reason);
+                return nextEndpoint;
+              });
+            } catch {
+              // Recovery exhausted its retry budget; keep monitoring.
+            }
           }
         }
       } catch {

@@ -364,11 +364,121 @@ function renderMarkdown(exports: Export[]): string {
   return md;
 }
 
+interface ErrorCodeEntry {
+  code: string;
+  message: string;
+  description: string;
+  domain: string;
+  retryable: boolean;
+}
+
+interface ErrorCodeRegistry {
+  codes: Record<string, ErrorCodeEntry>;
+  getErrorByCode?: (code: string) => ErrorCodeEntry | undefined;
+  getErrorMessage?: (code: string) => string;
+}
+
+function loadErrorRegistry(srcDir: string): ErrorCodeRegistry | null {
+  const errorsPath = resolve(srcDir, "errors.ts");
+  let content: string;
+  try {
+    content = readFileSync(errorsPath, "utf8");
+  } catch {
+    return null;
+  }
+
+  const sourceFile = ts.createSourceFile(errorsPath, content, ts.ScriptTarget.ES2020, true);
+  const registry: ErrorCodeRegistry = { codes: {} };
+
+  function visit(node: ts.Node): void {
+    if (ts.isVariableDeclaration(node) && node.name.getText() === "ERROR_CODES" && node.initializer) {
+      const init = node.initializer;
+      if (ts.isObjectLiteralExpression(init)) {
+        for (const prop of init.properties) {
+          if (!ts.isPropertyAssignment(prop)) continue;
+          const key = prop.name.getText().replace(/^["']|["']$/g, "");
+          const value = prop.initializer;
+          if (!ts.isObjectLiteralExpression(value)) continue;
+          const entry: ErrorCodeEntry = {
+            code: key,
+            message: "",
+            description: "",
+            domain: "",
+            retryable: false,
+          };
+          for (const field of value.properties) {
+            if (!ts.isPropertyAssignment(field)) continue;
+            const fieldName = field.name.getText().replace(/^["']|["']$/g, "");
+            const fieldValue = field.initializer;
+            if (ts.isStringLiteral(fieldValue) || ts.isNoSubstitutionTemplateLiteral(fieldValue)) {
+              if (fieldName === "message") entry.message = fieldValue.text;
+              else if (fieldName === "description") entry.description = fieldValue.text;
+              else if (fieldName === "domain") entry.domain = fieldValue.text;
+            } else if (fieldValue.kind === ts.SyntaxKind.TrueKeyword) {
+              if (fieldName === "retryable") entry.retryable = true;
+            } else if (fieldValue.kind === ts.SyntaxKind.FalseKeyword) {
+              if (fieldName === "retryable") entry.retryable = false;
+            }
+          }
+          registry.codes[key] = entry;
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return registry;
+}
+
+function renderErrorCodesMarkdown(registry: ErrorCodeRegistry): string {
+  const entries = Object.values(registry.codes).sort((a, b) => a.code.localeCompare(b.code));
+  let md = "# Error Code Reference\n\n";
+  md += "Complete reference of SDK error codes. Each error carries a stable `code`, a human-readable `message`, a `description`, a `domain`, and a `retryable` flag indicating whether the operation may be retried.\n\n";
+
+  md += "## Usage\n\n";
+  md += "```typescript\n";
+  md += 'import { getErrorByCode, getErrorMessage } from "@stellar-split/sdk";\n\n';
+  md += "// Look up full error metadata by code\n";
+  md += 'const info = getErrorByCode("SPLIT_001");\n';
+  md += "if (info) {\n";
+  md += "  console.log(info.message, info.retryable);\n";
+  md += "}\n\n";
+  md += "// Get just the human-readable message\n";
+  md += 'const message = getErrorMessage("SPLIT_001");\n';
+  md += "```\n\n";
+
+  md += "## Codes\n\n";
+  md += "| Code | Message | Domain | Retryable | Description |\n";
+  md += "|------|---------|--------|-----------|-------------|\n";
+  for (const entry of entries) {
+    const message = entry.message.replace(/\|/g, "\\|").replace(/\n/g, " ");
+    const description = entry.description.replace(/\|/g, "\\|").replace(/\n/g, " ");
+    const domain = entry.domain.replace(/\|/g, "\\|");
+    md += `| \`${entry.code}\` | ${message} | ${domain} | ${entry.retryable ? "yes" : "no"} | ${description} |\n`;
+  }
+  md += "\n";
+
+  return md;
+}
+
+function generateErrorDocs(srcDir: string, outputPath: string): number {
+  const registry = loadErrorRegistry(srcDir);
+  if (!registry) {
+    process.stderr.write("Warning: could not load error registry from src/errors.ts; skipping error code docs.\n");
+    return 0;
+  }
+  const markdown = renderErrorCodesMarkdown(registry);
+  writeFileSync(outputPath, markdown, "utf8");
+  return Object.keys(registry.codes).length;
+}
+
 function main(): void {
   const rootDir = resolve(dirname(new URL(import.meta.url).pathname), "..");
   const srcDir = resolve(rootDir, "src");
   const indexPath = resolve(srcDir, "index.ts");
   const outputPath = resolve(rootDir, "docs", "API.md");
+  const errorOutputPath = resolve(rootDir, "docs", "error-codes.md");
 
   const indexContent = readFileSync(indexPath, "utf8");
   const exports = parseExports(indexContent, srcDir);
@@ -385,8 +495,10 @@ function main(): void {
   const markdown = renderMarkdown(Array.from(exports.values()));
   writeFileSync(outputPath, markdown, "utf8");
 
+  const errorCodeCount = generateErrorDocs(srcDir, errorOutputPath);
+
   process.stdout.write(
-    `Generated docs for ${exports.size} exports; tested ${results.length} examples (${results.filter((r) => r.passed).length} passed).\n`,
+    `Generated docs for ${exports.size} exports; tested ${results.length} examples (${results.filter((r) => r.passed).length} passed); documented ${errorCodeCount} error codes.\n`,
   );
 }
 

@@ -2318,6 +2318,99 @@ export interface ProtocolStats {
 }
 
 // ---------------------------------------------------------------------------
+// Transaction Verification Types (Issue #1260)
+// ---------------------------------------------------------------------------
+
+/** Severity of a failed verification rule. */
+export type VerificationSeverity = "error" | "warning";
+
+/**
+ * A single transaction verification rule.
+ *
+ * Built-in rules are identified by `name`; custom rules additionally supply a
+ * `check` function that inspects the transaction and returns a failure reason
+ * (or `null` when the transaction passes).
+ */
+export interface VerificationRule {
+  /** Unique rule name, used in reports and for enabling/disabling rules. */
+  name: string;
+  /** Human-readable description of what the rule enforces. */
+  description?: string;
+  /**
+   * Severity applied when the rule fails. `"error"` blocks submission,
+   * `"warning"` is recorded but does not block. Defaults to `"error"`.
+   */
+  severity?: VerificationSeverity;
+  /**
+   * Optional predicate evaluated against the transaction. Returns `null` (or
+   * `undefined`) when the transaction passes, or a failure reason string when
+   * it fails. Built-in rules may omit this and be evaluated internally.
+   */
+  check?: (tx: unknown, context?: Record<string, unknown>) => string | null | undefined;
+}
+
+/** A user-supplied verification rule with a required `check` function. */
+export interface CustomVerificationRule extends VerificationRule {
+  /** Predicate evaluated against the transaction; must be provided. */
+  check: (tx: unknown, context?: Record<string, unknown>) => string | null | undefined;
+}
+
+/** Options controlling a {@link TransactionVerifier} instance. */
+export interface TransactionVerifierOptions {
+  /** Additional custom rules appended to the built-in rule set. */
+  customRules?: CustomVerificationRule[];
+  /** Names of built-in rules to skip. */
+  disabledRules?: string[];
+  /**
+   * When `true`, a failing `"warning"` rule is treated as an error and blocks
+   * submission. Defaults to `false`.
+   */
+  strict?: boolean;
+  /** When `true`, verification results are recorded in the tracking stats. Defaults to `true`. */
+  track?: boolean;
+}
+
+/** Outcome of evaluating a single rule against a transaction. */
+export interface VerificationRuleResult {
+  /** Name of the rule that was evaluated. */
+  rule: string;
+  /** Whether the rule passed. */
+  passed: boolean;
+  /** Severity of the rule. */
+  severity: VerificationSeverity;
+  /** Failure reason when `passed` is false. */
+  reason?: string;
+}
+
+/** Aggregate tracking statistics for a verifier instance. */
+export interface VerificationStats {
+  /** Total number of transactions verified. */
+  totalVerified: number;
+  /** Number of transactions that passed verification. */
+  totalPassed: number;
+  /** Number of transactions that failed verification. */
+  totalFailed: number;
+  /** Per-rule failure counts, keyed by rule name. */
+  failuresByRule: Record<string, number>;
+}
+
+/** Report produced by verifying a transaction before submission. */
+export interface TransactionVerificationReport {
+  /** Whether the transaction passed all blocking rules. */
+  valid: boolean;
+  /** Per-rule evaluation results, in evaluation order. */
+  results: VerificationRuleResult[];
+  /** Failure reasons for blocking rules (empty when `valid` is true). */
+  errors: string[];
+  /** Failure reasons for non-blocking rules. */
+  warnings: string[];
+  /** Unix timestamp (ms) when verification ran. */
+  verifiedAt: number;
+  /** Cumulative tracking stats at the time of this verification. */
+  stats: VerificationStats;
+}
+
+// ---------------------------------------------------------------------------
 // Type definitions improvements & utilities (issue #1080)
 // ---------------------------------------------------------------------------
 
