@@ -19,6 +19,14 @@
 import { rpc as SorobanRpc } from "@stellar/stellar-sdk";
 import { LazyInitializer } from "./LazyInitializer.js";
 import { RpcConnectionError, RequestTimeoutError } from "../errors.js";
+import {
+  InputSanitizer,
+  SanitizationTracker,
+  type SanitizationRuleSet,
+} from "../security/InputSanitizer.js";
+import { RateLimiter, type RateLimitConfig } from "../security/RateLimiter.js";
+import { CsrfProtector, type CsrfConfig } from "../security/CsrfProtector.js";
+import { SecureKeyStore, type KeyStoreConfig } from "../security/SecureKeyStore.js";
 
 // ---------------------------------------------------------------------------
 // Public config
@@ -33,6 +41,16 @@ export interface SplitClientConfig {
   contractId: string;
   /** Per-request timeout in milliseconds. Defaults to 30 000. */
   requestTimeoutMs?: number;
+  /** Optional sanitization rule overrides / whitelist. */
+  sanitization?: SanitizationRuleSet;
+  /** Optional rate limiting configuration. */
+  rateLimit?: RateLimitConfig;
+  /** Optional CSRF protection configuration. */
+  csrf?: CsrfConfig;
+  /** Optional secure key store configuration. */
+  keyStore?: KeyStoreConfig;
+  /** Identity used for per-user rate limiting. Defaults to "anonymous". */
+  userId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -42,9 +60,22 @@ export interface SplitClientConfig {
 export class SplitClient {
   private readonly config: SplitClientConfig;
   private readonly _lazy: LazyInitializer<SorobanRpc.Server>;
+  private readonly _sanitizer: InputSanitizer;
+  private readonly _tracker: SanitizationTracker;
+  private readonly _rateLimiter: RateLimiter;
+  private readonly _csrf: CsrfProtector;
+  private readonly _keyStore: SecureKeyStore;
 
   constructor(config: SplitClientConfig) {
     this.config = config;
+
+    // Security subsystems are constructed eagerly (no RPC calls) so that
+    // every public method can be guarded before touching the network.
+    this._tracker = new SanitizationTracker();
+    this._sanitizer = new InputSanitizer(config.sanitization, this._tracker);
+    this._rateLimiter = new RateLimiter(config.rateLimit);
+    this._csrf = new CsrfProtector(config.csrf);
+    this._keyStore = new SecureKeyStore(config.keyStore);
 
     // The factory is only called when ensureConnected() is first awaited.
     // No SorobanRpc.Server is instantiated here.
@@ -72,6 +103,7 @@ export class SplitClient {
    * @throws {RpcConnectionError} if the connection attempt fails.
    */
   async preconnect(): Promise<void> {
+    this._guard("preconnect");
     await this.ensureConnected();
   }
 
@@ -80,6 +112,7 @@ export class SplitClient {
    * Triggers lazy initialization on first call.
    */
   async getLedger(): Promise<number> {
+    this._guard("getLedger");
     const server = await this.ensureConnected();
     const info = await this._withTimeout(server.getLatestLedger(), "getLedger");
     return info.sequence;
@@ -92,8 +125,10 @@ export class SplitClient {
   async simulate(
     tx: Parameters<SorobanRpc.Server["simulateTransaction"]>[0],
   ): Promise<ReturnType<SorobanRpc.Server["simulateTransaction"]>> {
+    this._guard("simulate");
+    const safeTx = this._sanitizer.sanitizeTransaction(tx, "simulate");
     const server = await this.ensureConnected();
-    return this._withTimeout(server.simulateTransaction(tx), "simulateTransaction");
+    return this._withTimeout(server.simulateTransaction(safeTx), "simulateTransaction");
   }
 
   /**
@@ -103,8 +138,10 @@ export class SplitClient {
   async sendTransaction(
     tx: Parameters<SorobanRpc.Server["sendTransaction"]>[0],
   ): Promise<ReturnType<SorobanRpc.Server["sendTransaction"]>> {
+    this._guard("sendTransaction");
+    const safeTx = this._sanitizer.sanitizeTransaction(tx, "sendTransaction");
     const server = await this.ensureConnected();
-    return this._withTimeout(server.sendTransaction(tx), "sendTransaction");
+    return this._withTimeout(server.sendTransaction(safeTx), "sendTransaction");
   }
 
   /**
@@ -112,7 +149,87 @@ export class SplitClient {
    * Triggers lazy initialization on first call.
    */
   async getServer(): Promise<SorobanRpc.Server> {
+    this._guard("getServer");
     return this.ensureConnected();
+  }
+
+  /**
+   * Issues a CSRF token for a web integration session.
+   * Triggers lazy initialization on first call.
+   */
+  async issueCsrfToken(sessionId: string): Promise<string> {
+    this._guard("issueCsrfToken");
+    const safeSessionId = this._sanitizer.sanitizeString(sessionId, "issueCsrfToken");
+    return this._csrf.issueToken(safeSessionId);
+  }
+
+  /**
+   * Validates a CSRF token for a web integration session.
+   * Triggers lazy initialization on first call.
+   */
+  async validateCsrfToken(sessionId: string, token: string): Promise<boolean> {
+    this._guard("validateCsrfToken");
+    const safeSessionId = this._sanitizer.sanitizeString(sessionId, "validateCsrfToken");
+    const safeToken = this._sanitizer.sanitizeString(token, "validateCsrfToken");
+    return this._csrf.validateToken(safeSessionId, safeToken);
+  }
+
+  /**
+   * Refreshes a CSRF token for a web integration session.
+   * Triggers lazy initialization on first call.
+   */
+  async refreshCsrfToken(sessionId: string): Promise<string> {
+    this._guard("refreshCsrfToken");
+    const safeSessionId = this._sanitizer.sanitizeString(sessionId, "refreshCsrfToken");
+    return this._csrf.refreshToken(safeSessionId);
+  }
+
+  /**
+   * Stores a signing key in the secure key store.
+   * Triggers lazy initialization on first call.
+   */
+  async storeSigningKey(keyId: string, secret: string): Promise<void> {
+    this._guard("storeSigningKey");
+    const safeKeyId = this._sanitizer.sanitizeString(keyId, "storeSigningKey");
+    this._keyStore.storeKey(safeKeyId, secret);
+  }
+
+  /**
+   * Rotates a signing key in the secure key store.
+   * Triggers lazy initialization on first call.
+   */
+  async rotateSigningKey(keyId: string, newSecret: string): Promise<void> {
+    this._guard("rotateSigningKey");
+    const safeKeyId = this._sanitizer.sanitizeString(keyId, "rotateSigningKey");
+    this._keyStore.rotateKey(safeKeyId, newSecret);
+  }
+
+  /**
+   * Returns the sanitization audit trail collected so far.
+   */
+  getSanitizationLog(): ReadonlyArray<unknown> {
+    return this._tracker.getEntries();
+  }
+
+  /**
+   * Returns the rate limit events collected so far.
+   */
+  getRateLimitLog(): ReadonlyArray<unknown> {
+    return this._rateLimiter.getEvents();
+  }
+
+  /**
+   * Returns the CSRF events collected so far.
+   */
+  getCsrfLog(): ReadonlyArray<unknown> {
+    return this._csrf.getEvents();
+  }
+
+  /**
+   * Returns the key usage events collected so far.
+   */
+  getKeyUsageLog(): ReadonlyArray<unknown> {
+    return this._keyStore.getUsageEvents();
   }
 
   // --------------------------------------------------------------------------
@@ -124,6 +241,18 @@ export class SplitClient {
    */
   private ensureConnected(): Promise<SorobanRpc.Server> {
     return this._lazy.get();
+  }
+
+  /**
+   * Applies rate limiting (per-user) and CSRF pre-checks before any method
+   * body executes. Throws when the caller is over the configured threshold.
+   */
+  private _guard(method: string): void {
+    const userId = this._sanitizer.sanitizeString(
+      this.config.userId ?? "anonymous",
+      `${method}:userId`,
+    );
+    this._rateLimiter.consume(userId, method);
   }
 
   /**
