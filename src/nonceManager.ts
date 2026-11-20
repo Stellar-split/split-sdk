@@ -48,6 +48,38 @@ export interface NonceValidationResult {
   receivedNonce?: bigint;
 }
 
+export interface NonceReservation {
+  accountId: string;
+  nonce: bigint;
+  reservedAt: number;
+}
+
+export interface NonceStats {
+  /** Total nonces issued via acquire/reserve. */
+  issued: number;
+  /** Nonces currently reserved/in-flight. */
+  pending: number;
+  /** Nonces committed successfully. */
+  committed: number;
+  /** Nonces rolled back or released. */
+  rolledBack: number;
+  /** Number of automatic recoveries performed (e.g. re-sync from Horizon). */
+  recovered: number;
+  /** Number of detected nonce conflicts. */
+  conflicts: number;
+  /** Number of accounts currently tracked. */
+  trackedAccounts: number;
+}
+
+export interface NonceRecoveryOptions {
+  /** Fetches the authoritative (on-chain) nonce for the account. */
+  fetchFn: () => Promise<bigint | number | string>;
+  /** Optional nonce that triggered the recovery (for diagnostics). */
+  failedNonce?: bigint | number | string;
+  /** Reason for recovery (e.g. 'SEQUENCE_NUMBER_TOO_OLD', 'mismatch'). */
+  reason?: string;
+}
+
 export type NonceEventType =
   | "nonce:acquired"
   | "nonce:committed"
@@ -158,6 +190,20 @@ export class NonceManager {
   /** Event listeners */
   private readonly listeners = new Set<NonceEventListener>();
 
+  /** Per-account serialization queues for atomic reservations. */
+  private readonly accountLocks = new Map<string, Promise<void>>();
+
+  /** Aggregate statistics counters. */
+  private stats: NonceStats = {
+    issued: 0,
+    pending: 0,
+    committed: 0,
+    rolledBack: 0,
+    recovered: 0,
+    conflicts: 0,
+    trackedAccounts: 0,
+  };
+
   constructor(options: NonceManagerOptions = {}) {
     this.defaultInitialNonce = options.initialNonce ?? 0n;
     this.incrementStep = options.incrementStep ?? 1n;
@@ -244,6 +290,9 @@ export class NonceManager {
     state.lastUpdated = Date.now();
     state.inFlightNonces.push(nonceToIssue);
 
+    this.stats.issued += 1;
+    this.stats.pending += 1;
+
     this.emit({
       type: "nonce:acquired",
       accountId,
@@ -252,6 +301,66 @@ export class NonceManager {
     });
 
     return nonceToIssue;
+  }
+
+  /**
+   * Atomically reserve the next nonce for an account.
+   *
+   * Reservations for the same account are serialized so concurrent callers can
+   * never receive the same nonce. The returned reservation must be either
+   * committed via {@link commitNonce} or released via {@link releaseNonce}.
+   */
+  async reserveNonce(accountId: string): Promise<NonceReservation> {
+    return this.withAccountLock(accountId, () => {
+      const nonce = this.acquireNextNonce(accountId);
+      return {
+        accountId,
+        nonce,
+        reservedAt: Date.now(),
+      };
+    });
+  }
+
+  /**
+   * Release a previously reserved nonce without committing it.
+   * Rolls the counter back when possible so the nonce can be reused.
+   */
+  releaseNonce(accountId: string, nonce: bigint | number | string): void {
+    const parsed = this.parseNonce(nonce);
+    this.ensureTracked(accountId);
+    const state = this.states.get(accountId)!;
+
+    const idx = state.inFlightNonces.indexOf(parsed);
+    if (idx === -1) {
+      // Nothing to release; treat as a conflict signal.
+      this.stats.conflicts += 1;
+      return;
+    }
+
+    this.rollbackNonce(accountId, parsed);
+  }
+
+  /**
+   * Detect whether a nonce conflicts with current tracked state
+   * (already committed, or currently in-flight).
+   */
+  detectConflict(accountId: string, nonce: bigint | number | string): boolean {
+    const parsed = this.parseNonce(nonce);
+    const state = this.getNonceState(accountId);
+
+    if (state.inFlightNonces.includes(parsed)) {
+      return true;
+    }
+
+    const history = this.committedNonces.get(accountId);
+    if (history && history.has(parsed.toString())) {
+      const seenTime = history.get(parsed.toString())!;
+      if (Date.now() - seenTime <= this.replayTtlMs) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -274,6 +383,9 @@ export class NonceManager {
     const idx = state.inFlightNonces.indexOf(parsed);
     if (idx !== -1) {
       state.inFlightNonces.splice(idx, 1);
+      if (this.stats.pending > 0) {
+        this.stats.pending -= 1;
+      }
     }
 
     // Add to committed replay protection map
@@ -288,6 +400,8 @@ export class NonceManager {
 
     // Prune expired or excessive entries
     this.pruneReplayCache(history);
+
+    this.stats.committed += 1;
 
     this.emit({
       type: "nonce:committed",
@@ -309,6 +423,9 @@ export class NonceManager {
     const idx = state.inFlightNonces.indexOf(parsed);
     if (idx !== -1) {
       state.inFlightNonces.splice(idx, 1);
+      if (this.stats.pending > 0) {
+        this.stats.pending -= 1;
+      }
     }
 
     // If this was the most recently issued nonce and currentNonce matches next step,
@@ -316,6 +433,8 @@ export class NonceManager {
     if (state.currentNonce === parsed + this.incrementStep) {
       state.currentNonce = parsed;
     }
+
+    this.stats.rolledBack += 1;
 
     this.emit({
       type: "nonce:rolled_back",
@@ -384,6 +503,89 @@ export class NonceManager {
     const parsed = this.parseNonce(onChainVal);
     this.resetNonce(accountId, { newNonce: parsed, reason: "sync" });
     return parsed;
+  }
+
+  /**
+   * Automatically recover from a nonce mismatch or a
+   * SEQUENCE_NUMBER_TOO_OLD-style error by re-syncing from the authoritative
+   * source (e.g. Horizon) and clearing in-flight reservations.
+   *
+   * Returns the recovered (authoritative) nonce.
+   */
+  async recoverNonce(accountId: string, options: NonceRecoveryOptions): Promise<bigint> {
+    return this.withAccountLock(accountId, async () => {
+      this.ensureTracked(accountId);
+      const state = this.states.get(accountId)!;
+
+      // Any in-flight reservations are now invalid; roll them back.
+      const inFlight = [...state.inFlightNonces];
+      for (const nonce of inFlight) {
+        this.rollbackNonce(accountId, nonce);
+      }
+
+      const onChainVal = await options.fetchFn();
+      const parsed = this.parseNonce(onChainVal);
+
+      this.resetNonce(accountId, {
+        newNonce: parsed,
+        reason: options.reason ?? "recovery",
+      });
+
+      this.stats.recovered += 1;
+
+      return parsed;
+    });
+  }
+
+  /**
+   * Handle a submission failure by automatically recovering the nonce when the
+   * error indicates a stale/too-old sequence number. Returns the recovered
+   * nonce, or `undefined` if the error is not nonce-related.
+   */
+  async handleSubmissionError(
+    accountId: string,
+    error: unknown,
+    fetchFn: () => Promise<bigint | number | string>
+  ): Promise<bigint | undefined> {
+    const message = error instanceof Error ? error.message : String(error);
+    const isNonceError =
+      /SEQUENCE_NUMBER_TOO_OLD|SEQUENCE_NUMBER_TOO_NEW|tx_bad_seq|stale nonce|nonce gap/i.test(message);
+
+    if (!isNonceError) {
+      return undefined;
+    }
+
+    this.stats.conflicts += 1;
+    return this.recoverNonce(accountId, {
+      fetchFn,
+      reason: message,
+    });
+  }
+
+  /**
+   * Snapshot of aggregate nonce statistics.
+   */
+  getStats(): NonceStats {
+    return {
+      ...this.stats,
+      pending: this.countPending(),
+      trackedAccounts: this.states.size,
+    };
+  }
+
+  /**
+   * Reset statistics counters (does not affect tracked nonce state).
+   */
+  resetStats(): void {
+    this.stats = {
+      issued: 0,
+      pending: 0,
+      committed: 0,
+      rolledBack: 0,
+      recovered: 0,
+      conflicts: 0,
+      trackedAccounts: this.states.size,
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -508,6 +710,8 @@ export class NonceManager {
     this.states.clear();
     this.committedNonces.clear();
     this.listeners.clear();
+    this.accountLocks.clear();
+    this.resetStats();
   }
 
   /**
@@ -525,6 +729,39 @@ export class NonceManager {
     if (!this.states.has(accountId)) {
       this.trackAccount(accountId);
     }
+  }
+
+  /**
+   * Serialize operations per account to guarantee atomic reservations.
+   */
+  private async withAccountLock<T>(accountId: string, fn: () => T | Promise<T>): Promise<T> {
+    const previous = this.accountLocks.get(accountId) ?? Promise.resolve();
+
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const chained = previous.then(() => gate);
+    this.accountLocks.set(accountId, chained);
+
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (this.accountLocks.get(accountId) === chained) {
+        this.accountLocks.delete(accountId);
+      }
+    }
+  }
+
+  private countPending(): number {
+    let total = 0;
+    for (const state of this.states.values()) {
+      total += state.inFlightNonces.length;
+    }
+    return total;
   }
 
   private parseNonce(val: bigint | number | string): bigint {

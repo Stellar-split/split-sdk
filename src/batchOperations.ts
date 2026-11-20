@@ -84,6 +84,58 @@ export interface BatchExecutionResult {
   envelopeXdr: string;
 }
 
+/** Per-operation outcome within a (possibly partial) batch execution. */
+export interface BatchOperationResult {
+  /** Index of the operation within the original batch. */
+  index: number;
+  /** The operation that was attempted. */
+  operation: BatchOperation;
+  /** Whether this operation was included and executed successfully. */
+  success: boolean;
+  /** Error message if the operation failed. */
+  error?: string;
+}
+
+/** Result of a partial-batch execution that tolerates per-operation failures. */
+export interface PartialBatchExecutionResult {
+  /** True only if every operation succeeded. */
+  success: boolean;
+  /** True if some (but not all) operations succeeded. */
+  partial: boolean;
+  /** Number of operations that succeeded. */
+  successCount: number;
+  /** Number of operations that failed. */
+  failureCount: number;
+  /** Per-operation results, in original batch order. */
+  results: BatchOperationResult[];
+  /** Transaction hashes for each successfully executed sub-batch. */
+  txHashes: string[];
+  /** Total fee in stroops across all executed sub-batches. */
+  feeStroops: string;
+  /** Guarantees no partial on-chain state: failed ops are never submitted. */
+  atomic: true;
+}
+
+/** Cumulative statistics tracked by a BatchExecutor across executions. */
+export interface BatchStats {
+  /** Number of batch executions attempted. */
+  batches: number;
+  /** Total number of operations processed across all batches. */
+  operations: number;
+  /** Total number of operations that succeeded. */
+  successes: number;
+  /** Total number of operations that failed. */
+  failures: number;
+  /** Number of batches that completed with partial success. */
+  partials: number;
+  /** Number of batches that failed entirely. */
+  failedBatches: number;
+  /** Number of batches that fully succeeded. */
+  successfulBatches: number;
+  /** Total fee in stroops spent across all executed transactions. */
+  totalFeeStroops: string;
+}
+
 export interface BatchExecutorConfig {
   networkPassphrase: string;
   sourceAddress: string;
@@ -274,12 +326,63 @@ export class BatchOperationBuilder {
 
 export class BatchExecutor {
   private readonly config: BatchExecutorConfig;
+  private stats: BatchStats = {
+    batches: 0,
+    operations: 0,
+    successes: 0,
+    failures: 0,
+    partials: 0,
+    failedBatches: 0,
+    successfulBatches: 0,
+    totalFeeStroops: "0",
+  };
 
   constructor(config: BatchExecutorConfig) {
     if (!StrKey.isValidEd25519PublicKey(config.sourceAddress)) {
       throw new ValidationError(`Invalid source address: ${config.sourceAddress}`);
     }
     this.config = config;
+  }
+
+  /** Returns a snapshot of cumulative batch statistics. */
+  getStats(): BatchStats {
+    return { ...this.stats };
+  }
+
+  /** Resets cumulative batch statistics to zero. */
+  resetStats(): void {
+    this.stats = {
+      batches: 0,
+      operations: 0,
+      successes: 0,
+      failures: 0,
+      partials: 0,
+      failedBatches: 0,
+      successfulBatches: 0,
+      totalFeeStroops: "0",
+    };
+  }
+
+  private recordBatch(
+    operationCount: number,
+    successCount: number,
+    failureCount: number,
+    feeStroops: string,
+  ): void {
+    this.stats.batches += 1;
+    this.stats.operations += operationCount;
+    this.stats.successes += successCount;
+    this.stats.failures += failureCount;
+    this.stats.totalFeeStroops = (
+      BigInt(this.stats.totalFeeStroops) + BigInt(feeStroops || "0")
+    ).toString();
+    if (failureCount === 0) {
+      this.stats.successfulBatches += 1;
+    } else if (successCount === 0) {
+      this.stats.failedBatches += 1;
+    } else {
+      this.stats.partials += 1;
+    }
   }
 
   /**
@@ -383,10 +486,12 @@ export class BatchExecutor {
     if (this.config.server?.sendTransaction) {
       const sendResult = await this.config.server.sendTransaction(tx);
       if (sendResult.status === "ERROR") {
+        this.recordBatch(builder.size(), 0, builder.size(), "0");
         throw new TransactionFailedError(
           `Batch transaction failed atomically: ${JSON.stringify(sendResult.errorResult)}`,
         );
       }
+      this.recordBatch(builder.size(), builder.size(), 0, tx.fee);
       return {
         success: true,
         txHash: sendResult.hash,
@@ -397,6 +502,7 @@ export class BatchExecutor {
       };
     }
 
+    this.recordBatch(builder.size(), builder.size(), 0, tx.fee);
     return {
       success: true,
       txHash: tx.hash().toString("hex"),
@@ -404,6 +510,96 @@ export class BatchExecutor {
       feeStroops: tx.fee,
       atomic: true,
       envelopeXdr: tx.toXDR(),
+    };
+  }
+
+  /**
+   * Execute a batch tolerating per-operation failures (partial batches).
+   *
+   * Each operation is validated individually. Invalid operations are recorded
+   * as failures and excluded; the remaining valid operations are grouped into
+   * sub-batches (respecting MAX_OPERATIONS_PER_BATCH) and executed atomically.
+   * Failed operations are never submitted, so there is no data loss or partial
+   * on-chain state. If a sub-batch fails to submit, its operations are marked
+   * as failed and execution continues with the next sub-batch.
+   *
+   * @param batch - BatchOperationBuilder or array of BatchOperation
+   * @param sequenceOverride - Optional starting sequence number
+   */
+  async executePartial(
+    batch: BatchOperationBuilder | BatchOperation[],
+    sequenceOverride?: string,
+  ): Promise<PartialBatchExecutionResult> {
+    const operations: BatchOperation[] = batch instanceof BatchOperationBuilder
+      ? [...batch.getOperations()]
+      : [...batch];
+
+    if (operations.length === 0) {
+      throw new ValidationError("Batch must contain at least 1 operation.");
+    }
+
+    const results: BatchOperationResult[] = operations.map((operation, index) => ({
+      index,
+      operation,
+      success: false,
+    }));
+
+    // Validate each operation independently; invalid ones fail without aborting.
+    const validIndices: number[] = [];
+    for (let i = 0; i < operations.length; i++) {
+      try {
+        validateBatchOperation(operations[i], i);
+        validIndices.push(i);
+      } catch (err) {
+        results[i].error = err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    const txHashes: string[] = [];
+    let totalFee = 0n;
+    let seq = sequenceOverride;
+
+    // Execute valid operations in sub-batches of at most MAX_OPERATIONS_PER_BATCH.
+    for (let start = 0; start < validIndices.length; start += MAX_OPERATIONS_PER_BATCH) {
+      const chunkIndices = validIndices.slice(start, start + MAX_OPERATIONS_PER_BATCH);
+      const chunkOps = chunkIndices.map((i) => operations[i]);
+
+      try {
+        if (!seq && this.config.server?.getAccount) {
+          const acc = await this.config.server.getAccount(this.config.sourceAddress);
+          seq = acc.sequenceNumber();
+        }
+        const chunkResult = await this.execute(chunkOps, seq);
+        totalFee += BigInt(chunkResult.feeStroops || "0");
+        txHashes.push(chunkResult.txHash);
+        for (const i of chunkIndices) {
+          results[i].success = true;
+        }
+        // Advance sequence for subsequent sub-batches.
+        if (seq !== undefined) {
+          seq = (BigInt(seq) + 1n).toString();
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        for (const i of chunkIndices) {
+          results[i].success = false;
+          results[i].error = message;
+        }
+      }
+    }
+
+    const successCount = results.filter((r) => r.success).length;
+    const failureCount = results.length - successCount;
+
+    return {
+      success: failureCount === 0,
+      partial: successCount > 0 && failureCount > 0,
+      successCount,
+      failureCount,
+      results,
+      txHashes,
+      feeStroops: totalFee.toString(),
+      atomic: true,
     };
   }
 }

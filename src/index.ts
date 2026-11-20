@@ -1131,3 +1131,44 @@ export type { MemoryReport } from "./memoryOptimizer.js";
 // Streaming Datasets (#1139)
 export { StreamingDatasetIterator } from "./streamingDataset.js";
 export type { PageResult, StreamingDatasetOptions } from "./streamingDataset.js";
+
+// Automatic nonce management (#1223)
+export { NonceManager } from "./nonceManager.js";
+export type {
+  NonceManagerConfig,
+  NonceStats,
+  NonceReservation,
+  NonceRecoveryResult,
+} from "./nonceManager.js";
+
+// Request timeout and retry logic (#1224)
+export { TimeoutRetryManager } from "./timeoutRetryManager.js";
+export type {
+  TimeoutRetryConfig,
+  BackoffStrategy,
+  RetryStats,
+  RetryAttemptInfo,
+} from "./timeoutRetryManager.js";
+
+// Currency conversion utilities (#1225)
+export {
+  CurrencyConverter,
+  convertCurrency,
+  convertAmount,
+} from "./currencyConverter.js";
+export type {
+  CurrencyConversionConfig,
+  ConversionRate,
+  ConversionResult,
+  ConversionStats,
+} from "./currencyConverter.js";
+
+// Batch operation support (#1226)
+export { BatchExecutor } from "./batchExecutor.js";
+export type {
+  BatchExecutorConfig,
+  BatchOperation,
+  BatchResult,
+  BatchExecutionResult,
+  BatchStats,
+} from "./batchExecutor.js";

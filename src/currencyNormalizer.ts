@@ -168,3 +168,132 @@ export function verifyRoundTrip(
     return false;
   }
 }
+
+/**
+ * Parse a display-formatted decimal string into an exact integer mantissa
+ * and scale, without any floating-point arithmetic.
+ *
+ * Example: parseDecimal("1.50") => { mantissa: 150n, scale: 2 }
+ *
+ * @param display - Human-readable decimal amount (optionally signed).
+ * @returns Exact mantissa (bigint) and number of fractional digits.
+ * @throws PrecisionError when the input is not a valid decimal string.
+ */
+export function parseDecimal(display: string): { mantissa: bigint; scale: number } {
+  const trimmed = display.trim();
+  if (!/^[+-]?\d*(\.\d*)?$/.test(trimmed) || trimmed === "" || trimmed === "." ||
+      trimmed === "+" || trimmed === "-" || trimmed === "+." || trimmed === "-.") {
+    throw new PrecisionError(display, display, "Invalid decimal string");
+  }
+
+  const negative = trimmed.startsWith("-");
+  const unsigned = trimmed.replace(/^[+-]/, "");
+  const dotIndex = unsigned.indexOf(".");
+  const intPart = dotIndex === -1 ? unsigned : unsigned.slice(0, dotIndex);
+  const fracPart = dotIndex === -1 ? "" : unsigned.slice(dotIndex + 1);
+
+  const digits = `${intPart || "0"}${fracPart}`;
+  const magnitude = BigInt(digits);
+  return { mantissa: negative ? -magnitude : magnitude, scale: fracPart.length };
+}
+
+/**
+ * Rescale an exact decimal (mantissa + scale) to a target number of decimal
+ * places, rounding half-up when digits must be dropped. Never uses floats.
+ *
+ * @param mantissa - Exact integer mantissa.
+ * @param scale    - Current number of fractional digits.
+ * @param target   - Desired number of fractional digits.
+ * @returns Mantissa rescaled to `target` decimal places.
+ */
+export function rescaleDecimal(
+  mantissa: bigint,
+  scale: number,
+  target: number,
+): bigint {
+  if (target < 0) {
+    throw new PrecisionError(String(mantissa), String(target), "Target scale must be non-negative");
+  }
+  if (scale === target) return mantissa;
+
+  if (scale < target) {
+    return mantissa * 10n ** BigInt(target - scale);
+  }
+
+  const divisor = 10n ** BigInt(scale - target);
+  const negative = mantissa < 0n;
+  const abs = negative ? -mantissa : mantissa;
+  const quotient = abs / divisor;
+  const remainder = abs % divisor;
+  // Round half-up on the absolute value, then reapply sign.
+  const rounded = remainder * 2n >= divisor ? quotient + 1n : quotient;
+  return negative ? -rounded : rounded;
+}
+
+/**
+ * Convert a display amount denominated in one asset into the equivalent
+ * on-chain integer amount denominated in another asset, preserving exact
+ * precision across differing decimal places.
+ *
+ * The conversion is performed entirely with bigint arithmetic: the source
+ * amount is parsed exactly, rescaled to the target asset's precision, and
+ * returned as a canonical integer string. No floating-point values are used,
+ * so no precision is lost beyond the target asset's inherent granularity.
+ *
+ * Example: convertAmountPrecise("1.5", Asset.native(), usdcAsset)
+ *          => on-chain USDC amount for 1.5 XLM-equivalent units.
+ *
+ * @param display     - Human-readable decimal amount in the source asset.
+ * @param fromAsset   - Source Stellar Asset instance or canonical identifier.
+ * @param toAsset     - Target Stellar Asset instance or canonical identifier.
+ * @returns Canonical integer string in the target asset's sub-units.
+ * @throws PrecisionError when the input is invalid or would lose precision.
+ */
+export function convertAmountPrecise(
+  display: string,
+  fromAsset: Asset | string,
+  toAsset: Asset | string,
+): string {
+  const fromPrecision = getAssetPrecision(fromAsset);
+  const toPrecision = getAssetPrecision(toAsset);
+
+  const { mantissa, scale } = parseDecimal(display);
+
+  // Reject inputs that carry more precision than the source asset supports.
+  if (scale > fromPrecision) {
+    throw new PrecisionError(
+      display,
+      typeof fromAsset === "string" ? fromAsset : fromAsset.getCode(),
+      `Fractional part has ${scale} digits but precision is ${fromPrecision}`,
+    );
+  }
+
+  const rescaled = rescaleDecimal(mantissa, scale, toPrecision);
+  return rescaled.toString();
+}
+
+/**
+ * Convert an on-chain integer amount denominated in one asset into a
+ * display-formatted decimal string denominated in another asset, preserving
+ * exact precision across differing decimal places.
+ *
+ * Example: convertOnChainPrecise("15000000", Asset.native(), usdcAsset)
+ *          => display amount in USDC units.
+ *
+ * @param raw       - Raw on-chain amount in the source asset's sub-units.
+ * @param fromAsset - Source Stellar Asset instance or canonical identifier.
+ * @param toAsset   - Target Stellar Asset instance or canonical identifier.
+ * @returns Display decimal string in the target asset's precision.
+ */
+export function convertOnChainPrecise(
+  raw: string | bigint,
+  fromAsset: Asset | string,
+  toAsset: Asset | string,
+): string {
+  const fromPrecision = getAssetPrecision(fromAsset);
+  const toPrecision = getAssetPrecision(toAsset);
+  const rawValue = typeof raw === "string" ? BigInt(raw) : raw;
+
+  const rescaled = rescaleDecimal(rawValue, fromPrecision, toPrecision);
+  return normalizeAmount(rescaled, toAsset);
+}
