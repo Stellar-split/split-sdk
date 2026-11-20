@@ -3,6 +3,12 @@ import {
   FootprintLogger,
   optimizeFootprint,
 } from "../soroban/footprint.js";
+import {
+  TransactionVerificationError,
+  TransactionVerificationOptions,
+  TransactionVerifier,
+  verifyTransaction,
+} from "./verify.js";
 
 /** The minimal RPC surface needed to submit a transaction. */
 export type SubmitServer = {
@@ -22,6 +28,21 @@ export interface SubmitTransactionOptions {
   optimizeFootprint?: boolean;
   /** Receives debug-level diagnostics for keys pruned by the optimizer. */
   logger?: FootprintLogger;
+  /**
+   * Enables pre-submit transaction verification (issue #1260).
+   *
+   * - `true` runs the default validation rules.
+   * - A `TransactionVerifier` instance runs its configured rules.
+   * - A `TransactionVerificationOptions` object runs the default rules plus
+   *   any custom rules supplied.
+   *
+   * When omitted (default), no verification is performed and behavior is
+   * unchanged. Verification runs after footprint optimization, so the
+   * transaction that is verified is the one that gets submitted. If
+   * verification fails, a `TransactionVerificationError` is thrown and the
+   * transaction is not submitted.
+   */
+  verify?: boolean | TransactionVerifier | TransactionVerificationOptions;
 }
 
 /**
@@ -45,5 +66,19 @@ export async function submitTransaction(
   const toSubmit = optimize
     ? optimizeFootprint(tx, sim, { logger: options.logger })
     : tx;
+
+  if (options.verify) {
+    const verifier =
+      options.verify instanceof TransactionVerifier
+        ? options.verify
+        : new TransactionVerifier(
+            options.verify === true ? {} : options.verify,
+          );
+    const result = verifier.verify(toSubmit);
+    if (!result.valid) {
+      throw new TransactionVerificationError(result);
+    }
+  }
+
   return server.submitTransaction(toSubmit);
 }

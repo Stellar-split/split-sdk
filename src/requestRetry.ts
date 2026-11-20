@@ -7,6 +7,8 @@
  * Issue #1030
  */
 
+import { isRetryableErrorCode } from "./errorRecovery";
+
 export interface BackoffOptions {
   /** Initial delay before first retry in milliseconds. Default: 500ms. */
   baseDelayMs?: number;
@@ -119,6 +121,10 @@ export function calculateBackoffDelay(
 
 /**
  * Determine if an error is considered transient and retryable.
+ *
+ * Consults the centralized error-code classification first (when the error
+ * carries a code), then falls back to HTTP-status and message heuristics so
+ * request retries stay consistent with the SDK-wide recovery strategy.
  */
 export function isRetryableError(error: unknown): boolean {
   if (!error) return false;
@@ -127,6 +133,15 @@ export function isRetryableError(error: unknown): boolean {
 
   if (typeof error === "object") {
     const rec = error as Record<string, unknown>;
+
+    // Centralized error-code classification takes precedence.
+    const code = rec.code;
+    if (typeof code === "string" && code.length > 0) {
+      const classified = isRetryableErrorCode(code);
+      if (classified !== undefined) {
+        return classified;
+      }
+    }
 
     // HTTP status codes
     const status = Number(rec.status ?? rec.statusCode ?? rec.code);

@@ -9,6 +9,7 @@
  * - Split ratios and totals
  * - Invoice metadata
  * - Recipient deduplication
+ * - Soroban contract addresses (Issue #1259)
  */
 
 export * from "./deadlineValidator.js";
@@ -18,3 +19,13 @@ export * from "./signatureValidator.js";
 export * from "./splitRatioValidator.js";
 export * from "./invoiceMetadataValidator.js";
 export * from "./recipientDeduplicator.js";
+export {
+  ContractAddressValidator,
+  validateContractAddress,
+  isValidContractAddress,
+  assertValidContractAddress,
+} from "../contractAddressValidator.js";
+export type {
+  ContractAddressValidatorOptions,
+  ContractAddressValidationResult,
+} from "../contractAddressValidator.js";
