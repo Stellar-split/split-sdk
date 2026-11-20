@@ -57,6 +57,74 @@ export interface SignatureValidationResult {
   errors: string[];
 }
 
+/** Supported signature validation schemes. */
+export type SignatureScheme = "ed25519" | "hmac-sha256" | "multi-sig";
+
+/** Parameters for the scheme-agnostic signature validation API. */
+export interface ValidateSignatureParams {
+  /** The validation scheme to use. */
+  scheme: SignatureScheme;
+  /**
+   * The signer's public key (ed25519 / multi-sig) or shared secret (hmac-sha256).
+   * For multi-sig this is unused; provide `signers` and `threshold` instead.
+   */
+  publicKey?: string | Buffer | Uint8Array;
+  /** The signed message, transaction hash, or webhook payload. */
+  message: string | Buffer | Uint8Array;
+  /** The signature to validate. */
+  signature: string | Buffer | Uint8Array;
+  /** HMAC algorithm for the hmac-sha256 scheme. Defaults to 'sha256'. */
+  algorithm?: "sha256" | "sha1" | "sha512";
+  /** Optional timestamp for hmac-sha256 replay protection. */
+  timestamp?: number | string;
+  /** Maximum allowable clock skew in seconds for hmac-sha256. */
+  toleranceSeconds?: number;
+  /** Optional signature prefix to strip for hmac-sha256 (e.g., 'sha256='). */
+  signaturePrefix?: string;
+  /** Multi-sig: collected signatures. */
+  signatures?: MultiSigEntry[];
+  /** Multi-sig: authorized signers and weights. */
+  signers?: SignerWeightConfig[];
+  /** Multi-sig: required weight threshold. */
+  threshold?: number;
+}
+
+/** Result of a scheme-agnostic signature validation. */
+export interface ValidateSignatureResult extends SignatureValidationResult {
+  /** The scheme that was used. */
+  scheme: SignatureScheme;
+  /** True when the result was served from the cache. */
+  cached: boolean;
+}
+
+/** A single recorded validation event. */
+export interface ValidationRecord {
+  /** The scheme used for this validation. */
+  scheme: SignatureScheme;
+  /** Timestamp (ms since epoch) when the validation occurred. */
+  timestamp: number;
+  /** Whether the validation succeeded. */
+  valid: boolean;
+  /** Whether the result was served from cache. */
+  cached: boolean;
+}
+
+/** Aggregated validation statistics. */
+export interface ValidationStats {
+  /** Total number of validations recorded. */
+  total: number;
+  /** Number of successful validations. */
+  valid: number;
+  /** Number of failed validations. */
+  invalid: number;
+  /** Number of validations served from cache. */
+  cacheHits: number;
+  /** Number of validations that missed the cache. */
+  cacheMisses: number;
+  /** Per-scheme breakdown of validation counts. */
+  byScheme: Record<SignatureScheme, { total: number; valid: number; invalid: number }>;
+}
+
 /** Parameters for Ed25519 signature validation. */
 export interface Ed25519ValidationParams {
   /**
@@ -576,10 +644,292 @@ export function validateWebhookSignature(
   return { valid: true, errors: [] };
 }
 
+// ---------------------------------------------------------------------------
+// Validation Tracking
+// ---------------------------------------------------------------------------
+
+/** Maximum number of validation records retained in memory. */
+const MAX_VALIDATION_RECORDS = 1000;
+
+/** Module-level tracker of validation events. */
+const validationRecords: ValidationRecord[] = [];
+
+/**
+ * Record a validation event in the module-level tracker.
+ *
+ * @param record - The validation event to record.
+ */
+function trackValidation(record: ValidationRecord): void {
+  validationRecords.push(record);
+  if (validationRecords.length > MAX_VALIDATION_RECORDS) {
+    validationRecords.shift();
+  }
+}
+
+/**
+ * Retrieve aggregated statistics about recorded validations.
+ *
+ * @returns A {@link ValidationStats} snapshot.
+ */
+export function getValidationStats(): ValidationStats {
+  const byScheme: Record<SignatureScheme, { total: number; valid: number; invalid: number }> = {
+    ed25519: { total: 0, valid: 0, invalid: 0 },
+    "hmac-sha256": { total: 0, valid: 0, invalid: 0 },
+    "multi-sig": { total: 0, valid: 0, invalid: 0 },
+  };
+
+  let valid = 0;
+  let invalid = 0;
+  let cacheHits = 0;
+  let cacheMisses = 0;
+
+  for (const record of validationRecords) {
+    if (record.valid) valid++;
+    else invalid++;
+    if (record.cached) cacheHits++;
+    else cacheMisses++;
+
+    const bucket = byScheme[record.scheme];
+    if (bucket) {
+      bucket.total++;
+      if (record.valid) bucket.valid++;
+      else bucket.invalid++;
+    }
+  }
+
+  return {
+    total: validationRecords.length,
+    valid,
+    invalid,
+    cacheHits,
+    cacheMisses,
+    byScheme,
+  };
+}
+
+/**
+ * Reset the module-level validation tracker and cache.
+ */
+export function resetValidationStats(): void {
+  validationRecords.length = 0;
+  validationCache.clear();
+}
+
+// ---------------------------------------------------------------------------
+// Validation Cache (LRU)
+// ---------------------------------------------------------------------------
+
+/** Maximum number of cached validation results. */
+const MAX_CACHE_ENTRIES = 500;
+
+/** LRU cache of validation results keyed by scheme + inputs. */
+const validationCache = new Map<string, ValidateSignatureResult>();
+
+/**
+ * Build a stable cache key for a validation request.
+ *
+ * @param params - The validation parameters.
+ * @returns A deterministic string key.
+ */
+function buildCacheKey(params: ValidateSignatureParams): string {
+  const parts: string[] = [params.scheme];
+
+  const keyPart = (value: unknown): string => {
+    if (value === null || value === undefined) return "";
+    if (Buffer.isBuffer(value)) return value.toString("hex");
+    if (value instanceof Uint8Array) return Buffer.from(value).toString("hex");
+    return String(value);
+  };
+
+  parts.push(keyPart(params.publicKey));
+  parts.push(keyPart(params.message));
+  parts.push(keyPart(params.signature));
+  parts.push(params.algorithm ?? "");
+  parts.push(keyPart(params.timestamp));
+  parts.push(String(params.toleranceSeconds ?? ""));
+  parts.push(params.signaturePrefix ?? "");
+
+  if (params.signatures) {
+    parts.push(
+      params.signatures
+        .map((s) => `${keyPart(s.signer)}:${keyPart(s.signature)}`)
+        .join(",")
+    );
+  }
+  if (params.signers) {
+    parts.push(params.signers.map((s) => `${s.address}:${s.weight}`).join(","));
+  }
+  if (params.threshold !== undefined) {
+    parts.push(String(params.threshold));
+  }
+
+  return parts.join("|");
+}
+
+/**
+ * Retrieve a cached validation result, refreshing its LRU position.
+ *
+ * @param key - The cache key.
+ * @returns The cached result, or `undefined` if not present.
+ */
+function getCachedResult(key: string): ValidateSignatureResult | undefined {
+  const cached = validationCache.get(key);
+  if (cached) {
+    // Refresh LRU position
+    validationCache.delete(key);
+    validationCache.set(key, cached);
+  }
+  return cached;
+}
+
+/**
+ * Store a validation result in the LRU cache, evicting the oldest entry if full.
+ *
+ * @param key - The cache key.
+ * @param result - The result to cache.
+ */
+function setCachedResult(key: string, result: ValidateSignatureResult): void {
+  if (validationCache.has(key)) {
+    validationCache.delete(key);
+  } else if (validationCache.size >= MAX_CACHE_ENTRIES) {
+    const oldestKey = validationCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      validationCache.delete(oldestKey);
+    }
+  }
+  validationCache.set(key, result);
+}
+
+// ---------------------------------------------------------------------------
+// Scheme-Agnostic Validation API
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate a signature using a scheme-agnostic API.
+ *
+ * Dispatches to the appropriate underlying validator based on `scheme`:
+ * - `'ed25519'`: {@link validateEd25519Signature}
+ * - `'hmac-sha256'`: {@link validateWebhookSignature}
+ * - `'multi-sig'`: {@link validateMultiSig}
+ *
+ * Results are cached (LRU) keyed by scheme and inputs, and every validation
+ * (cache hit or miss) is recorded in the module-level tracker.
+ *
+ * @param params - Scheme-agnostic validation parameters.
+ * @returns A {@link ValidateSignatureResult}.
+ */
+export function validateSignature(params: ValidateSignatureParams): ValidateSignatureResult {
+  if (!params || !params.scheme) {
+    const errors = ["Validation parameters and scheme are required."];
+    return { valid: false, error: errors[0], errors, scheme: "ed25519", cached: false };
+  }
+
+  const cacheKey = buildCacheKey(params);
+  const cached = getCachedResult(cacheKey);
+  if (cached) {
+    trackValidation({
+      scheme: params.scheme,
+      timestamp: Date.now(),
+      valid: cached.valid,
+      cached: true,
+    });
+    return { ...cached, cached: true };
+  }
+
+  let result: SignatureValidationResult;
+
+  switch (params.scheme) {
+    case "ed25519": {
+      result = validateEd25519Signature({
+        publicKey: params.publicKey as string | Buffer | Uint8Array,
+        message: params.message,
+        signature: params.signature,
+      });
+      break;
+    }
+    case "hmac-sha256": {
+      result = validateWebhookSignature({
+        signature:
+          typeof params.signature === "string"
+            ? params.signature
+            : Buffer.from(params.signature as Uint8Array).toString("hex"),
+        payload:
+          typeof params.message === "string" ? params.message : Buffer.from(params.message),
+        secret:
+          typeof params.publicKey === "string"
+            ? params.publicKey
+            : params.publicKey
+              ? Buffer.from(params.publicKey as Uint8Array).toString("utf8")
+              : "",
+        algorithm: params.algorithm,
+        timestamp: params.timestamp,
+        toleranceSeconds: params.toleranceSeconds,
+        signaturePrefix: params.signaturePrefix,
+      });
+      break;
+    }
+    case "multi-sig": {
+      const multiResult = validateMultiSig({
+        message: params.message,
+        signatures: params.signatures ?? [],
+        signers: params.signers ?? [],
+        threshold: params.threshold ?? 0,
+      });
+      result = {
+        valid: multiResult.valid,
+        error: multiResult.errors[0],
+        errors: multiResult.errors,
+      };
+      break;
+    }
+    default: {
+      const errors = [`Unsupported signature scheme: ${String(params.scheme)}.`];
+      result = { valid: false, error: errors[0], errors };
+    }
+  }
+
+  const finalResult: ValidateSignatureResult = {
+    ...result,
+    scheme: params.scheme,
+    cached: false,
+  };
+
+  setCachedResult(cacheKey, finalResult);
+
+  trackValidation({
+    scheme: params.scheme,
+    timestamp: Date.now(),
+    valid: finalResult.valid,
+    cached: false,
+  });
+
+  return finalResult;
+}
+
 /**
  * Reusable validator class for cryptographic and webhook signatures.
  */
 export class SignatureValidator {
+  /**
+   * Validate a signature using the scheme-agnostic API.
+   */
+  validate(params: ValidateSignatureParams): ValidateSignatureResult {
+    return validateSignature(params);
+  }
+
+  /**
+   * Retrieve aggregated validation statistics.
+   */
+  getStats(): ValidationStats {
+    return getValidationStats();
+  }
+
+  /**
+   * Reset the validation tracker and cache.
+   */
+  resetStats(): void {
+    resetValidationStats();
+  }
   /**
    * Validate an Ed25519 signature.
    */
