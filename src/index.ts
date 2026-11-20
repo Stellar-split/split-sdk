@@ -1131,3 +1131,48 @@ export type { MemoryReport } from "./memoryOptimizer.js";
 // Streaming Datasets (#1139)
 export { StreamingDatasetIterator } from "./streamingDataset.js";
 export type { PageResult, StreamingDatasetOptions } from "./streamingDataset.js";
+
+// Invoice Collaboration (#1247)
+export { InvoiceCollaborationManager } from "./invoiceCollaboration.js";
+export type {
+  CollaboratorRole,
+  Collaborator,
+  InvoiceComment,
+  CollaborationApproval,
+  CollaborationNotification,
+  CollaborationEventType,
+  CollaborationEvent,
+  CollaborationEventListener,
+  InvoiceCollaborationOptions,
+} from "./invoiceCollaboration.js";
+
+// Smart Contract ABI Caching (#1248)
+export { ContractAbiCache } from "./contractAbiCache.js";
+export type {
+  AbiCacheEntry,
+  AbiCacheStats,
+  AbiCacheOptions,
+  AbiLoader,
+} from "./contractAbiCache.js";
+
+// Payment Analytics (#1249)
+export { PaymentAnalytics } from "./paymentAnalytics.js";
+export type {
+  PaymentAnalyticsOptions,
+  PaymentMetric,
+  PaymentTrend,
+  PaymentAnalyticsReport,
+  PaymentDashboard,
+  PaymentDashboardWidget,
+  AnalyticsPeriod,
+} from "./paymentAnalytics.js";
+
+// Invoice Versioning (#1250)
+export { InvoiceVersionTracker, InvoiceVersionManager } from "./invoiceVersioning.js";
+export type {
+  InvoiceVersion,
+  InvoiceVersionDiff,
+  VersionStore,
+  RollbackOptions,
+  InvoiceRollbackResult,
+} from "./invoiceVersioning.js";

@@ -11,6 +11,9 @@ import {
   ApprovalRequestNotFoundError,
   UnauthorizedCollaborationError,
 } from "./errors.js";
+import { AclManager } from "./accessControl.js";
+import { diffInvoices } from "./diff.js";
+import { auditLogger } from "./auditLogger.js";
 
 // ---------------------------------------------------------------------------
 // Types & Interfaces
@@ -114,6 +117,38 @@ export type CollaborationNotificationHandler = (
   notification: CollaborationNotification,
 ) => void | Promise<void>;
 
+/** Collaboration role granted to a stakeholder on an invoice. */
+export type CollaborationRole = "owner" | "editor" | "viewer";
+
+/** A recorded field-level change to an invoice attributed to a collaborator. */
+export interface InvoiceChangeRecord {
+  id: string;
+  invoiceId: string;
+  actor: string;
+  timestamp: number;
+  /** Field-level diffs between the previous and next invoice state. */
+  changes: Array<{ field: string; before: unknown; after: unknown }>;
+}
+
+/** A single activity log entry for a collaboration action. */
+export interface CollaborationActivity {
+  id: string;
+  invoiceId: string;
+  actor: string;
+  action:
+    | "comment_added"
+    | "comment_updated"
+    | "comment_deleted"
+    | "approval_requested"
+    | "approval_decided"
+    | "approval_completed"
+    | "permission_granted"
+    | "permission_revoked"
+    | "invoice_changed";
+  timestamp: number;
+  details?: Record<string, unknown>;
+}
+
 /** Event map for InvoiceCollaborationManager. */
 export type CollaborationEventMap = {
   "comment:added": { comment: InvoiceComment };
@@ -123,6 +158,10 @@ export type CollaborationEventMap = {
   "approval:decided": { request: ApprovalRequest; decision: ApprovalDecision };
   "approval:completed": { request: ApprovalRequest };
   "notification:sent": { notification: CollaborationNotification };
+  "permission:granted": { invoiceId: string; actor: string; role: CollaborationRole };
+  "permission:revoked": { invoiceId: string; actor: string };
+  "invoice:changed": { record: InvoiceChangeRecord };
+  "activity:logged": { activity: CollaborationActivity };
 };
 
 // ---------------------------------------------------------------------------
@@ -150,10 +189,138 @@ export class InvoiceCollaborationManager extends TypedEventEmitter<Collaboration
   private readonly requestsByInvoice = new Map<string, string[]>();
   private readonly notifications: CollaborationNotification[] = [];
   private readonly notificationHandlers = new Set<CollaborationNotificationHandler>();
+  private readonly acl = new AclManager();
+  private readonly changeRecords = new Map<string, InvoiceChangeRecord[]>();
+  private readonly activities: CollaborationActivity[] = [];
 
   private commentSeq = 0;
   private requestSeq = 0;
   private notificationSeq = 0;
+  private changeSeq = 0;
+  private activitySeq = 0;
+
+  // ---------------------------------------------------------------------------
+  // Permissions
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Grant a collaboration role to a stakeholder on an invoice.
+   */
+  grantPermission(invoiceId: string, actor: string, role: CollaborationRole): void {
+    this.acl.grant(invoiceId, actor, role);
+    this.emit("permission:granted", { invoiceId, actor, role });
+    this.logActivity(invoiceId, actor, "permission_granted", { role });
+  }
+
+  /**
+   * Revoke a stakeholder's collaboration role on an invoice.
+   */
+  revokePermission(invoiceId: string, actor: string): boolean {
+    const removed = this.acl.revoke(invoiceId, actor);
+    if (removed) {
+      this.emit("permission:revoked", { invoiceId, actor });
+      this.logActivity(invoiceId, actor, "permission_revoked");
+    }
+    return removed;
+  }
+
+  /**
+   * Return the role of a stakeholder on an invoice, if any.
+   */
+  getRole(invoiceId: string, actor: string): CollaborationRole | undefined {
+    return this.acl.getRole(invoiceId, actor);
+  }
+
+  private assertPermission(
+    invoiceId: string,
+    actor: string,
+    action: string,
+    required: CollaborationRole[],
+  ): void {
+    const role = this.acl.getRole(invoiceId, actor);
+    if (!role || !required.includes(role)) {
+      throw new UnauthorizedCollaborationError(
+        actor,
+        action,
+        `Requires one of roles: ${required.join(", ")}`,
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Change Tracking
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Record field-level changes between two invoice states, attributed to a collaborator.
+   */
+  recordInvoiceChange(
+    invoiceId: string,
+    actor: string,
+    before: Record<string, unknown>,
+    after: Record<string, unknown>,
+  ): InvoiceChangeRecord {
+    this.assertPermission(invoiceId, actor, "record invoice change", ["owner", "editor"]);
+
+    const diffs = diffInvoices(before, after);
+    const record: InvoiceChangeRecord = {
+      id: `change-${++this.changeSeq}`,
+      invoiceId,
+      actor,
+      timestamp: Date.now(),
+      changes: diffs.map((d) => ({ field: d.field, before: d.before, after: d.after })),
+    };
+
+    const list = this.changeRecords.get(invoiceId) ?? [];
+    list.push(record);
+    this.changeRecords.set(invoiceId, list);
+
+    this.emit("invoice:changed", { record });
+    this.logActivity(invoiceId, actor, "invoice_changed", { changes: record.changes });
+    return record;
+  }
+
+  /**
+   * Return all recorded change history for an invoice.
+   */
+  getChangeHistory(invoiceId: string): InvoiceChangeRecord[] {
+    return (this.changeRecords.get(invoiceId) ?? []).map((r) => ({ ...r }));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Activity Logging
+  // ---------------------------------------------------------------------------
+
+  private logActivity(
+    invoiceId: string,
+    actor: string,
+    action: CollaborationActivity["action"],
+    details?: Record<string, unknown>,
+  ): CollaborationActivity {
+    const activity: CollaborationActivity = {
+      id: `activity-${++this.activitySeq}`,
+      invoiceId,
+      actor,
+      action,
+      timestamp: Date.now(),
+      details,
+    };
+    this.activities.push(activity);
+    this.emit("activity:logged", { activity });
+    try {
+      auditLogger.log({ invoiceId, actor, action, details });
+    } catch {
+      // Safe dispatch
+    }
+    return activity;
+  }
+
+  /**
+   * Return activity log entries for an invoice.
+   */
+  getActivityLog(invoiceId: string): CollaborationActivity[] {
+    return this.activities.filter((a) => a.invoiceId === invoiceId).map((a) => ({ ...a }));
+  }
 
   // ---------------------------------------------------------------------------
   // Comments & Threading
@@ -171,6 +338,8 @@ export class InvoiceCollaborationManager extends TypedEventEmitter<Collaboration
     content: string;
     parentId?: string;
   }): InvoiceComment {
+    this.assertPermission(params.invoiceId, params.author, "add comment", ["owner", "editor"]);
+
     if (!params.content.trim()) {
       throw new Error("Comment content cannot be empty");
     }
@@ -202,6 +371,7 @@ export class InvoiceCollaborationManager extends TypedEventEmitter<Collaboration
     this.commentsByInvoice.set(params.invoiceId, invoiceList);
 
     this.emit("comment:added", { comment });
+    this.logActivity(params.invoiceId, params.author, "comment_added", { commentId });
 
     // Send notifications
     this.dispatchCommentNotifications(comment);
@@ -257,12 +427,14 @@ export class InvoiceCollaborationManager extends TypedEventEmitter<Collaboration
     if (comment.author !== author) {
       throw new UnauthorizedCollaborationError(author, "edit comment", "Only the author may edit");
     }
+    this.assertPermission(comment.invoiceId, author, "edit comment", ["owner", "editor"]);
 
     comment.content = newContent;
     comment.mentions = extractMentions(newContent);
     comment.updatedAt = Date.now();
 
     this.emit("comment:updated", { comment: { ...comment } });
+    this.logActivity(comment.invoiceId, author, "comment_updated", { commentId });
     return { ...comment };
   }
 
@@ -277,12 +449,14 @@ export class InvoiceCollaborationManager extends TypedEventEmitter<Collaboration
     if (comment.author !== author) {
       throw new UnauthorizedCollaborationError(author, "delete comment", "Only the author may delete");
     }
+    this.assertPermission(comment.invoiceId, author, "delete comment", ["owner", "editor"]);
 
     comment.isDeleted = true;
     comment.content = "[deleted]";
     comment.updatedAt = Date.now();
 
     this.emit("comment:deleted", { commentId, invoiceId: comment.invoiceId });
+    this.logActivity(comment.invoiceId, author, "comment_deleted", { commentId });
     return true;
   }
 
@@ -302,6 +476,8 @@ export class InvoiceCollaborationManager extends TypedEventEmitter<Collaboration
     description?: string;
     deadline?: number;
   }): ApprovalRequest {
+    this.assertPermission(params.invoiceId, params.requestedBy, "request approval", ["owner", "editor"]);
+
     if (!params.requiredApprovers || params.requiredApprovers.length === 0) {
       throw new Error("Approval request requires at least one approver");
     }
@@ -333,6 +509,7 @@ export class InvoiceCollaborationManager extends TypedEventEmitter<Collaboration
     this.requestsByInvoice.set(params.invoiceId, invoiceList);
 
     this.emit("approval:requested", { request });
+    this.logActivity(params.invoiceId, params.requestedBy, "approval_requested", { requestId });
 
     // Notify approvers
     for (const approver of params.requiredApprovers) {
@@ -369,6 +546,10 @@ export class InvoiceCollaborationManager extends TypedEventEmitter<Collaboration
         "Not in required approvers list",
       );
     }
+    this.assertPermission(request.invoiceId, params.approver, "submit approval decision", [
+      "owner",
+      "editor",
+    ]);
 
     if (request.status !== "pending") {
       throw new Error(`Approval request is already in "${request.status}" state`);
@@ -403,6 +584,10 @@ export class InvoiceCollaborationManager extends TypedEventEmitter<Collaboration
     request.updatedAt = Date.now();
 
     this.emit("approval:decided", { request, decision });
+    this.logActivity(request.invoiceId, params.approver, "approval_decided", {
+      requestId: request.id,
+      decision: params.decision,
+    });
 
     // Notify requester
     this.sendNotification({
@@ -415,6 +600,10 @@ export class InvoiceCollaborationManager extends TypedEventEmitter<Collaboration
 
     if (request.status !== "pending") {
       this.emit("approval:completed", { request });
+      this.logActivity(request.invoiceId, params.approver, "approval_completed", {
+        requestId: request.id,
+        status: request.status,
+      });
 
       // Notify all stakeholders
       for (const approver of request.requiredApprovers) {
@@ -526,27 +715,46 @@ export class InvoiceCollaborationManager extends TypedEventEmitter<Collaboration
   }
 
   /**
+   * Retrieve notifications for a specific invoice.
+   */
+  getInvoiceNotifications(invoiceId: string): CollaborationNotification[] {
+    return this.notifications.filter((n) => n.invoiceId === invoiceId).map((n) => ({ ...n }));
+  }
+
+  /**
    * Mark a specific notification as read.
    */
-  markNotificationAsRead(notificationId: string): boolean {
+  markNotificationAsRead(notificationId: string, actor?: string): boolean {
     const notif = this.notifications.find((n) => n.id === notificationId);
-    if (notif) {
-      notif.read = true;
-      return true;
+    if (!notif) return false;
+    if (actor !== undefined) {
+      this.assertPermission(notif.invoiceId, actor, "mark notification read", [
+        "owner",
+        "editor",
+        "viewer",
+      ]);
     }
-    return false;
+    notif.read = true;
+    return true;
   }
 
   /**
    * Mark all notifications for a recipient as read.
    */
-  markAllNotificationsAsRead(recipient: string): number {
+  markAllNotificationsAsRead(recipient: string, invoiceId?: string): number {
     let count = 0;
     for (const notif of this.notifications) {
-      if (notif.recipient === recipient && !notif.read) {
-        notif.read = true;
-        count++;
+      if (notif.recipient !== recipient || notif.read) continue;
+      if (invoiceId !== undefined) {
+        this.assertPermission(invoiceId, recipient, "mark notifications read", [
+          "owner",
+          "editor",
+          "viewer",
+        ]);
+        if (notif.invoiceId !== invoiceId) continue;
       }
+      notif.read = true;
+      count++;
     }
     return count;
   }
