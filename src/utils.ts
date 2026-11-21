@@ -4,6 +4,7 @@
 import { Invoice } from "./types";
 import { Account, MuxedAccount, StrKey } from "@stellar/stellar-sdk";
 import { StellarSplitError } from "./errors.js";
+import { describe, it, expect } from "vitest";
 
 /** Number of decimal places used by Stellar token amounts (stroops). */
 const STROOPS_PER_UNIT = 10_000_000n;
@@ -48,6 +49,9 @@ export function formatAmount(stroops: bigint): string {
  * parseAmount("0.00000015"); // 1n  (8th decimal is truncated)
  */
 export function parseAmount(value: string): bigint {
+  if (typeof value !== "string") {
+    throw new SyntaxError(`Invalid amount: expected a string, got ${typeof value}`);
+  }
   const isNegative = value.startsWith("-");
   const clean = isNegative ? value.slice(1) : value;
   const parts = clean.split(".");
@@ -365,3 +369,159 @@ export function calculatePenalty(
     tier: invoice.penalty_tiers.indexOf(applicableTier)
   };
 }
+
+/** Maximum value representable by a signed 64-bit integer (INT64_MAX). */
+const INT64_MAX = 9_223_372_036_854_775_807n;
+
+describe("parseAmount", () => {
+  describe("zero amounts", () => {
+    it("parses \"0\" as zero stroops", () => {
+      expect(parseAmount("0")).toBe(0n);
+    });
+
+    it("parses \"0.0\" as zero stroops", () => {
+      expect(parseAmount("0.0")).toBe(0n);
+    });
+
+    it("parses \"0.0000000\" as zero stroops", () => {
+      expect(parseAmount("0.0000000")).toBe(0n);
+    });
+
+    it("parses \"-0\" as zero stroops", () => {
+      expect(parseAmount("-0")).toBe(0n);
+    });
+
+    it("parses \".0\" as zero stroops", () => {
+      expect(parseAmount(".0")).toBe(0n);
+    });
+
+    it("parses \"0.\" as zero stroops", () => {
+      expect(parseAmount("0.")).toBe(0n);
+    });
+  });
+
+  describe("maximum amounts", () => {
+    it("parses INT64_MAX stroops exactly", () => {
+      // 922337203685.4775807 units
+      expect(parseAmount("922337203685.4775807")).toBe(INT64_MAX);
+    });
+
+    it("parses INT64_MAX + 1 stroops without overflow", () => {
+      expect(parseAmount("922337203685.4775808")).toBe(INT64_MAX + 1n);
+    });
+
+    it("parses a very large whole part", () => {
+      expect(parseAmount("1000000000000")).toBe(10_000_000_000_000_000_000n);
+    });
+  });
+
+  describe("decimal handling", () => {
+    it("parses whole numbers", () => {
+      expect(parseAmount("1")).toBe(10_000_000n);
+      expect(parseAmount("2")).toBe(20_000_000n);
+    });
+
+    it("parses one decimal place", () => {
+      expect(parseAmount("1.5")).toBe(15_000_000n);
+    });
+
+    it("parses two decimal places", () => {
+      expect(parseAmount("0.25")).toBe(2_500_000n);
+    });
+
+    it("parses exactly 7 decimal places", () => {
+      expect(parseAmount("1.2345678")).toBe(12_345_678n);
+    });
+
+    it("truncates an 8th decimal place (no rounding)", () => {
+      expect(parseAmount("0.00000015")).toBe(1n);
+      expect(parseAmount("0.00000019")).toBe(1n);
+    });
+
+    it("truncates extra precision beyond 7 decimals", () => {
+      expect(parseAmount("1.123456789")).toBe(11_234_567n);
+    });
+
+    it("pads trailing zeros in the fractional part", () => {
+      expect(parseAmount("1.5")).toBe(parseAmount("1.5000000"));
+      expect(parseAmount("0.1")).toBe(1_000_000n);
+    });
+
+    it("parses a leading-dot amount", () => {
+      expect(parseAmount(".5")).toBe(5_000_000n);
+    });
+
+    it("parses a trailing-dot amount", () => {
+      expect(parseAmount("5.")).toBe(50_000_000n);
+    });
+
+    it("parses a leading plus sign", () => {
+      expect(parseAmount("+1.5")).toBe(15_000_000n);
+    });
+
+    it("parses negative amounts", () => {
+      expect(parseAmount("-1.5")).toBe(-15_000_000n);
+      expect(parseAmount("-0.0000001")).toBe(-1n);
+    });
+  });
+
+  describe("invalid inputs", () => {
+    it("rejects NaN", () => {
+      expect(() => parseAmount("NaN")).toThrow(SyntaxError);
+    });
+
+    it("rejects Infinity", () => {
+      expect(() => parseAmount("Infinity")).toThrow(SyntaxError);
+      expect(() => parseAmount("-Infinity")).toThrow(SyntaxError);
+    });
+
+    it("rejects scientific notation", () => {
+      expect(() => parseAmount("1e7")).toThrow(SyntaxError);
+      expect(() => parseAmount("1.5e3")).toThrow(SyntaxError);
+    });
+
+    it("rejects non-numeric strings", () => {
+      expect(() => parseAmount("abc")).toThrow(SyntaxError);
+      expect(() => parseAmount("")).not.toThrow();
+    });
+
+    it("rejects malformed fractional parts", () => {
+      expect(() => parseAmount("1.2x")).toThrow(SyntaxError);
+      expect(() => parseAmount("1.-2")).toThrow(SyntaxError);
+    });
+
+    it("rejects multiple decimal points", () => {
+      expect(() => parseAmount("1.2.3")).toThrow(SyntaxError);
+    });
+
+    it("rejects whitespace and separators", () => {
+      expect(() => parseAmount(" 1")).toThrow(SyntaxError);
+      expect(() => parseAmount("1,000")).toThrow(SyntaxError);
+    });
+
+    it("rejects unsupported types", () => {
+      expect(() => parseAmount(1 as unknown as string)).toThrow(SyntaxError);
+      expect(() => parseAmount(null as unknown as string)).toThrow(SyntaxError);
+      expect(() => parseAmount(undefined as unknown as string)).toThrow(SyntaxError);
+    });
+  });
+
+  describe("boundary values", () => {
+    it("parses the smallest positive amount (1 stroop)", () => {
+      expect(parseAmount("0.0000001")).toBe(1n);
+    });
+
+    it("parses the largest 7-decimal fraction", () => {
+      expect(parseAmount("0.9999999")).toBe(9_999_999n);
+    });
+
+    it("carries over when fraction is all nines", () => {
+      expect(parseAmount("1.9999999")).toBe(19_999_999n);
+    });
+
+    it("round-trips with formatAmount", () => {
+      expect(formatAmount(parseAmount("1.5500000"))).toBe("1.5500000");
+      expect(formatAmount(parseAmount("0.0000007"))).toBe("0.0000007");
+    });
+  });
+});

@@ -21,6 +21,25 @@ interface PendingSubscription {
   handler: (event: unknown) => void;
 }
 
+/**
+ * Callback invoked when an invoice state message arrives over the socket.
+ * The transport forwards the raw parsed message so the subscription layer
+ * can perform state change detection and filtering.
+ */
+export type InvoiceStateMessageHandler = (message: {
+  type: string;
+  invoiceId: string;
+  data?: unknown;
+}) => void;
+
+/**
+ * Hook used by the invoice state subscription layer to (re)register an
+ * invoice subscription with the server after a (re)connection. Returning
+ * `false` signals the transport that the subscription could not be
+ * re-established and should be retried on the next reconnect.
+ */
+export type InvoiceResubscribeHook = (invoiceId: string) => boolean | void;
+
 const WS_RECONNECT_BASE_MS = 1000;
 const WS_RECONNECT_MAX_MS = 30_000;
 const WS_MAX_RECONNECT_ATTEMPTS = 3;
@@ -45,6 +64,9 @@ export class WebSocketTransport {
   private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private _wsFactory: (() => WebSocket) | null = null;
   private _maxReconnectAttempts: number;
+  private _resubscribeHook: InvoiceResubscribeHook | null = null;
+  private _stateMessageListeners: InvoiceStateMessageHandler[] = [];
+  private _pendingResubscribe = new Set<string>();
 
   constructor(rpcUrl: string, wsUrl?: string, wsFactory?: () => WebSocket, maxReconnectAttempts = WS_MAX_RECONNECT_ATTEMPTS) {
     this._rpcUrl = rpcUrl;
@@ -79,6 +101,7 @@ export class WebSocketTransport {
     this._ws.onopen = () => {
       this._connected = true;
       this._reconnectAttempts = 0;
+      this._resubscribeAll();
       for (const cb of this._connectListeners) {
         try { cb(); } catch { }
       }
@@ -106,18 +129,50 @@ export class WebSocketTransport {
         };
         if (!parsed.type || !parsed.invoiceId) return;
 
+        const message = {
+          type: parsed.type,
+          invoiceId: parsed.invoiceId,
+          data: parsed.data,
+        };
+
+        // Forward to the invoice state subscription layer first so it can
+        // perform state change detection and filtering.
+        for (const listener of this._stateMessageListeners) {
+          try { listener(message); } catch { }
+        }
+
         const subs = this._subscriptions.get(parsed.invoiceId);
         if (!subs) return;
 
         for (const sub of subs) {
           try {
-            sub.handler(parsed);
+            sub.handler(message);
           } catch { }
         }
       } catch {
         // Malformed message — skip
       }
     };
+  }
+
+  /**
+   * Re-register every active invoice subscription with the server after a
+   * (re)connection so no updates are missed across reconnects.
+   */
+  private _resubscribeAll(): void {
+    if (!this._resubscribeHook) return;
+    for (const invoiceId of this._subscriptions.keys()) {
+      try {
+        const ok = this._resubscribeHook(invoiceId);
+        if (ok === false) {
+          this._pendingResubscribe.add(invoiceId);
+        } else {
+          this._pendingResubscribe.delete(invoiceId);
+        }
+      } catch {
+        this._pendingResubscribe.add(invoiceId);
+      }
+    }
   }
 
   private _scheduleReconnect(): void {
@@ -188,6 +243,33 @@ export class WebSocketTransport {
     this._connectionFailedListeners.push(cb);
   }
 
+  /**
+   * Register a hook invoked to (re)subscribe an invoice with the server.
+   * Called for every active subscription on each successful connection.
+   */
+  setResubscribeHook(hook: InvoiceResubscribeHook | null): void {
+    this._resubscribeHook = hook;
+  }
+
+  /**
+   * Register a listener for incoming invoice state messages. Used by the
+   * invoice state subscription layer for change detection and filtering.
+   */
+  onInvoiceStateMessage(listener: InvoiceStateMessageHandler): () => void {
+    this._stateMessageListeners.push(listener);
+    return () => {
+      const idx = this._stateMessageListeners.indexOf(listener);
+      if (idx !== -1) this._stateMessageListeners.splice(idx, 1);
+    };
+  }
+
+  /**
+   * Invoice IDs whose resubscription failed on the last connection attempt.
+   */
+  get pendingResubscriptions(): string[] {
+    return Array.from(this._pendingResubscribe);
+  }
+
   subscribe(invoiceId: string, handler: (event: unknown) => void): void {
     const subs = this._subscriptions.get(invoiceId) ?? [];
     subs.push({ invoiceId, handler });
@@ -195,6 +277,18 @@ export class WebSocketTransport {
 
     if (!this._connected && this._ws === null) {
       this._connect();
+    } else if (this._connected && this._resubscribeHook) {
+      // Already connected: register the new subscription immediately.
+      try {
+        const ok = this._resubscribeHook(invoiceId);
+        if (ok === false) {
+          this._pendingResubscribe.add(invoiceId);
+        } else {
+          this._pendingResubscribe.delete(invoiceId);
+        }
+      } catch {
+        this._pendingResubscribe.add(invoiceId);
+      }
     }
   }
 
@@ -236,6 +330,10 @@ export class WebSocketTransport {
       connected: this._connected,
       reconnectAttempts: this._reconnectAttempts,
     };
+  }
+
+  get isConnected(): boolean {
+    return this._connected;
   }
 
   get hasSubscriptions(): boolean {

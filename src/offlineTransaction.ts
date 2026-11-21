@@ -23,6 +23,24 @@ import {
 import { ValidationError } from "./errors.js";
 
 // ---------------------------------------------------------------------------
+// Pluggable Signer interface
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal signer abstraction so offline signing can be delegated to hardware
+ * wallets, air-gapped devices, or in-memory keypairs.
+ */
+export interface Signer {
+  /** G... public key of the signer. */
+  publicKey(): string;
+  /**
+   * Sign an arbitrary 32-byte payload (typically a transaction hash).
+   * Returns the raw 64-byte Ed25519 signature.
+   */
+  sign(payload: Buffer): Promise<Buffer> | Buffer;
+}
+
+// ---------------------------------------------------------------------------
 // Types & Config
 // ---------------------------------------------------------------------------
 
@@ -291,6 +309,43 @@ export class OfflineTransactionBuilder {
   }
 
   /**
+   * Sign the built transaction hash using a pluggable `Signer` (or `Keypair`)
+   * and attach the resulting signature. This is the offline-friendly path:
+   * the signer only ever sees the 32-byte transaction hash, so it can live on
+   * an air-gapped device.
+   *
+   * Supports multiple successive calls for multi-signature transactions.
+   */
+  async signWith(signer: Signer | Keypair): Promise<this> {
+    const tx = this.build();
+
+    let publicKey: string;
+    let signature: Buffer;
+
+    if (signer instanceof Keypair) {
+      publicKey = signer.publicKey();
+      signature = signer.sign(tx.hash());
+    } else if (signer && typeof (signer as Signer).sign === "function") {
+      publicKey = signer.publicKey();
+      if (!StrKey.isValidEd25519PublicKey(publicKey)) {
+        throw new ValidationError(`Invalid public key from signer: ${publicKey}`);
+      }
+      const raw = await signer.sign(tx.hash());
+      signature = Buffer.from(raw);
+    } else {
+      throw new ValidationError("Signer must implement the Signer interface or be a Keypair.");
+    }
+
+    if (signature.length !== 64) {
+      throw new ValidationError(
+        `Invalid signature length: expected 64 bytes, got ${signature.length}`,
+      );
+    }
+
+    return this.addSignature(publicKey, signature);
+  }
+
+  /**
    * Add a raw external signature to the built transaction.
    */
   addSignature(publicKey: string, signature: Buffer | Uint8Array | string): this {
@@ -437,13 +492,41 @@ export class OfflineTransactionBuilder {
 
   /**
    * Reconstitute an OfflineTransactionBuilder from an OfflineTxPackage or JSON string.
+   * Signatures embedded in the XDR envelope are preserved losslessly.
    */
   static deserialize(payload: string | OfflineTxPackage): OfflineTransactionBuilder {
     const pkg: OfflineTxPackage = typeof payload === "string" ? JSON.parse(payload) : payload;
-    if (pkg.version !== 1) {
-      throw new ValidationError(`Unsupported package version: ${pkg.version}`);
+    if (!pkg || pkg.version !== 1) {
+      throw new ValidationError(`Unsupported package version: ${pkg?.version}`);
     }
-    return OfflineTransactionBuilder.fromXDR(pkg.xdr, pkg.networkPassphrase);
+    if (!pkg.xdr || !pkg.networkPassphrase) {
+      throw new ValidationError("Offline package is missing xdr or networkPassphrase.");
+    }
+
+    const builder = OfflineTransactionBuilder.fromXDR(pkg.xdr, pkg.networkPassphrase);
+
+    // The XDR envelope already carries signatures; re-attach any that are
+    // present in the package metadata but missing from the envelope so the
+    // round-trip is lossless even for externally-collected signatures.
+    if (Array.isArray(pkg.signatures) && pkg.signatures.length > 0) {
+      const tx = builder.build();
+      const existing = new Set(
+        tx.signatures.map((s) => `${s.hint().toString("hex")}:${s.signature().toString("base64")}`),
+      );
+      for (const sig of pkg.signatures) {
+        const key = `${sig.hint}:${sig.signature}`;
+        if (existing.has(key)) continue;
+        tx.signatures.push(
+          new xdr.DecoratedSignature({
+            hint: Buffer.from(sig.hint, "hex"),
+            signature: Buffer.from(sig.signature, "base64"),
+          }),
+        );
+        existing.add(key);
+      }
+    }
+
+    return builder;
   }
 
   private resolveMemo(memoInput: OfflineMemoInput): Memo {
