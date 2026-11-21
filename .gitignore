@@ -24,3 +24,25 @@ npm-debug.log*
 .DS_Store
 .idea/
 .vscode/
+
+# Test snapshots
+**/__snapshots__/
+*.snap
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# TypeDoc generated output
+docs/api/
+
+# Fuzz output
+fuzz/corpus/
+fuzz/output/
+
+# Misc
+.cache/
+*.tsbuildinfo
