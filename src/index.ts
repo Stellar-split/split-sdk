@@ -1131,3 +1131,9 @@ export type { MemoryReport } from "./memoryOptimizer.js";
 // Streaming Datasets (#1139)
 export { StreamingDatasetIterator } from "./streamingDataset.js";
 export type { PageResult, StreamingDatasetOptions } from "./streamingDataset.js";
+
+// API Reference Documentation Generator (#1197)
+export * from './apiDocGenerator.js';
+
+// SDK Cookbook (#1198)
+export * from './cookbook.js';
