@@ -625,15 +625,20 @@ export class InvoiceStateSubscriber {
   }
 
   /**
-   * Resets statistics counters. Useful for tests and long-running monitoring.
+   * Remove all subscriptions, clear timers, and tear down the socket.
+   * After destroy the subscriber cannot be reused.
    */
-  resetStats(): void {
-    this.totalSubscriptions = this.subscriptions.size;
-    this.updatesDelivered = 0;
-    this.updatesReceived = 0;
-    this.reconnectCount = 0;
-    this.stateChangeCount = 0;
-    this.replayedCount = 0;
+  destroy(): void {
+    for (const sub of this.subscriptions.values()) {
+      sub.active = false;
+    }
+    this.subscriptions.clear();
+    this.disconnect();
+    this.onConnectListeners.clear();
+    this.onDisconnectListeners.clear();
+    this.onReconnectListeners.clear();
+    this.onReconnectFailedListeners.clear();
+    this.onErrorListeners.clear();
   }
 
   // -------------------------------------------------------------------------
@@ -664,5 +669,70 @@ export class InvoiceStateSubscriber {
         break;
     }
     return this;
+  }
+
+  off(event: string, cb: (...args: any[]) => void): this {
+    switch (event) {
+      case "connect":
+        this.onConnectListeners.delete(cb as () => void);
+        break;
+      case "disconnect":
+        this.onDisconnectListeners.delete(cb as (reason?: string) => void);
+        break;
+      case "reconnect":
+        this.onReconnectListeners.delete(cb as (attempt: number, max: number) => void);
+        break;
+      case "reconnect_failed":
+        this.onReconnectFailedListeners.delete(cb as (attempts: number) => void);
+        break;
+      case "error":
+        this.onErrorListeners.delete(cb as (err: Error) => void);
+        break;
+    }
+    return this;
+  }
+}
+
+/**
+ * Manages a set of named handlers over an InvoiceStateSubscriber, tracking
+ * handler ids so they can be removed individually or all at once.
+ */
+export class SubscriptionManager {
+  private readonly subscriber: InvoiceStateSubscriber;
+  private readonly handlers = new Map<string, InvoiceStateSubscriptionHandle>();
+  private nextHandlerId = 1;
+
+  constructor(subscriber: InvoiceStateSubscriber) {
+    this.subscriber = subscriber;
+  }
+
+  get size(): number {
+    return this.handlers.size;
+  }
+
+  subscribe(
+    filter: InvoiceStateFilter | string,
+    callback: SubscriberCallback,
+  ): string {
+    const handle = this.subscriber.subscribe(filter, callback);
+    const handlerId = `handler_${this.nextHandlerId++}`;
+    this.handlers.set(handlerId, handle);
+    return handlerId;
+  }
+
+  removeHandler(handlerId: string): boolean {
+    const handle = this.handlers.get(handlerId);
+    if (!handle) return false;
+    handle.unsubscribe();
+    this.handlers.delete(handlerId);
+    return true;
+  }
+
+  destroy(): void {
+    for (const handle of this.handlers.values()) {
+      handle.unsubscribe();
+    }
+    this.handlers.clear();
+    this.subscriber.destroy();
   }
 }

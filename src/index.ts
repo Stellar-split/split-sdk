@@ -68,6 +68,86 @@ export {
   serializeInvoiceTemplate,
   deserializeInvoiceTemplate,
 } from "./invoiceTemplate.js";
+
+// Invoice QR code generation (#1241)
+export {
+  generateInvoiceQRCode,
+  generateInvoiceQRCodeDataUrl,
+  generateInvoiceQRCodeSvg,
+  generateInvoiceQRCodeBuffer,
+  buildInvoiceQRPayload,
+  DEFAULT_QR_OPTIONS,
+  QR_SIZE_PRESETS,
+  QR_EXPORT_FORMATS,
+} from "./invoiceQrCode.js";
+export type {
+  InvoiceQRCodeOptions,
+  InvoiceQRCodeResult,
+  InvoiceQRCodePayload,
+  QRExportFormat,
+  QRSizePreset,
+  QRErrorCorrectionLevel,
+  QRColorOptions,
+} from "./invoiceQrCode.js";
+
+// Invoice templates (#1244)
+export {
+  InvoiceTemplateRegistry,
+  defaultInvoiceTemplateRegistry,
+  createInvoiceTemplate,
+  applyInvoiceTemplate,
+  shareInvoiceTemplate,
+  importSharedInvoiceTemplate,
+  getInvoiceTemplateUsage,
+  resetInvoiceTemplateUsage,
+} from "./invoiceTemplates.js";
+export type {
+  InvoiceTemplateDefinition,
+  InvoiceTemplateCustomization,
+  InvoiceTemplateUsageStats,
+  SharedInvoiceTemplate,
+  CreateInvoiceTemplateParams,
+  ApplyInvoiceTemplateParams,
+  ApplyInvoiceTemplateResult,
+} from "./invoiceTemplates.js";
+
+// Recipient suggestions (#1245)
+export {
+  RecipientSuggestionEngine,
+  defaultRecipientSuggestionEngine,
+  suggestRecipients,
+  recordRecipientSelection,
+  getRecipientSuggestionStats,
+  resetRecipientSuggestionStats,
+} from "./recipientSuggestions.js";
+export type {
+  RecipientSuggestion,
+  RecipientSuggestionOptions,
+  RecipientSuggestionFilter,
+  RecipientSuggestionStats,
+  RecipientHistoryEntry,
+} from "./recipientSuggestions.js";
+
+// Payment reminders (#1246)
+export {
+  PaymentReminderScheduler,
+  defaultPaymentReminderScheduler,
+  schedulePaymentReminder,
+  cancelPaymentReminder,
+  getPaymentReminder,
+  listPaymentReminders,
+  getPaymentReminderStats,
+  resetPaymentReminderStats,
+} from "./paymentReminders.js";
+export type {
+  PaymentReminderConfig,
+  PaymentReminderScheduleOptions,
+  PaymentReminder,
+  PaymentReminderStatus,
+  PaymentReminderDelivery,
+  PaymentReminderStats,
+  PaymentReminderDeliveryHandler,
+} from "./paymentReminders.js";
 export {
   validateBulkImport,
   SUPPORTED_SCHEMA_VERSIONS,
@@ -1131,3 +1211,9 @@ export type { MemoryReport } from "./memoryOptimizer.js";
 // Streaming Datasets (#1139)
 export { StreamingDatasetIterator } from "./streamingDataset.js";
 export type { PageResult, StreamingDatasetOptions } from "./streamingDataset.js";
+
+// API Reference Documentation Generator (#1197)
+export * from './apiDocGenerator.js';
+
+// SDK Cookbook (#1198)
+export * from './cookbook.js';

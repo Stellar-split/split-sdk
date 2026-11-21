@@ -18,7 +18,10 @@ export const DEFAULT_LOCALE = 'en';
 /** Locales bundled with the SDK. */
 export const SUPPORTED_LOCALES: SupportedLocale[] = ['en', 'es', 'fr', 'de', 'pt', 'zh', 'ja'];
 
+export type LocaleChangeListener = (locale: string, previous: string) => void;
+
 const customDicts: LocaleDicts = {};
+const listeners = new Set<LocaleChangeListener>();
 let currentLocale: string = DEFAULT_LOCALE;
 
 function normalizeLocale(tag: string | null | undefined): string | null {
@@ -34,16 +37,56 @@ function normalizeLocale(tag: string | null | undefined): string | null {
 }
 
 /**
+ * Parse an Accept-Language header (e.g. "fr-CH, fr;q=0.9, en;q=0.8")
+ * and return the first supported locale, or null.
+ */
+export function detectFromAcceptLanguage(header: string | null | undefined): string | null {
+  if (!header || typeof header !== 'string') return null;
+  const entries = header
+    .split(',')
+    .map((part) => {
+      const [tag, ...params] = part.trim().split(';');
+      let q = 1;
+      for (const p of params) {
+        const m = /^\s*q\s*=\s*([0-9.]+)\s*$/i.exec(p);
+        if (m) {
+          const parsed = Number(m[1]);
+          if (!Number.isNaN(parsed)) q = parsed;
+        }
+      }
+      return { tag: (tag ?? '').trim(), q };
+    })
+    .filter((e) => e.tag.length > 0)
+    .sort((a, b) => b.q - a.q);
+  for (const entry of entries) {
+    const detected = normalizeLocale(entry.tag);
+    if (detected) return detected;
+  }
+  return null;
+}
+
+/**
  * Detect the user's preferred language.
- * Order: explicit hint > navigator.language (browser) >
- * LANGUAGE/LC_ALL/LANG env vars (Node) > English fallback.
+ * Order: explicit hint > query param (lang/locale) > Accept-Language header >
+ * navigator.language (browser) > LANGUAGE/LC_ALL/LANG env vars (Node) >
+ * English fallback.
  */
 export function detectLanguage(hint?: string | null): string {
   const fromHint = normalizeLocale(hint ?? null);
   if (fromHint) return fromHint;
   try {
-    const nav = (globalThis as any).navigator?.language;
-    const fromNav = normalizeLocale(typeof nav === 'string' ? nav : null);
+    const search = (globalThis as any).location?.search;
+    if (typeof search === 'string' && search.length > 1) {
+      const params = new URLSearchParams(search);
+      const fromQuery = normalizeLocale(params.get('lang') ?? params.get('locale'));
+      if (fromQuery) return fromQuery;
+    }
+  } catch {}
+  try {
+    const nav = (globalThis as any).navigator;
+    const fromAccept = detectFromAcceptLanguage(nav?.languages?.[0] ?? null);
+    if (fromAccept) return fromAccept;
+    const fromNav = normalizeLocale(typeof nav?.language === 'string' ? nav.language : null);
     if (fromNav) return fromNav;
   } catch {}
   try {
@@ -64,9 +107,30 @@ export function detectLanguage(hint?: string | null): string {
 /** Get the currently active locale. */
 export function getLocale(): string { return currentLocale; }
 
+/**
+ * Switch the active locale. Unsupported locales fall back to the default.
+ * Notifies registered listeners when the locale actually changes.
+ */
 export function setLocale(locale: string): string {
-  currentLocale = normalizeLocale(locale) ?? DEFAULT_LOCALE;
+  const next = normalizeLocale(locale) ?? DEFAULT_LOCALE;
+  const previous = currentLocale;
+  currentLocale = next;
+  if (next !== previous) {
+    for (const listener of Array.from(listeners)) {
+      try {
+        listener(next, previous);
+      } catch {}
+    }
+  }
   return currentLocale;
+}
+
+/** Subscribe to locale changes. Returns an unsubscribe function. */
+export function onLocaleChange(listener: LocaleChangeListener): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 export function listLocales(): string[] {
@@ -83,6 +147,7 @@ export const registerLocale = registerTranslations;
 
 export function _resetI18nForTesting(): void {
   currentLocale = DEFAULT_LOCALE;
+  listeners.clear();
   for (const k of Object.keys(customDicts)) delete customDicts[k];
 }
 
@@ -121,6 +186,34 @@ export function tp(keyOne: string, keyOther: string, count: number, params?: Rec
   return t(count === 1 ? keyOne : keyOther, { ...(params ?? {}), count }, locale);
 }
 
+/**
+ * Translation management: return the merged dictionary for a locale
+ * (custom overrides take precedence over bundled strings).
+ */
+export function getTranslations(locale: string): TranslationDict {
+  const key = normalizeLocale(locale) ?? DEFAULT_LOCALE;
+  return { ...(BUILTIN[key] ?? {}), ...(customDicts[key] ?? {}) };
+}
+
+/** Translation management: list keys missing from a locale vs. the default. */
+export function getMissingTranslations(locale: string): string[] {
+  const key = normalizeLocale(locale) ?? DEFAULT_LOCALE;
+  const dict = getTranslations(key);
+  return Object.keys(BUILTIN[DEFAULT_LOCALE] ?? {}).filter((k) => dict[k] === undefined);
+}
+
+/**
+ * Localized template metadata helper, intended for integration with the
+ * template manager. Returns a localized name/description for a template id.
+ */
+export function translateTemplateName(templateId: string, locale?: string): string {
+  return t(`template.${templateId}.name`, undefined, locale);
+}
+
+export function translateTemplateDescription(templateId: string, locale?: string): string {
+  return t(`template.${templateId}.description`, undefined, locale);
+}
+
 
 const EN: TranslationDict = {"error.invoiceNotFound": "Invoice not found: {invoiceId}", "error.invoiceNotPending": "Invoice is not in Pending state: {invoiceId}", "error.deadlinePassed": "Invoice deadline has passed: {invoiceId}", "error.insufficientBalance": "Insufficient balance: requested {amount}, remaining {remaining} (invoice {invoiceId})", "error.paymentExceedsRemaining": "Payment exceeds remaining balance: {amount} > {remaining}", "error.invoiceFrozen": "Invoice is frozen: {invoiceId}", "error.unauthorized": "Unauthorized: {reason}", "error.validation": "Validation failed: {reason}", "error.transactionFailed": "Transaction failed: {reason}", "error.walletNotConnected": "Wallet is not connected", "error.unknownExportFormat": "Unknown export format: {format}", "error.subscriptionNotFound": "Subscription not found: {subscriptionId}", "error.tooEarlyToTrigger": "Too early to trigger subscription: {subscriptionId}", "error.generic": "An unexpected error occurred: {reason}", "invoice.status.pending": "Pending", "invoice.status.released": "Released", "invoice.status.refunded": "Refunded", "invoice.status.cancelled": "Cancelled", "invoice.export.title": "StellarSplit Invoice", "invoice.export.recipients": "Recipients", "invoice.export.payments": "Payments", "invoice.export.id": "ID", "invoice.export.creator": "Creator", "invoice.export.status": "Status", "invoice.export.token": "Token", "invoice.export.deadline": "Deadline", "invoice.export.funded": "Funded", "ui.pay": "Pay", "ui.release": "Release", "ui.refund": "Refund", "ui.cancel": "Cancel", "ui.loading": "Loading…", "ui.confirm": "Confirm", "ui.close": "Close"};
 
@@ -137,3 +230,25 @@ const ZH: TranslationDict = {"error.invoiceNotFound": "本发票不存在：{inv
 const JA: TranslationDict = {"error.invoiceNotFound": "請求書が見つかりません: {invoiceId}", "error.invoiceNotPending": "請求書は保留中ではありません: {invoiceId}", "error.deadlinePassed": "請求書の期限が過ぎています: {invoiceId}", "error.insufficientBalance": "残高不足: 要求 {amount}、残り {remaining}（請求書 {invoiceId}）", "error.paymentExceedsRemaining": "支払いが残高を超過しています: {amount} > {remaining}", "error.invoiceFrozen": "請求書は凍結されています: {invoiceId}", "error.unauthorized": "権限がありません: {reason}", "error.validation": "検証に失敗しました: {reason}", "error.transactionFailed": "トランザクションに失敗しました: {reason}", "error.walletNotConnected": "ウォレットが接続されていません", "error.unknownExportFormat": "不明なエクスポート形式: {format}", "error.subscriptionNotFound": "サブスクリプションが見つかりません: {subscriptionId}", "error.tooEarlyToTrigger": "サブスクリプションの実行には早すぎます: {subscriptionId}", "error.generic": "予期しないエラーが発生しました: {reason}", "invoice.status.pending": "保留中", "invoice.status.released": "リリース済み", "invoice.status.refunded": "返金済み", "invoice.status.cancelled": "キャンセル済み", "invoice.export.title": "StellarSplit請求書", "invoice.export.recipients": "受取人", "invoice.export.payments": "支払い", "invoice.export.id": "ID", "invoice.export.creator": "作成者", "invoice.export.status": "ステータス", "invoice.export.token": "トークン", "invoice.export.deadline": "期限", "invoice.export.funded": "調達済み", "ui.pay": "支払う", "ui.release": "リリース", "ui.refund": "返金", "ui.cancel": "キャンセル", "ui.loading": "読み込み中…", "ui.confirm": "確認", "ui.close": "閉じる"};
 
 const BUILTIN: LocaleDicts = { en: EN, es: ES, fr: FR, de: DE, pt: PT, zh: ZH, ja: JA };
+
+/** The full i18n API, convenient for re-export from the package index. */
+export const i18n = {
+  DEFAULT_LOCALE,
+  SUPPORTED_LOCALES,
+  detectLanguage,
+  detectFromAcceptLanguage,
+  getLocale,
+  setLocale,
+  onLocaleChange,
+  listLocales,
+  registerTranslations,
+  registerLocale,
+  getTranslations,
+  getMissingTranslations,
+  t,
+  tp,
+  translateErrorCode,
+  translateStatus,
+  translateTemplateName,
+  translateTemplateDescription,
+};
