@@ -1131,3 +1131,24 @@ export type { MemoryReport } from "./memoryOptimizer.js";
 // Streaming Datasets (#1139)
 export { StreamingDatasetIterator } from "./streamingDataset.js";
 export type { PageResult, StreamingDatasetOptions } from "./streamingDataset.js";
+
+// SDK Event Emitter (#1263)
+export {
+  SdkEventEmitter,
+  getDefaultSdkEventEmitter,
+  setDefaultSdkEventEmitter,
+  resetDefaultSdkEventEmitter,
+} from "./events/eventEmitter.js";
+export type {
+  SdkEventMap,
+  TransactionSubmittedPayload,
+  TransactionConfirmedPayload,
+  TransactionFailedPayload,
+  StateChangedPayload,
+  SdkErrorPayload,
+  EventFilter,
+  EventEmitterStats,
+  EmittedEvent,
+  EmissionHistoryFilter,
+  SdkEventEmitterOptions,
+} from "./events/eventEmitter.js";
