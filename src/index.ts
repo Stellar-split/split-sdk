@@ -1131,3 +1131,30 @@ export type { MemoryReport } from "./memoryOptimizer.js";
 // Streaming Datasets (#1139)
 export { StreamingDatasetIterator } from "./streamingDataset.js";
 export type { PageResult, StreamingDatasetOptions } from "./streamingDataset.js";
+
+// Error Logging (#1265)
+export {
+  ErrorLogger,
+  MemoryLogStorage,
+  ConsoleLogStorage,
+  MultiLogStorage,
+  TextLogFormatter,
+  JsonLogFormatter,
+  LogLevelPriority,
+  isLogLevelEnabled,
+  parseLogLevel,
+  getDefaultErrorLogger,
+  setDefaultErrorLogger,
+  resetDefaultErrorLogger,
+  logError,
+  getLogStats,
+} from "./errorLogger.js";
+export type {
+  LogLevel,
+  LogEntry,
+  LogFilter,
+  LogFormatter,
+  LogStorage,
+  ErrorLogStats,
+  ErrorLoggerOptions,
+} from "./errorLogger.js";
