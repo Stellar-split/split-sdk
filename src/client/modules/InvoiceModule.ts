@@ -9,10 +9,15 @@ import type {
   InvoiceSnapshot,
 } from "../../types.js";
 import type { PerMethodRetryOptions } from "../../retryPolicy.js";
+import { withTrace } from "../../tracing.js";
 
 /**
  * Module dedicated to Invoice lifecycle operations: creation, querying,
  * updates, cloning, snapshots, and verification.
+ *
+ * Each top-level public method runs inside its own trace scope so that all
+ * telemetry and logger output produced during the call share a single trace ID.
+ * Nested internal calls inherit the parent's trace ID.
  */
 export class InvoiceModule extends BaseClientModule {
   /**
@@ -27,7 +32,9 @@ export class InvoiceModule extends BaseClientModule {
   async create<TMetadata = Record<string, unknown>>(
     params: CreateInvoiceParams<TMetadata>
   ): Promise<{ invoiceId: string; txHash: string } | SimulationResult> {
-    return this.client.createInvoice(params as any);
+    return withTrace("InvoiceModule.create", () =>
+      this.client.createInvoice(params as any)
+    );
   }
 
   /** Alias for `create`. */
@@ -40,7 +47,9 @@ export class InvoiceModule extends BaseClientModule {
   async createInvoice<TMetadata = Record<string, unknown>>(
     params: CreateInvoiceParams<TMetadata>
   ): Promise<{ invoiceId: string; txHash: string } | SimulationResult> {
-    return this.create(params as any);
+    return withTrace("InvoiceModule.createInvoice", () =>
+      this.create(params as any)
+    );
   }
 
   /**
@@ -50,7 +59,9 @@ export class InvoiceModule extends BaseClientModule {
     invoiceId: string,
     opts?: { retry?: PerMethodRetryOptions; dedupe?: boolean; traceId?: string; timeout?: number }
   ): Promise<Invoice<TMetadata, TStatus>> {
-    return this.client.getInvoice(invoiceId, opts) as Promise<Invoice<TMetadata, TStatus>>;
+    return withTrace("InvoiceModule.get", () =>
+      this.client.getInvoice(invoiceId, opts) as Promise<Invoice<TMetadata, TStatus>>
+    );
   }
 
   /** Alias for `get`. */
@@ -58,7 +69,7 @@ export class InvoiceModule extends BaseClientModule {
     invoiceId: string,
     opts?: { retry?: PerMethodRetryOptions; dedupe?: boolean; traceId?: string; timeout?: number }
   ): Promise<Invoice<TMetadata, TStatus>> {
-    return this.get(invoiceId, opts);
+    return withTrace("InvoiceModule.getInvoice", () => this.get(invoiceId, opts));
   }
 
   /**
@@ -68,7 +79,9 @@ export class InvoiceModule extends BaseClientModule {
     invoiceId: string,
     overrides?: Partial<CreateInvoiceParams>
   ): Promise<string> {
-    return this.client.cloneInvoice(invoiceId, overrides);
+    return withTrace("InvoiceModule.clone", () =>
+      this.client.cloneInvoice(invoiceId, overrides)
+    );
   }
 
   /** Alias for `clone`. */
@@ -76,98 +89,124 @@ export class InvoiceModule extends BaseClientModule {
     invoiceId: string,
     overrides?: Partial<CreateInvoiceParams>
   ): Promise<string> {
-    return this.clone(invoiceId, overrides);
+    return withTrace("InvoiceModule.cloneInvoice", () =>
+      this.clone(invoiceId, overrides)
+    );
   }
 
   /**
    * Updates an invoice with the provided changes.
    */
   async update(invoiceId: string, updates: Partial<Invoice>): Promise<Invoice> {
-    return this.client.updateInvoice(invoiceId, updates);
+    return withTrace("InvoiceModule.update", () =>
+      this.client.updateInvoice(invoiceId, updates)
+    );
   }
 
   /** Alias for `update`. */
   async updateInvoice(invoiceId: string, updates: Partial<Invoice>): Promise<Invoice> {
-    return this.update(invoiceId, updates);
+    return withTrace("InvoiceModule.updateInvoice", () =>
+      this.update(invoiceId, updates)
+    );
   }
 
   /**
    * Updates the lifecycle status of an invoice.
    */
   async updateStatus(invoiceId: string, to: InvoiceStatus): Promise<Invoice> {
-    return this.client.updateInvoiceStatus(invoiceId, to);
+    return withTrace("InvoiceModule.updateStatus", () =>
+      this.client.updateInvoiceStatus(invoiceId, to)
+    );
   }
 
   /** Alias for `updateStatus`. */
   async updateInvoiceStatus(invoiceId: string, to: InvoiceStatus): Promise<Invoice> {
-    return this.updateStatus(invoiceId, to);
+    return withTrace("InvoiceModule.updateInvoiceStatus", () =>
+      this.updateStatus(invoiceId, to)
+    );
   }
 
   /**
    * Queries invoices with filtering options.
    */
   async query<TMetadata = Record<string, unknown>>(filter: InvoiceFilter = {}): Promise<InvoicePage> {
-    return this.client.queryInvoices(filter);
+    return withTrace("InvoiceModule.query", () => this.client.queryInvoices(filter));
   }
 
   /** Alias for `query`. */
   async queryInvoices<TMetadata = Record<string, unknown>>(filter: InvoiceFilter = {}): Promise<InvoicePage> {
-    return this.query(filter);
+    return withTrace("InvoiceModule.queryInvoices", () => this.query(filter));
   }
 
   /**
    * Cancels an invoice.
    */
   async cancel(invoiceId: string) {
-    return this.client.cancel(invoiceId);
+    return withTrace("InvoiceModule.cancel", () => this.client.cancel(invoiceId));
   }
 
   /**
    * Finalizes an invoice on-chain.
    */
   async finalize(invoiceId: string, caller?: string) {
-    return this.client.finalizeInvoice(invoiceId, caller);
+    return withTrace("InvoiceModule.finalize", () =>
+      this.client.finalizeInvoice(invoiceId, caller)
+    );
   }
 
   /** Alias for `finalize`. */
   async finalizeInvoice(invoiceId: string, caller?: string) {
-    return this.finalize(invoiceId, caller);
+    return withTrace("InvoiceModule.finalizeInvoice", () =>
+      this.finalize(invoiceId, caller)
+    );
   }
 
   /**
    * Synchronizes an invoice's on-chain state with optimistic tracking.
    */
   async sync(invoiceId: string, options?: { traceId?: string; timeout?: number }) {
-    return this.client.syncInvoice(invoiceId, options);
+    return withTrace("InvoiceModule.sync", () =>
+      this.client.syncInvoice(invoiceId, options)
+    );
   }
 
   /** Alias for `sync`. */
   async syncInvoice(invoiceId: string, options?: { traceId?: string; timeout?: number }) {
-    return this.sync(invoiceId, options);
+    return withTrace("InvoiceModule.syncInvoice", () =>
+      this.sync(invoiceId, options)
+    );
   }
 
   /**
    * Takes a point-in-time snapshot of an invoice.
    */
   async snapshot(invoiceId: string): Promise<InvoiceSnapshot> {
-    return this.client.snapshotInvoice(invoiceId);
+    return withTrace("InvoiceModule.snapshot", () =>
+      this.client.snapshotInvoice(invoiceId)
+    );
   }
 
   /** Alias for `snapshot`. */
   async snapshotInvoice(invoiceId: string): Promise<InvoiceSnapshot> {
-    return this.snapshot(invoiceId);
+    return withTrace("InvoiceModule.snapshotInvoice", () =>
+      this.snapshot(invoiceId)
+    );
   }
 
   /**
    * Verifies the cryptographic hash of an invoice.
    */
   async verify(invoice: Invoice, expectedHash: string): Promise<boolean> {
-    return this.client.verifyInvoice(invoice, expectedHash);
+    return withTrace("InvoiceModule.verify", () =>
+      this.client.verifyInvoice(invoice, expectedHash)
+    );
   }
 
   /** Alias for `verify`. */
   async verifyInvoice(invoice: Invoice, expectedHash: string): Promise<boolean> {
-    return this.verify(invoice, expectedHash);
+    return withTrace("InvoiceModule.verifyInvoice", () =>
+      this.verify(invoice, expectedHash)
+    );
   }
 
   /**
@@ -177,7 +216,9 @@ export class InvoiceModule extends BaseClientModule {
     creator: string,
     opts?: { limit?: number; cursor?: string }
   ): Promise<Invoice[]> {
-    return this.client.getInvoicesByCreator(creator, opts);
+    return withTrace("InvoiceModule.getByCreator", () =>
+      this.client.getInvoicesByCreator(creator, opts)
+    );
   }
 
   /** Alias for `getByCreator`. */
@@ -185,7 +226,9 @@ export class InvoiceModule extends BaseClientModule {
     creator: string,
     opts?: { limit?: number; cursor?: string }
   ): Promise<Invoice[]> {
-    return this.getByCreator(creator, opts);
+    return withTrace("InvoiceModule.getInvoicesByCreator", () =>
+      this.getByCreator(creator, opts)
+    );
   }
 
   /**
@@ -195,7 +238,9 @@ export class InvoiceModule extends BaseClientModule {
     recipient: string,
     opts?: { limit?: number; cursor?: string }
   ): Promise<Invoice[]> {
-    return this.client.getInvoicesByRecipient(recipient, opts);
+    return withTrace("InvoiceModule.getByRecipient", () =>
+      this.client.getInvoicesByRecipient(recipient, opts)
+    );
   }
 
   /** Alias for `getByRecipient`. */
@@ -203,20 +248,26 @@ export class InvoiceModule extends BaseClientModule {
     recipient: string,
     opts?: { limit?: number; cursor?: string }
   ): Promise<Invoice[]> {
-    return this.getByRecipient(recipient, opts);
+    return withTrace("InvoiceModule.getInvoicesByRecipient", () =>
+      this.getByRecipient(recipient, opts)
+    );
   }
 
   /**
    * Resolves the full ancestor/descendant clone chain for an invoice.
    */
   async resolveCloneChain(invoiceId: string): Promise<Invoice[]> {
-    return this.client.resolveCloneChain(invoiceId);
+    return withTrace("InvoiceModule.resolveCloneChain", () =>
+      this.client.resolveCloneChain(invoiceId)
+    );
   }
 
   /**
    * Retrieves the lineage IDs for a cloned invoice.
    */
   async getLineage(invoiceId: string | bigint): Promise<bigint[]> {
-    return this.client.getLineage(invoiceId);
+    return withTrace("InvoiceModule.getLineage", () =>
+      this.client.getLineage(invoiceId)
+    );
   }
 }

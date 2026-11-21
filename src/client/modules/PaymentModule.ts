@@ -14,6 +14,7 @@ import type {
 } from "../../types.js";
 import type { TxResult } from "../../client.js";
 import type { BatchVerificationResult } from "../../batchVerifier.js";
+import { withTrace } from "../../tracing.js";
 
 /**
  * Module dedicated to Payment operations: payments, receipts, refunds,
@@ -26,21 +27,21 @@ export class PaymentModule extends BaseClientModule {
   async pay(params: PayParams & { simulate: true }): Promise<SimulationResult>;
   async pay(params: PayParams): Promise<TxResult>;
   async pay(params: PayParams): Promise<TxResult | SimulationResult> {
-    return this.client.pay(params as any);
+    return withTrace("pay", () => this.client.pay(params as any));
   }
 
   /**
    * Simulates a payment without submitting it to the network.
    */
   async simulatePay(params: PayParams): Promise<SimulatePayResult> {
-    return this.client.simulatePay(params);
+    return withTrace("simulatePay", () => this.client.simulatePay(params));
   }
 
   /**
    * Executes a batch of payments across multiple invoices.
    */
   async batchPay(payer: string, payments: BatchPayment[]): Promise<TxResult> {
-    return this.client.batchPay(payer, payments);
+    return withTrace("batchPay", () => this.client.batchPay(payer, payments));
   }
 
   /**
@@ -114,7 +115,9 @@ export class PaymentModule extends BaseClientModule {
     caller?: string,
     options?: { fallbackToClaimableBalance?: boolean }
   ): Promise<TxResult | { txHash: string; claimableBalanceId: string }> {
-    return this.client.refundInvoice(invoiceId, caller as any, options as any);
+    return withTrace("refund", () =>
+      this.client.refundInvoice(invoiceId, caller as any, options as any)
+    );
   }
 
   /** Alias for `refund`. */
@@ -180,7 +183,7 @@ export class PaymentModule extends BaseClientModule {
     payer: string;
     attestationStatement: string;
   }): Promise<TxResult> {
-    return this.client.payWithAttestation(params);
+    return withTrace("payWithAttestation", () => this.client.payWithAttestation(params));
   }
 
   /**
@@ -192,7 +195,7 @@ export class PaymentModule extends BaseClientModule {
     payer: string;
     referrer: string;
   }): Promise<TxResult> {
-    return this.client.payWithReferral(params);
+    return withTrace("payWithReferral", () => this.client.payWithReferral(params));
   }
 
   /**
