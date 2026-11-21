@@ -246,10 +246,37 @@ export async function executeWithTimeoutAndRetry<T>(
 }
 
 /**
+ * Aggregated statistics tracked by {@link RequestRetryManager}.
+ */
+export interface RetryStats {
+  /** Total number of execute() calls. */
+  totalOperations: number;
+  /** Total number of individual attempts across all operations. */
+  totalAttempts: number;
+  /** Number of retries performed (attempts beyond the first). */
+  totalRetries: number;
+  /** Number of attempts that timed out. */
+  totalTimeouts: number;
+  /** Number of operations that ultimately succeeded. */
+  successes: number;
+  /** Number of operations that ultimately failed. */
+  failures: number;
+  /** Total time spent waiting in backoff delays, in milliseconds. */
+  totalBackoffMs: number;
+  /** Number of operations that exhausted all retry attempts. */
+  exhaustedRetries: number;
+}
+
+/**
  * Manager class for configuring and coordinating request timeouts and retries across an application.
+ *
+ * This is the single entry point for executing requests with timeout + retry semantics.
+ * It supports flexible configuration (timeouts, retry limits, backoff, jitter) and
+ * tracks aggregate retry statistics via {@link getStats}.
  */
 export class RequestRetryManager {
   private readonly config: RequestRetryConfig;
+  private stats: RetryStats = RequestRetryManager.createEmptyStats();
 
   constructor(config: RequestRetryConfig = {}) {
     this.config = {
@@ -261,6 +288,47 @@ export class RequestRetryManager {
       jitter: true,
       ...config,
     };
+  }
+
+  private static createEmptyStats(): RetryStats {
+    return {
+      totalOperations: 0,
+      totalAttempts: 0,
+      totalRetries: 0,
+      totalTimeouts: 0,
+      successes: 0,
+      failures: 0,
+      totalBackoffMs: 0,
+      exhaustedRetries: 0,
+    };
+  }
+
+  /**
+   * Update the manager's configuration. Provided fields are merged over the existing config.
+   */
+  configure(overrides: Partial<RequestRetryConfig>): void {
+    Object.assign(this.config, overrides);
+  }
+
+  /**
+   * Get a snapshot of the current configuration.
+   */
+  getConfig(): Readonly<RequestRetryConfig> {
+    return { ...this.config };
+  }
+
+  /**
+   * Get a snapshot of the tracked retry statistics.
+   */
+  getStats(): Readonly<RetryStats> {
+    return { ...this.stats };
+  }
+
+  /**
+   * Reset all tracked retry statistics to zero.
+   */
+  resetStats(): void {
+    this.stats = RequestRetryManager.createEmptyStats();
   }
 
   /**
@@ -284,6 +352,9 @@ export class RequestRetryManager {
 
   /**
    * Execute an operation with this manager's configuration, optionally merged with per-call overrides.
+   *
+   * This is the single entry point for request execution with timeout + retry semantics.
+   * Statistics are tracked for every operation.
    */
   async execute<T>(
     fn: (signal: AbortSignal) => Promise<T>,
@@ -293,6 +364,40 @@ export class RequestRetryManager {
       ? { ...this.config, methodName: overrides }
       : { ...this.config, ...overrides };
 
-    return executeWithTimeoutAndRetry(fn, mergedConfig);
+    this.stats.totalOperations++;
+
+    const userOnRetry = mergedConfig.onRetry;
+    const userOnTimeout = mergedConfig.onTimeout;
+
+    const trackedConfig: RequestRetryConfig = {
+      ...mergedConfig,
+      onRetry: (attempt, error, delayMs) => {
+        this.stats.totalRetries++;
+        this.stats.totalBackoffMs += delayMs;
+        userOnRetry?.(attempt, error, delayMs);
+      },
+      onTimeout: (attempt, timeoutMs, method) => {
+        this.stats.totalTimeouts++;
+        userOnTimeout?.(attempt, timeoutMs, method);
+      },
+    };
+
+    // Count attempts by wrapping the operation function.
+    const wrappedFn = (signal: AbortSignal): Promise<T> => {
+      this.stats.totalAttempts++;
+      return fn(signal);
+    };
+
+    try {
+      const result = await executeWithTimeoutAndRetry(wrappedFn, trackedConfig);
+      this.stats.successes++;
+      return result;
+    } catch (err) {
+      this.stats.failures++;
+      if (err instanceof MaxRetriesExceededError) {
+        this.stats.exhaustedRetries++;
+      }
+      throw err;
+    }
   }
 }
