@@ -1131,3 +1131,27 @@ export type { MemoryReport } from "./memoryOptimizer.js";
 // Streaming Datasets (#1139)
 export { StreamingDatasetIterator } from "./streamingDataset.js";
 export type { PageResult, StreamingDatasetOptions } from "./streamingDataset.js";
+
+// Transaction Event Tracking (#1264)
+export {
+  TransactionEventTracker,
+  getDefaultTransactionEventTracker,
+  setDefaultTransactionEventTracker,
+  resetDefaultTransactionEventTracker,
+} from "./transactionEvents.js";
+export type {
+  TransactionStep,
+  TransactionEvent,
+  TransactionEventBase,
+  TransactionCreatedEvent,
+  TransactionSimulatedEvent,
+  TransactionSignedEvent,
+  TransactionSubmittedEvent,
+  TransactionConfirmedEvent,
+  TransactionErrorEvent,
+  TransactionEventMap,
+  TransactionEventListener,
+  TransactionEventFilter,
+  TransactionEventStats,
+  TransactionEventTrackerOptions,
+} from "./transactionEvents.js";
