@@ -62,8 +62,6 @@ export type {
   LogEntry,
   LogFormatter,
   LogSink,
-  LogFilter,
-  LogStats,
 } from "./logger.js";
 
 // Diagnostics: contextual errors, bounded context querying, and aggregation.

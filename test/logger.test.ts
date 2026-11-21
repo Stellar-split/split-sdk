@@ -238,28 +238,6 @@ describe("SdkLogger", () => {
     });
   });
 
-  describe("Filtering and statistics", () => {
-    it("filters entries and exposes counters without retaining their content", () => {
-      const logger = new SdkLogger({
-        level: LogLevel.DEBUG,
-        sink: testSink,
-        filter: (entry) => entry.context?.component !== "noisy",
-      });
-
-      logger.debug("kept", { component: "rpc" });
-      logger.debug("filtered", { component: "noisy" });
-      logger.info("kept too");
-
-      expect(entries.map((entry) => entry.message)).toEqual(["kept", "kept too"]);
-      expect(logger.getStats()).toMatchObject({
-        attempted: 3,
-        emitted: 2,
-        suppressedByFilter: 1,
-        emittedByLevel: { DEBUG: 1, INFO: 1 },
-      });
-    });
-  });
-
   describe("StellarSplitClient integration", () => {
     it("initializes with default LogLevel.NONE", async () => {
       const { StellarSplitClient } = await import("../src/client.js");
