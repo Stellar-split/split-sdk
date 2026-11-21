@@ -11,6 +11,7 @@ import {
   withErrorContext,
   wrapError,
   ERROR_CONTEXT_SYMBOL,
+  ErrorContextStore,
 } from "../src/errorContext.js";
 import { StellarSplitError, InvoiceNotFoundError } from "../src/errors.js";
 import { addBreadcrumb, clearBreadcrumbs } from "../src/breadcrumbTracker.js";
@@ -223,6 +224,26 @@ describe("Issue #1071 — Error Context", () => {
       expect(wrapped.message).toContain("Failed to submit invoice: Connection refused");
       expect(wrapped.context?.operation).toBe("submitInvoice");
       expect(wrapped.context?.invoiceId).toBe("inv-wrap-1");
+    });
+  });
+
+  describe("Context tracking and queries", () => {
+    it("stores sanitized contexts and queries them through indexed dimensions", () => {
+      const store = new ErrorContextStore(2);
+      const first = new Error("RPC unavailable");
+      attachErrorContext(first, { operation: "pay", invoiceId: "inv-1", extra: { secret: "do-not-store" } });
+      store.capture(first);
+      store.capture(new Error("other failure"), { operation: "refund", invoiceId: "inv-2" });
+
+      const results = store.query({ operation: "pay" });
+      expect(results).toHaveLength(1);
+      expect(results[0]?.context.invoiceId).toBe("inv-1");
+      expect(results[0]?.context.extra?.secret).toBe("***MASKED***");
+      expect(results[0]?.error.stack).toContain("Error: RPC unavailable");
+
+      store.capture(new Error("newest"), { operation: "pay", invoiceId: "inv-3" });
+      expect(store.size()).toBe(2);
+      expect(store.query({ invoiceId: "inv-1" })).toHaveLength(0);
     });
   });
 });

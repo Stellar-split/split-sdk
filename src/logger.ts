@@ -115,6 +115,18 @@ export type LogFormatter = (entry: LogEntry) => string;
  */
 export type LogSink = (entry: LogEntry, formattedMessage: string) => void;
 
+/** Optional predicate for suppressing selected structured log entries. */
+export type LogFilter = (entry: LogEntry) => boolean;
+
+/** Bounded counters describing logger activity without retaining log payloads. */
+export interface LogStats {
+  attempted: number;
+  emitted: number;
+  suppressedByLevel: number;
+  suppressedByFilter: number;
+  emittedByLevel: Record<"DEBUG" | "INFO" | "WARN" | "ERROR", number>;
+}
+
 /**
  * Configuration options for initializing an {@link SdkLogger}.
  */
@@ -145,6 +157,8 @@ export interface LoggerOptions {
    * Initial active enabled flag. If false, behaves as LogLevel.NONE.
    */
   enabled?: boolean;
+  /** Optional entry predicate. Returning false suppresses the entry. */
+  filter?: LogFilter;
 }
 
 /** Stellar secret key pattern (56 characters starting with 'S'). */
@@ -286,6 +300,10 @@ export interface Logger {
   isEnabled(level: LogLevel | LogLevelString): boolean;
   /** Create a child logger sharing the same configuration under an appended namespace. */
   child(subNamespace: string): Logger;
+  /** Return counters for emitted and suppressed entries without retaining content. */
+  getStats?(): LogStats;
+  /** Reset counters collected by this logger. */
+  resetStats?(): void;
 }
 
 /**
@@ -307,6 +325,14 @@ export class SdkLogger implements Logger {
   private sink: LogSink;
   private formatter: LogFormatter;
   private redactSensitive: boolean;
+  private filter?: LogFilter;
+  private stats: LogStats = {
+    attempted: 0,
+    emitted: 0,
+    suppressedByLevel: 0,
+    suppressedByFilter: 0,
+    emittedByLevel: { DEBUG: 0, INFO: 0, WARN: 0, ERROR: 0 },
+  };
 
   constructor(options: LoggerOptions = {}) {
     let resolvedLevel = LogLevel.NONE;
@@ -327,6 +353,7 @@ export class SdkLogger implements Logger {
     this.sink = options.sink || defaultConsoleSink;
     this.formatter = options.formatter || defaultLogFormatter;
     this.redactSensitive = options.redactSensitive ?? true;
+    this.filter = options.filter;
   }
 
   /**
@@ -392,7 +419,25 @@ export class SdkLogger implements Logger {
       sink: this.sink,
       formatter: this.formatter,
       redactSensitive: this.redactSensitive,
+      filter: this.filter,
     });
+  }
+
+  public getStats(): LogStats {
+    return {
+      ...this.stats,
+      emittedByLevel: { ...this.stats.emittedByLevel },
+    };
+  }
+
+  public resetStats(): void {
+    this.stats = {
+      attempted: 0,
+      emitted: 0,
+      suppressedByLevel: 0,
+      suppressedByFilter: 0,
+      emittedByLevel: { DEBUG: 0, INFO: 0, WARN: 0, ERROR: 0 },
+    };
   }
 
   /**
@@ -439,7 +484,9 @@ export class SdkLogger implements Logger {
    * Internal dispatcher for logging an entry.
    */
   private log(level: LogLevel, message: string, context?: Record<string, unknown>): void {
+    this.stats.attempted++;
     if (!this.isEnabled(level)) {
+      this.stats.suppressedByLevel++;
       return;
     }
 
@@ -459,6 +506,14 @@ export class SdkLogger implements Logger {
         : message,
       context: sanitizedContext,
     };
+
+    if (this.filter && !this.filter(entry)) {
+      this.stats.suppressedByFilter++;
+      return;
+    }
+
+    this.stats.emitted++;
+    this.stats.emittedByLevel[entry.levelName]++;
 
     try {
       const formatted = this.formatter(entry);

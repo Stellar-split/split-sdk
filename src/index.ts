@@ -62,7 +62,50 @@ export type {
   LogEntry,
   LogFormatter,
   LogSink,
+  LogFilter,
+  LogStats,
 } from "./logger.js";
+
+// Diagnostics: contextual errors, bounded context querying, and aggregation.
+export {
+  ERROR_CONTEXT_SYMBOL,
+  sanitizeContext,
+  mergeContext,
+  attachErrorContext,
+  getErrorContext,
+  hasErrorContext,
+  serializeError,
+  serializeErrorContext,
+  ErrorContextBuilder,
+  createErrorContext,
+  withErrorContext,
+  wrapError,
+  ErrorContextStore,
+} from "./errorContext.js";
+export type {
+  ErrorContext,
+  SerializedError,
+  ErrorContextQuery,
+  StoredErrorContext,
+} from "./errorContext.js";
+export {
+  ErrorAggregator,
+  normalizeErrorMessage,
+  getDefaultErrorAggregator,
+  setDefaultErrorAggregator,
+  resetDefaultErrorAggregator,
+  aggregateError,
+} from "./errorAggregator.js";
+export type {
+  AggregatedErrorGroup,
+  ErrorPattern,
+  ErrorAggregationReport,
+  ErrorAggregatorOptions,
+  ErrorGroupingStrategy,
+  GroupingStrategyType,
+  CustomGroupingResolver,
+  ReportOptions,
+} from "./errorAggregator.js";
 
 export {
   serializeInvoiceTemplate,
@@ -507,6 +550,16 @@ export { TxQueue } from "./queue.js";
 
 export { replayEvents } from "./events.js";
 export { sdkEvents } from "./events.js";
+export {
+  compileInvoiceEventFilter,
+  filterInvoiceEvents,
+  InvoiceEventFilterEngine,
+} from "./eventFilter.js";
+export type {
+  EventNumberRange,
+  InvoiceEventFilter,
+  EventFilterStats,
+} from "./eventFilter.js";
 export type { FinalityServerLike } from "./finalityChecker.js";
 export { ApprovalWorkflowSequencer, ApprovalSession } from "./approvalWorkflowSequencer.js";
 export type { ApprovalWorkflowOptions, NotificationAdapter, SignatureApplier } from "./approvalWorkflowSequencer.js";
@@ -714,6 +767,8 @@ export type {
   DecodedLedgerEntry,
   DecodedOperation,
   ProtocolStats,
+  InvoiceEvent,
+  InvoiceEventType,
 } from "./types.js";
 export { InvalidTransitionError } from "./types.js";
 
