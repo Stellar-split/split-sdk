@@ -8,6 +8,7 @@ import {
   addBreadcrumb,
   getBreadcrumbs,
   clearBreadcrumbs,
+  getBreadcrumbStats,
 } from "../src/breadcrumbTracker.js";
 
 describe("Issue #1070 — Breadcrumb Tracking", () => {
@@ -212,6 +213,76 @@ describe("Issue #1070 — Breadcrumb Tracking", () => {
       setDefaultBreadcrumbTracker(customTracker);
 
       expect(getDefaultBreadcrumbTracker()).toBe(customTracker);
+    });
+  });
+
+  describe("Breadcrumb Stats (#1266)", () => {
+    it("returns zero counts and undefined timestamps for an empty tracker", () => {
+      const tracker = new BreadcrumbTracker();
+      const stats = tracker.getStats();
+
+      expect(stats.total).toBe(0);
+      expect(stats.byCategory).toEqual({});
+      expect(stats.byLevel.info).toBe(0);
+      expect(stats.byLevel.error).toBe(0);
+      expect(stats.oldestTimestamp).toBeUndefined();
+      expect(stats.newestTimestamp).toBeUndefined();
+      expect(stats.spanMs).toBe(0);
+    });
+
+    it("counts breadcrumbs correctly by category and level", () => {
+      const tracker = new BreadcrumbTracker({ maxBreadcrumbs: 20 });
+
+      tracker.addBreadcrumb({ category: "http",        message: "req 1",  level: "info",  timestamp: 1000 });
+      tracker.addBreadcrumb({ category: "rpc",         message: "rpc 1",  level: "debug", timestamp: 2000 });
+      tracker.addBreadcrumb({ category: "http",        message: "req 2",  level: "warn",  timestamp: 3000 });
+      tracker.addBreadcrumb({ category: "transaction", message: "tx 1",   level: "error", timestamp: 4000 });
+      tracker.addBreadcrumb({ category: "transaction", message: "tx 2",   level: "info",  timestamp: 5000 });
+
+      const stats = tracker.getStats();
+
+      expect(stats.total).toBe(5);
+      expect(stats.byCategory["http"]).toBe(2);
+      expect(stats.byCategory["rpc"]).toBe(1);
+      expect(stats.byCategory["transaction"]).toBe(2);
+      expect(stats.byLevel.info).toBe(2);
+      expect(stats.byLevel.debug).toBe(1);
+      expect(stats.byLevel.warn).toBe(1);
+      expect(stats.byLevel.error).toBe(1);
+    });
+
+    it("reports correct oldest/newest timestamps and span", () => {
+      const tracker = new BreadcrumbTracker({ maxBreadcrumbs: 10 });
+
+      tracker.addBreadcrumb({ message: "first",  timestamp: 1000 });
+      tracker.addBreadcrumb({ message: "middle", timestamp: 3000 });
+      tracker.addBreadcrumb({ message: "last",   timestamp: 7000 });
+
+      const stats = tracker.getStats();
+      expect(stats.oldestTimestamp).toBe(1000);
+      expect(stats.newestTimestamp).toBe(7000);
+      expect(stats.spanMs).toBe(6000);
+    });
+
+    it("spanMs is 0 when only one breadcrumb is stored", () => {
+      const tracker = new BreadcrumbTracker();
+      tracker.addBreadcrumb({ message: "solo", timestamp: 5000 });
+
+      const stats = tracker.getStats();
+      expect(stats.total).toBe(1);
+      expect(stats.spanMs).toBe(0);
+    });
+
+    it("module-level getBreadcrumbStats delegates to the default tracker", () => {
+      addBreadcrumb({ category: "http",  message: "g1", level: "info",  timestamp: 100 });
+      addBreadcrumb({ category: "error", message: "g2", level: "error", timestamp: 200 });
+
+      const stats = getBreadcrumbStats();
+      expect(stats.total).toBe(2);
+      expect(stats.byCategory["http"]).toBe(1);
+      expect(stats.byCategory["error"]).toBe(1);
+      expect(stats.byLevel.error).toBe(1);
+      expect(stats.spanMs).toBe(100);
     });
   });
 });
