@@ -1131,3 +1131,26 @@ export type { MemoryReport } from "./memoryOptimizer.js";
 // Streaming Datasets (#1139)
 export { StreamingDatasetIterator } from "./streamingDataset.js";
 export type { PageResult, StreamingDatasetOptions } from "./streamingDataset.js";
+
+// Breadcrumb Tracking (#1266)
+export {
+  BreadcrumbTracker,
+  RingBufferBreadcrumbStorage,
+  getDefaultBreadcrumbTracker,
+  setDefaultBreadcrumbTracker,
+  resetDefaultBreadcrumbTracker,
+  addBreadcrumb,
+  getBreadcrumbs,
+  clearBreadcrumbs,
+  getBreadcrumbStats,
+} from "./breadcrumbTracker.js";
+export type {
+  Breadcrumb,
+  BreadcrumbCategory,
+  BreadcrumbLevel,
+  BreadcrumbFilter,
+  BreadcrumbStats,
+  BreadcrumbStorage,
+  BreadcrumbTrackerOptions,
+} from "./breadcrumbTracker.js";
+
