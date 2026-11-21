@@ -537,6 +537,29 @@ export { LobstrAdapter } from "./wallets/adapters/LobstrAdapter.js";
 export type { LobstrAdapterOptions } from "./wallets/adapters/LobstrAdapter.js";
 export { WalletConnectionTimeoutError, isWalletConnectionTimeoutError } from "./errors.js";
 
+// Multi-wallet support (issue #1221)
+export { MultiWalletManager } from "./wallets/MultiWalletManager.js";
+export { WalletSessionManager } from "./wallets/WalletSessionManager.js";
+export { MetaMaskAdapter } from "./wallets/adapters/MetaMaskAdapter.js";
+export { WalletConnectAdapter } from "./wallets/adapters/WalletConnectAdapter.js";
+export { LedgerAdapter } from "./wallets/adapters/LedgerAdapter.js";
+export { FreighterAdapter } from "./wallets/adapters/FreighterAdapter.js";
+export type {
+  WalletAdapter,
+  WalletType,
+  WalletDetectionResult,
+} from "./wallets/types.js";
+export {
+  WalletAdapterError,
+  isWalletAdapterError,
+  WalletNotDetectedError,
+  isWalletNotDetectedError,
+  WalletSwitchError,
+  isWalletSwitchError,
+  UnsupportedWalletError,
+  isUnsupportedWalletError,
+} from "./errors.js";
+
 export { checkRPCHealth } from "./health.js";
 export { FallbackChain, FallbackExhaustedError } from "./fallbackChain.js";
 
