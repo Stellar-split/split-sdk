@@ -18,7 +18,6 @@ import {
 } from "@stellar/stellar-sdk";
 import { OraclePriceError, NoReturnValueError, ValidationError } from "./errors.js";
 import { RateCache } from "./rateCache.js";
-import type { PriceOracleAdapter } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Types & Interfaces
@@ -71,6 +70,20 @@ export interface ConversionResult {
   cached: boolean;
 }
 
+/** Statistics tracked by a {@link CurrencyConverter} instance. */
+export interface ConversionStats {
+  /** Total number of successful conversions performed. */
+  conversions: number;
+  /** Number of rate lookups served from cache. */
+  cacheHits: number;
+  /** Number of rate lookups that required a remote fetch. */
+  cacheMisses: number;
+  /** Number of rates fetched from the remote provider. */
+  ratesFetched: number;
+  /** Current number of entries in the rate cache. */
+  cacheSize: number;
+}
+
 export interface CurrencyConverterOptions {
   /** Default cache TTL for exchange rates in milliseconds. Default: 60,000ms. */
   defaultTtlMs?: number;
@@ -96,6 +109,8 @@ export class CurrencyConverter {
   private readonly cache = new Map<string, CachedRateEntry>();
   private cacheHits = 0;
   private cacheMisses = 0;
+  private ratesFetched = 0;
+  private conversions = 0;
 
   constructor(options: CurrencyConverterOptions = {}) {
     this.defaultTtlMs = options.defaultTtlMs ?? 60_000;
@@ -177,6 +192,7 @@ export class CurrencyConverter {
     try {
       const fetchedRate = await this.rateProvider(normFrom, normTo);
       this.validateRate(fetchedRate);
+      this.ratesFetched++;
       this.setRate(normFrom, normTo, fetchedRate);
       return { rate: fetchedRate, cached: false };
     } catch (err) {
@@ -184,6 +200,7 @@ export class CurrencyConverter {
       try {
         const inverseRate = await this.rateProvider(normTo, normFrom);
         this.validateRate(inverseRate);
+        this.ratesFetched++;
         const derivedRate = 1 / inverseRate;
         this.setRate(normFrom, normTo, derivedRate);
         return { rate: derivedRate, cached: false };
@@ -227,13 +244,14 @@ export class CurrencyConverter {
       cached = rateInfo.cached;
     }
 
-    let convertedAmount = numAmount * rate;
     if (precision !== undefined) {
       if (!Number.isInteger(precision) || precision < 0) {
         throw new ValidationError("precision must be a non-negative integer", { precision });
       }
-      convertedAmount = Number(convertedAmount.toFixed(precision));
     }
+
+    const convertedAmount = convertCurrency(numAmount, rate, precision);
+    this.conversions++;
 
     return {
       amount: numAmount,
@@ -271,6 +289,8 @@ export class CurrencyConverter {
     this.cache.clear();
     this.cacheHits = 0;
     this.cacheMisses = 0;
+    this.ratesFetched = 0;
+    this.conversions = 0;
   }
 
   /**
@@ -281,6 +301,19 @@ export class CurrencyConverter {
       size: this.cache.size,
       hits: this.cacheHits,
       misses: this.cacheMisses,
+    };
+  }
+
+  /**
+   * Get conversion and rate-fetch statistics.
+   */
+  getStats(): ConversionStats {
+    return {
+      conversions: this.conversions,
+      cacheHits: this.cacheHits,
+      cacheMisses: this.cacheMisses,
+      ratesFetched: this.ratesFetched,
+      cacheSize: this.cache.size,
     };
   }
 
@@ -324,6 +357,10 @@ export class CurrencyConverter {
 
 /**
  * Pure arithmetic currency converter.
+ *
+ * Uses decimal-string arithmetic internally so that the multiplication is
+ * performed without introducing binary floating-point rounding error. The
+ * result is rounded (half-up) to `precision` decimal places when provided.
  */
 export function convertCurrency(
   amount: number,
@@ -336,8 +373,98 @@ export function convertCurrency(
   if (typeof rate !== "number" || !Number.isFinite(rate) || rate <= 0) {
     throw new ValidationError("rate must be a positive finite number", { rate });
   }
-  const result = amount * rate;
-  return precision !== undefined ? Number(result.toFixed(precision)) : result;
+  if (precision !== undefined && (!Number.isInteger(precision) || precision < 0)) {
+    throw new ValidationError("precision must be a non-negative integer", { precision });
+  }
+
+  const product = multiplyDecimalStrings(toDecimalString(amount), toDecimalString(rate));
+  return precision !== undefined ? roundDecimalString(product, precision) : Number(product);
+}
+
+/** Convert a finite non-negative number to a plain decimal string (no exponent). */
+function toDecimalString(value: number): string {
+  const str = String(value);
+  if (!str.includes("e") && !str.includes("E")) {
+    return str;
+  }
+  // Expand exponential notation into a plain decimal string.
+  const [mantissa, expPart] = str.toLowerCase().split("e");
+  const exponent = parseInt(expPart, 10);
+  const negative = mantissa.startsWith("-");
+  const unsigned = negative ? mantissa.slice(1) : mantissa;
+  const [intPart, fracPart = ""] = unsigned.split(".");
+  const digits = intPart + fracPart;
+  let pointPos = intPart.length + exponent;
+  let result: string;
+  if (pointPos <= 0) {
+    result = "0." + "0".repeat(-pointPos) + digits;
+  } else if (pointPos >= digits.length) {
+    result = digits + "0".repeat(pointPos - digits.length);
+  } else {
+    result = digits.slice(0, pointPos) + "." + digits.slice(pointPos);
+  }
+  return negative ? "-" + result : result;
+}
+
+/** Multiply two non-negative decimal strings exactly, returning a decimal string. */
+function multiplyDecimalStrings(a: string, b: string): string {
+  const [aInt, aFrac = ""] = a.split(".");
+  const [bInt, bFrac = ""] = b.split(".");
+  const aDigits = (aInt + aFrac).replace(/^0+(?=\d)/, "");
+  const bDigits = (bInt + bFrac).replace(/^0+(?=\d)/, "");
+  const scale = aFrac.length + bFrac.length;
+
+  // Schoolbook multiplication on digit arrays (little-endian).
+  const result: number[] = new Array(aDigits.length + bDigits.length).fill(0);
+  for (let i = aDigits.length - 1; i >= 0; i--) {
+    const da = aDigits.charCodeAt(i) - 48;
+    for (let j = bDigits.length - 1; j >= 0; j--) {
+      const db = bDigits.charCodeAt(j) - 48;
+      const pos = i + j + 1;
+      const sum = result[pos] + da * db;
+      result[pos] = sum % 10;
+      result[pos - 1] += Math.floor(sum / 10);
+    }
+  }
+
+  let digits = result.join("").replace(/^0+(?=\d)/, "");
+  if (scale === 0) {
+    return digits;
+  }
+  if (digits.length <= scale) {
+    digits = "0".repeat(scale - digits.length + 1) + digits;
+  }
+  const pointPos = digits.length - scale;
+  return digits.slice(0, pointPos) + "." + digits.slice(pointPos);
+}
+
+/** Round a non-negative decimal string half-up to `precision` decimal places. */
+function roundDecimalString(value: string, precision: number): number {
+  const [intPart, fracPart = ""] = value.split(".");
+  if (fracPart.length <= precision) {
+    return Number(value);
+  }
+  const kept = fracPart.slice(0, precision);
+  const nextDigit = fracPart.charCodeAt(precision) - 48;
+  let rounded = intPart + (precision > 0 ? "." + kept : "");
+  if (nextDigit >= 5) {
+    // Increment the last kept digit, propagating carries.
+    const digits = (intPart + kept).split("").map((d) => d.charCodeAt(0) - 48);
+    let i = digits.length - 1;
+    while (i >= 0) {
+      if (digits[i] < 9) {
+        digits[i]++;
+        break;
+      }
+      digits[i] = 0;
+      i--;
+    }
+    if (i < 0) digits.unshift(1);
+    const all = digits.join("");
+    const pointPos = all.length - precision;
+    rounded = precision > 0 ? all.slice(0, pointPos) + "." + all.slice(pointPos) : all;
+  }
+  return Number(rounded);
 }
 
 // ---------------------------------------------------------------------------

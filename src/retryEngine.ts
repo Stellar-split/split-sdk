@@ -27,8 +27,41 @@ export interface RetryConfig {
   circuitBreakerThreshold: number;
   /** Milliseconds the circuit stays open before resetting. */
   circuitResetMs: number;
+  /**
+   * Unified retry policy. When provided, these values override the per-class
+   * strategies for max attempts, base delay, multiplier and jitter.
+   */
+  policy?: RetryPolicy;
+  /** @deprecated use policy.maxAttempts */
   maxRetries?: number;
+  /** @deprecated use policy.baseDelayMs */
   baseDelayMs?: number;
+}
+
+export interface RetryPolicy {
+  /** Maximum number of attempts (including the first). */
+  maxAttempts: number;
+  /** Base delay in milliseconds before the first retry. */
+  baseDelayMs: number;
+  /** Multiplier applied to the delay on each subsequent retry. */
+  backoffMultiplier: number;
+  /** Multiplicative jitter factor in [0, 1]. */
+  jitterFactor?: number;
+  /** Upper bound for any computed delay in milliseconds. */
+  maxDelayMs?: number;
+}
+
+export interface RetryStats {
+  /** Total number of attempts made across all executions. */
+  attempts: number;
+  /** Number of retries performed (attempts beyond the first). */
+  retries: number;
+  /** Number of executions that eventually succeeded. */
+  successes: number;
+  /** Number of executions that ultimately failed. */
+  failures: number;
+  /** Total time spent sleeping between retries, in milliseconds. */
+  totalBackoffMs: number;
 }
 
 type ErrorClass = "transient" | "rateLimit" | "contract";
@@ -58,17 +91,76 @@ export class RetryEngine {
   private _consecutiveTransientFailures = 0;
   private _circuitOpenedAt: number | null = null;
   private readonly _jitterFactor: number;
+  private readonly _policy: RetryPolicy;
+  private readonly _stats: RetryStats = {
+    attempts: 0,
+    retries: 0,
+    successes: 0,
+    failures: 0,
+    totalBackoffMs: 0,
+  };
 
   constructor(
     private readonly config: RetryConfig,
     private readonly telemetry: TelemetryCollector,
     options: RetryEngineOptions = {}
   ) {
-    const jf = options.jitterFactor ?? 0.2;
+    const jf = options.jitterFactor ?? config.policy?.jitterFactor ?? 0.2;
     if (jf < 0 || jf > 1) {
       throw new Error(`jitterFactor must be in [0, 1], got ${jf}`);
     }
     this._jitterFactor = jf;
+
+    const base = config.policy;
+    this._policy = {
+      maxAttempts: base?.maxAttempts ?? config.maxRetries ?? config.transient.maxAttempts,
+      baseDelayMs: base?.baseDelayMs ?? config.baseDelayMs ?? config.transient.initialDelayMs,
+      backoffMultiplier: base?.backoffMultiplier ?? config.transient.backoffMultiplier,
+      jitterFactor: jf,
+      maxDelayMs: base?.maxDelayMs,
+    };
+  }
+
+  /** Snapshot of accumulated retry statistics. */
+  get stats(): Readonly<RetryStats> {
+    return { ...this._stats };
+  }
+
+  /** Reset accumulated retry statistics. */
+  resetStats(): void {
+    this._stats.attempts = 0;
+    this._stats.retries = 0;
+    this._stats.successes = 0;
+    this._stats.failures = 0;
+    this._stats.totalBackoffMs = 0;
+  }
+
+  private _strategyFor(errorClass: ErrorClass): RetryStrategy {
+    const base = this.config[errorClass];
+    return {
+      maxAttempts: this._policy.maxAttempts,
+      initialDelayMs: this._policy.baseDelayMs,
+      backoffMultiplier: this._policy.backoffMultiplier,
+      jitterMs: base.jitterMs,
+    };
+  }
+
+  private _computeDelay(strategy: RetryStrategy, attempt: number): number {
+    const exponential =
+      strategy.initialDelayMs * strategy.backoffMultiplier ** (attempt - 1) +
+      (strategy.jitterMs ? Math.random() * strategy.jitterMs : 0);
+
+    const jittered =
+      this._jitterFactor === 0
+        ? exponential
+        : exponential * (1 - this._jitterFactor + Math.random() * 2 * this._jitterFactor);
+
+    const capped =
+      this._policy.maxDelayMs !== undefined
+        ? Math.min(jittered, this._policy.maxDelayMs)
+        : jittered;
+
+    return Math.max(0, capped);
   }
 
   get isCircuitOpen(): boolean {
@@ -96,6 +188,7 @@ export class RetryEngine {
 
     for (let attempt = 1; ; attempt++) {
       const start = Date.now();
+      this._stats.attempts += 1;
       try {
         const result = await fn();
         const duration = Date.now() - start;
@@ -103,6 +196,7 @@ export class RetryEngine {
         if (errorClass === "transient") {
           this._consecutiveTransientFailures = 0;
         }
+        this._stats.successes += 1;
         return result;
       } catch (error) {
         const duration = Date.now() - start;
@@ -110,7 +204,7 @@ export class RetryEngine {
 
         if (errorClass === null) {
           errorClass = classifyError(error);
-          strategy = this.config[errorClass];
+          strategy = this._strategyFor(errorClass);
         }
 
         this.telemetry.recordMethod(methodName, false, duration);
@@ -119,6 +213,7 @@ export class RetryEngine {
           this._consecutiveTransientFailures += 1;
           if (this._consecutiveTransientFailures >= this.config.circuitBreakerThreshold) {
             this._circuitOpenedAt = Date.now();
+            this._stats.failures += 1;
             throw new CircuitOpenError({ methodName });
           }
         }
@@ -128,19 +223,15 @@ export class RetryEngine {
           break;
         }
 
-        const baseDelay =
-          strategy.initialDelayMs * strategy.backoffMultiplier ** (attempt - 1) +
-          (strategy.jitterMs ? Math.random() * strategy.jitterMs : 0);
-
-        const delay =
-          this._jitterFactor === 0
-            ? baseDelay
-            : baseDelay * (1 - this._jitterFactor + Math.random() * 2 * this._jitterFactor);
+        const delay = this._computeDelay(strategy, attempt);
+        this._stats.retries += 1;
+        this._stats.totalBackoffMs += delay;
 
         await sleep(delay);
       }
     }
 
+    this._stats.failures += 1;
     throw lastError;
   }
 }
