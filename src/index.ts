@@ -771,6 +771,8 @@ export type {
   InvoiceEventType,
 } from "./types.js";
 export { InvalidTransitionError } from "./types.js";
+export { INVOICE_STATUSES, isInvoiceStatus, isTerminalInvoiceStatus, isInvoiceInStatus } from "./types.js";
+export type { TerminalInvoiceStatus } from "./types.js";
 
 // Invoice status transition validation (state machine)
 export { InvoiceStateMachine } from "./state/InvoiceStateMachine.js";
