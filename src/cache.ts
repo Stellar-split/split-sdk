@@ -8,6 +8,8 @@
 export interface CacheStats {
   hits: number;
   misses: number;
+  /** hits / (hits + misses); 0 when there have been no lookups. */
+  hitRate: number;
   size: number;
   keys: string[];
   evictions: number;
@@ -309,10 +311,14 @@ export class SimpleCache<T> {
     return entry.value;
   }
 
-  set(key: string, value: T): void {
+  /**
+   * Store a value. `ttlMs` overrides the configured per-method/default TTL
+   * for this entry only.
+   */
+  set(key: string, value: T, ttlMs?: number): void {
     if (!this.enabled) return;
     const method = key.split(":")[0] || key;
-    const ttl = this.ttlConfig[method] ?? this.ttlConfig["default"] ?? 0;
+    const ttl = ttlMs ?? this.ttlConfig[method] ?? this.ttlConfig["default"] ?? 0;
     if (ttl <= 0) return;
 
     if (this.maxEntries > 0 && this.store.size >= this.maxEntries && !this.store.has(key)) {
@@ -362,6 +368,23 @@ export class SimpleCache<T> {
     this.debug.log(`[cache] invalidate ${methodOrKey}`);
   }
 
+  /**
+   * Invalidate every entry whose key matches the predicate or RegExp.
+   * Returns the number of entries removed.
+   */
+  invalidateWhere(match: RegExp | ((key: string) => boolean)): number {
+    const test = typeof match === "function" ? match : (k: string) => match.test(k);
+    let removed = 0;
+    for (const key of Array.from(this.store.keys())) {
+      if (test(key)) {
+        this.store.delete(key);
+        this.emit("invalidate", key);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
   delete(key: string): void {
     this.invalidate(key);
   }
@@ -382,6 +405,8 @@ export class SimpleCache<T> {
     return {
       hits: this.hits,
       misses: this.misses,
+      hitRate:
+        this.hits + this.misses === 0 ? 0 : this.hits / (this.hits + this.misses),
       size: this.store.size,
       keys: Array.from(this.store.keys()),
       evictions: this.evictions,
