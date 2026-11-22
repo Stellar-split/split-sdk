@@ -726,6 +726,23 @@ export function verifyCompletionProof(proof: CompletionProof): {
   }
   return { valid: true };
 }
+/**
+ * Main entry point of the StellarSplit SDK.
+ *
+ * Wraps a Soroban RPC connection and the StellarSplit contract, exposing invoice,
+ * payment, dispute, group, template and milestone operations both directly and via
+ * namespaced modules (`client.invoices`, `client.payments`, ...). Emits typed events.
+ *
+ * @example
+ * ```typescript
+ * const client = new StellarSplitClient({
+ *   rpcUrl: "https://soroban-testnet.stellar.org",
+ *   networkPassphrase: "Test SDF Network ; September 2015",
+ *   contractId: "C...",
+ * });
+ * const { invoiceId } = await client.invoices.create(params);
+ * ```
+ */
 export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
   private _mainServer!: SorobanRpc.Server;
   private _standby: WarmStandby | null = null;
@@ -926,6 +943,11 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
     }
   }
 
+  /**
+   * Creates a client. No network calls are made until the first operation.
+   *
+   * @param config - RPC URL(s), network passphrase, contract ID and optional plugins, logging and retry settings.
+   */
   constructor(config: StellarSplitClientConfig) {
     super();
 
@@ -1286,11 +1308,33 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
     if (this._offlineQueue) this._offlineQueue.clear();
   }
 
+  /**
+   * Replays queued offline operations against the network.
+   *
+   * @param conflictStrategy - Optional strategy for resolving conflicts between queued and on-chain state.
+   * @returns The sync report, or `null` if the offline queue is not enabled.
+   *
+   * @example
+   * ```typescript
+   * const report = await client.syncOfflineQueue();
+   * ```
+   */
   async syncOfflineQueue(conflictStrategy?: import("./types.js").ConflictStrategy) {
     if (!this._offlineQueue) return null;
     return this._offlineQueue.sync(conflictStrategy);
   }
 
+  /**
+   * Switches this client to another Stellar network, updating RPC endpoint and passphrase.
+   *
+   * @param network - Target network: `"mainnet"`, `"testnet"` or `"futurenet"`.
+   * @returns Promise that resolves once the client points at the new network.
+   *
+   * @example
+   * ```typescript
+   * await client.switchTo("testnet");
+   * ```
+   */
   async switchTo(network: "mainnet" | "testnet" | "futurenet"): Promise<void> {
     const { NetworkSwitcher } = await import("./network/NetworkSwitcher.js");
     return NetworkSwitcher.switchTo(network, this);
@@ -4779,12 +4823,17 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
   /**
    * Aggregates multiple related invoices into an invoice group for coordinated settlement.
    *
-   * @param params - Group creation configuration.
-   * @returns Promise resolving to created group identifier.
+   * Two call forms are supported: `createGroup(creator, invoiceIds)` groups existing
+   * invoices; `createGroup(creator, name, description)` creates a named group.
+   *
+   * @param creator - Address of the group creator.
+   * @param second - Invoice IDs to group, or the group name.
+   * @param third - Group description (name form only).
+   * @returns Promise resolving to the created group ID and transaction hash.
    *
    * @example
    * ```typescript
-   * const groupId = await client.createGroup({ name: 'Project Milestone 1', invoiceIds: ['1', '2'] });
+   * const { groupId } = await client.createGroup(creator, ['1', '2']);
    * ```
    */
   async createGroup(

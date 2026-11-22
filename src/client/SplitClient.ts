@@ -57,6 +57,17 @@ export interface SplitClientConfig {
 // SplitClient
 // ---------------------------------------------------------------------------
 
+/**
+ * Lazy-initializing Soroban RPC client with built-in input sanitization,
+ * rate limiting, CSRF protection and secure key storage.
+ *
+ * @example
+ * ```typescript
+ * const client = new SplitClient({ rpcUrl, networkPassphrase, contractId });
+ * await client.preconnect();
+ * const ledger = await client.getLedger();
+ * ```
+ */
 export class SplitClient {
   private readonly config: SplitClientConfig;
   private readonly _lazy: LazyInitializer<SorobanRpc.Server>;
@@ -66,6 +77,10 @@ export class SplitClient {
   private readonly _csrf: CsrfProtector;
   private readonly _keyStore: SecureKeyStore;
 
+  /**
+   * @param config - RPC endpoint, network, contract ID and optional security settings.
+   *   No RPC call is made at construction time.
+   */
   constructor(config: SplitClientConfig) {
     this.config = config;
 
