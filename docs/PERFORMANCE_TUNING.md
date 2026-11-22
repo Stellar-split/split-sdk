@@ -16,6 +16,8 @@ This guide details optimization strategies, configuration techniques, operationa
 8. [Technique 7: Real-Time Event Streaming vs. Polling](#technique-7-real-time-event-streaming-vs-polling)
 9. [Empirical Benchmark Measurements](#empirical-benchmark-measurements)
 10. [Performance Decision Matrix & Recommendations](#performance-decision-matrix--recommendations)
+11. [Profiling Guide](#profiling-guide)
+12. [Optimization Checklist](#optimization-checklist)
 
 ---
 
@@ -274,3 +276,38 @@ const unsubscribe = client.subscribeInvoice("inv-123", (event) => {
 | **User Dashboard / Explorer** | `cache: { ttlMs: 30000 }`, `batching: true`, `subscribeInvoice` | Instant UI response, minimal RPC bills |
 | **Batch Settlement Bot** | `bumpStorageTtlBatch`, `verifyBatchPay`, `batchPay` | 60%+ gas savings, verified atomic payments |
 | **Resource-Constrained Edge / CLI** | `SplitClient` (lazy init), single connection | Instant boot time (< 5ms), zero idle memory |
+
+---
+
+## Profiling Guide
+
+Measure before tuning. Change one setting at a time and compare against a baseline.
+
+1. **Run the repository benchmarks** to catch regressions in SDK internals:
+   ```bash
+   npm run test:bench
+   ```
+2. **Compare against the load-test baselines** in `load-tests/baseline.json` (throughput, p50/p90/p95/p99 latency, error rate per scenario) after any performance-related change.
+3. **Profile a Node.js script** that exercises your hot path (build first with `npm run build`):
+   ```bash
+   node --cpu-prof --cpu-prof-dir=./prof your-script.js   # open the .cpuprofile in Chrome DevTools
+   node --inspect-brk your-script.js                      # heap snapshots / live debugging
+   ```
+4. **Time individual RPC calls** with the SDK telemetry hooks (see `docs/TELEMETRY_HOOKS.md`) instead of ad-hoc timers, so latency is attributed per method.
+5. **Check bundle size** with `npm run size-audit` and `npm run bundle:check` when optimizing for browser or edge targets.
+
+Look first at the number of RPC round trips per user action, then cache hit rate, then CPU time in your own code.
+
+---
+
+## Optimization Checklist
+
+- [ ] Baseline captured (latency percentiles, throughput, RPC calls per operation)
+- [ ] Connection pooling enabled for high-concurrency workloads (`rpcPoolSize`)
+- [ ] Read-heavy paths use caching with a TTL suited to how fast the data changes
+- [ ] Independent reads are batched or issued concurrently rather than sequentially
+- [ ] Circuit breaker configured so a failing node does not stall all requests
+- [ ] Multiple RPC endpoints configured for failover where uptime matters
+- [ ] Storage TTL bumps batched instead of issued per invoice
+- [ ] Event subscriptions used instead of tight polling loops
+- [ ] Changes re-measured against the baseline and `npm run test:bench` shows no regression
