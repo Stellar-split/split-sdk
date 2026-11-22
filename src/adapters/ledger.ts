@@ -107,6 +107,8 @@ export interface LedgerPoolStats {
 
 /** Ledger hardware wallet adapter implementing WalletAdapter. */
 export class LedgerAdapter implements WalletAdapter {
+  /** Stable adapter identifier used for wallet detection and switching. */
+  readonly name = "ledger";
   private readonly path: string;
   private readonly skipFirmwareCheck: boolean;
   private readonly getFirmwareVersion: (transport: Transport) => Promise<string>;
@@ -125,6 +127,19 @@ export class LedgerAdapter implements WalletAdapter {
       options.getFirmwareVersion ?? ((transport) => this.queryFirmwareVersion(transport));
     this.maxPoolSize = Math.max(1, options.maxPoolSize ?? 1);
     this.maxIdleMs = Math.max(0, options.maxIdleMs ?? 30_000);
+  }
+
+  /**
+   * Whether the WebHID transport is usable in the current environment.
+   * Ledger devices are only reachable when WebHID is exposed by the browser.
+   */
+  isAvailable(): boolean {
+    try {
+      const nav = (globalThis as { navigator?: { hid?: unknown } }).navigator;
+      return typeof nav?.hid !== "undefined";
+    } catch {
+      return false;
+    }
   }
 
   async getAddress(): Promise<string> {
@@ -147,6 +162,18 @@ export class LedgerAdapter implements WalletAdapter {
       const sigBytes = signature as unknown as Uint8Array;
       return btoa(String.fromCharCode(...sigBytes));
     });
+  }
+
+  /**
+   * Close every idle transport in the pool. Transports currently checked out
+   * are recycled by their owning call when it finishes.
+   */
+  async disconnect(): Promise<void> {
+    while (this.pool.length > 0) {
+      const pooled = this.pool.pop() as PooledTransport;
+      await this.closeQuietly(pooled.transport);
+      this.recycled += 1;
+    }
   }
 
   /**

@@ -41,29 +41,38 @@ export class WalletSessionManager extends EventEmitter {
    * Returns adapters for wallets that are available.
    */
   detect(): WalletAdapter[] {
-    const adapters: WalletAdapter[] = [];
+    const candidates: WalletAdapter[] = [
+      new FreighterAdapter(),
+      new LobstrAdapter(),
+      new XBullAdapter(),
+      new MetaMaskAdapter(),
+    ];
 
-    // Check for Freighter
-    if (typeof window !== "undefined" && (window as any).freighter) {
-      adapters.push(new FreighterAdapter());
+    return candidates.filter((adapter) => this.isAdapterAvailable(adapter));
+  }
+
+  /**
+   * Check whether an adapter reports itself as available.
+   * Prefers the unified `isAvailable()` contract, falling back to `true`
+   * for adapters that do not implement it.
+   */
+  private isAdapterAvailable(adapter: WalletAdapter): boolean {
+    const maybeAdapter = adapter as WalletAdapter & {
+      isAvailable?: () => boolean | Promise<boolean>;
+    };
+
+    if (typeof maybeAdapter.isAvailable !== "function") {
+      return true;
     }
 
-    // Check for LOBSTR
-    if (typeof window !== "undefined" && (window as any).lobstr) {
-      adapters.push(new LobstrAdapter());
+    try {
+      const result = maybeAdapter.isAvailable();
+      // Treat a Promise as "not synchronously available"; detection is sync.
+      return typeof result === "boolean" ? result : false;
+    } catch (err) {
+      console.warn(`Failed to check availability for ${adapter.name}:`, err);
+      return false;
     }
-
-    // Check for xBull
-    if (typeof window !== "undefined" && (window as any).xbull) {
-      adapters.push(new XBullAdapter());
-    }
-
-    // Check for MetaMask
-    if (typeof window !== "undefined" && (window as any).ethereum) {
-      adapters.push(new MetaMaskAdapter());
-    }
-
-    return adapters;
   }
 
   /**
@@ -89,6 +98,48 @@ export class WalletSessionManager extends EventEmitter {
 
     this.emit("connected", {
       walletName: adapter.name,
+      address,
+    });
+
+    return address;
+  }
+
+  /**
+   * Switch to a different wallet by name.
+   * Disconnects the current adapter, connects the new one, persists the
+   * session, and emits `walletSwitched`.
+   */
+  async switchWallet(name: string): Promise<string> {
+    if (this.activeWalletName === name && this.isConnected()) {
+      return this.connectedAccount as string;
+    }
+
+    const adapters = this.detect();
+    const nextAdapter = adapters.find((a) => a.name === name);
+
+    if (!nextAdapter) {
+      throw new Error(
+        `Wallet "${name}" is not available. Detected: ${
+          adapters.map((a) => a.name).join(", ") || "none"
+        }`
+      );
+    }
+
+    const previousWallet = this.activeWalletName;
+
+    if (this.activeAdapter) {
+      this.activeAdapter.disconnect();
+    }
+
+    this.activeAdapter = null;
+    this.activeWalletName = null;
+    this.connectedAccount = null;
+
+    const address = await this.connect(nextAdapter);
+
+    this.emit("walletSwitched", {
+      from: previousWallet,
+      to: nextAdapter.name,
       address,
     });
 
@@ -197,13 +248,13 @@ export class WalletSessionManager extends EventEmitter {
         return;
       }
 
-      // Try to reconnect to the wallet
+      // Try to reconnect to the wallet, validating it is still available
       const adapters = this.detect();
       const matchingAdapter = adapters.find(
         (a) => a.name === state.walletName
       );
 
-      if (matchingAdapter) {
+      if (matchingAdapter && this.isAdapterAvailable(matchingAdapter)) {
         // Silently restore the adapter
         this.activeAdapter = matchingAdapter;
         this.activeWalletName = state.walletName;

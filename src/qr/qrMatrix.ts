@@ -135,27 +135,89 @@ function moduleAt(modules: boolean[][], i: number, j: number): boolean {
 }
 
 /**
- * Render QR matrix as an SVG string with the specified scale (pixels/module).
+ * Customization options for SVG rendering.
+ */
+export interface SvgRenderOptions {
+  /** Pixels per module (default 12). Ignored when `size` is provided. */
+  scale?: number;
+  /** Explicit output size in pixels (square). Takes precedence over `scale`. */
+  size?: number;
+  /** Quiet-zone margin in modules (default 4, per QR spec). */
+  margin?: number;
+  /** Foreground (module) color (default "#000000"). */
+  foreground?: string;
+  /** Background color (default "#ffffff"). */
+  background?: string;
+  /** Optional label rendered below the QR code. */
+  label?: string;
+  /** Label font size in pixels (default derived from scale). */
+  labelFontSize?: number;
+}
+
+/**
+ * Render QR matrix as an SVG string.
+ *
+ * Supports configurable colors, quiet-zone margin, explicit pixel sizing
+ * (with a viewBox so the output scales responsively on mobile), and an
+ * optional label that renders in both DOM and Node environments.
  */
 export function renderSvg(
   modules: boolean[][],
   width: number,
   scale: number,
   label?: string
+): string;
+export function renderSvg(
+  modules: boolean[][],
+  width: number,
+  options?: SvgRenderOptions
+): string;
+export function renderSvg(
+  modules: boolean[][],
+  width: number,
+  scaleOrOptions: number | SvgRenderOptions = 12,
+  label?: string
 ): string {
+  const options: SvgRenderOptions =
+    typeof scaleOrOptions === "number"
+      ? { scale: scaleOrOptions, label }
+      : scaleOrOptions ?? {};
+
   const size = modules.length;
-  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${size * scale}" height="${size * scale}" viewBox="0 0 ${size} ${size}">`;
+  const margin = Math.max(0, Math.floor(options.margin ?? 4));
+  const foreground = options.foreground ?? "#000000";
+  const background = options.background ?? "#ffffff";
+
+  const totalModules = size + margin * 2;
+  const scale = options.scale ?? 12;
+  const pixelSize =
+    options.size !== undefined && options.size > 0
+      ? Math.round(options.size)
+      : totalModules * scale;
+
+  const labelText = options.label;
+  const labelFontSize =
+    options.labelFontSize ?? Math.max(8, Math.round(scale * 1.5));
+  const labelHeight = labelText ? Math.round(labelFontSize * 1.6) : 0;
+
+  const viewBoxHeight = totalModules + (labelText ? labelHeight / scale : 0);
+  const height = pixelSize + (labelText ? labelHeight : 0);
+
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${pixelSize}" height="${height}" viewBox="0 0 ${totalModules} ${viewBoxHeight}" shape-rendering="crispEdges">`;
+  svg += `<rect x="0" y="0" width="${totalModules}" height="${viewBoxHeight}" fill="${escapeXml(background)}" />`;
   for (let i = 0; i < size; i++) {
     for (let j = 0; j < size; j++) {
       if (modules[i]![j]!) {
-        const x = j * scale, y = i * scale;
-        svg += `<rect x="${x}" y="${y}" width="${scale}" height="${scale}" fill="#000000" />`;
+        const x = j + margin;
+        const y = i + margin;
+        svg += `<rect x="${x}" y="${y}" width="1" height="1" fill="${escapeXml(foreground)}" />`;
       }
     }
   }
-  // Label (optional, small text under modules)
-  if (label && typeof document !== "undefined") {
-    svg += `<text x="${size / 2}px" y="${size * scale + 14}px" text-anchor="middle" font-size="${scale * 1.5}px" fill="#000000">${escapeXml(label)}</text>`;
+  if (labelText) {
+    const cx = totalModules / 2;
+    const cy = totalModules + (labelHeight / scale) / 2;
+    svg += `<text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="middle" font-size="${labelFontSize / scale}" fill="${escapeXml(foreground)}">${escapeXml(labelText)}</text>`;
   }
   svg += "</svg>";
   return svg;
@@ -179,7 +241,7 @@ function escapeXml(s: string): string {
 export function encode(
   payload: string,
   errorCorrection: QRErrorCorrection = "M",
-  options: { label?: string; scale?: number } = {}
+  options: SvgRenderOptions = {}
 ): { modules: boolean[][]; width: number; ecCodewords: number; version: number; svg: string } {
   if (!isErrorCorrectionLevel(errorCorrection)) {
     throw new Error(`Unknown error correction level: ${errorCorrection}`);
@@ -192,7 +254,7 @@ export function encode(
   // Apply mask pattern to modules
   applyMask(modules, mask);
   const width = modules.length;
-  const svg = renderSvg(modules, width, options.scale ?? 12, options.label);
+  const svg = renderSvg(modules, width, options);
   return { modules, width, ecCodewords: 0, version, svg };
 }
 

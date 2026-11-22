@@ -6,6 +6,50 @@ import { buildInvoicePdf } from "./exportPdf.js";
 /** Export format for invoices. */
 export type ExportFormat = "json" | "csv" | "text" | "pdf";
 
+/** Styling options for PDF export. */
+export interface PdfStylingOptions {
+  /** Base font size in points. */
+  fontSize?: number;
+  /** Primary text color (hex, e.g. "#111111"). */
+  textColor?: string;
+  /** Accent/heading color (hex). */
+  accentColor?: string;
+  /** Page margins in points. */
+  margin?: number;
+  /** Document title. */
+  title?: string;
+}
+
+/** Template descriptor for PDF export. */
+export interface PdfTemplate {
+  name: string;
+  title?: string;
+  styling?: PdfStylingOptions;
+  /** Optional row builder override. */
+  buildRows?: (invoice: Invoice) => InvoiceTableRow[];
+}
+
+/** Column definition for CSV export. */
+export interface CsvColumn {
+  /** Header label. */
+  header: string;
+  /** Value extractor for a given invoice. */
+  value: (invoice: Invoice) => string;
+}
+
+/** Template descriptor for CSV export. */
+export interface CsvTemplate {
+  name: string;
+  columns?: CsvColumn[];
+}
+
+/** Options accepted by exportInvoiceWithOptions. */
+export interface ExportOptions {
+  format: ExportFormat;
+  template?: PdfTemplate | CsvTemplate | string;
+  styling?: PdfStylingOptions;
+}
+
 /** Reusable invoice table rows. */
 export interface InvoiceTableRow {
   text: string;
@@ -42,10 +86,132 @@ export function renderInvoiceTable(invoice: Invoice): InvoiceTableRow[] {
 
 /**
  * Export an invoice as PDF (A4, branded, reusable template).
+ * Accepts optional template and styling overrides.
  */
-export function exportAsPdf(invoice: Invoice): string {
-  const rows = renderInvoiceTable(invoice);
-  return buildInvoicePdf("StellarSplit Invoice", rows, { title: "StellarSplit Invoice" });
+export function exportAsPdf(
+  invoice: Invoice,
+  template?: PdfTemplate | string,
+  styling?: PdfStylingOptions
+): string {
+  const resolvedTemplate = resolvePdfTemplate(template);
+  const rows = resolvedTemplate?.buildRows
+    ? resolvedTemplate.buildRows(invoice)
+    : renderInvoiceTable(invoice);
+  const mergedStyling: PdfStylingOptions = {
+    ...(resolvedTemplate?.styling ?? {}),
+    ...(styling ?? {}),
+  };
+  const title =
+    mergedStyling.title ??
+    resolvedTemplate?.title ??
+    "StellarSplit Invoice";
+  return buildInvoicePdf(title, rows, {
+    title,
+    fontSize: mergedStyling.fontSize,
+    textColor: mergedStyling.textColor,
+    accentColor: mergedStyling.accentColor,
+    margin: mergedStyling.margin,
+  });
+}
+
+/** Resolve a PDF template reference (object or registered name). */
+function resolvePdfTemplate(
+  template?: PdfTemplate | string
+): PdfTemplate | undefined {
+  if (!template) return undefined;
+  if (typeof template === "string") return pdfTemplates.get(template);
+  return template;
+}
+
+/** Registry of named PDF templates. */
+const pdfTemplates = new Map<string, PdfTemplate>();
+
+/** Register a named PDF template. */
+export function registerPdfTemplate(template: PdfTemplate): void {
+  pdfTemplates.set(template.name, template);
+}
+
+/** List registered PDF template names. */
+export function listPdfTemplates(): string[] {
+  return Array.from(pdfTemplates.keys());
+}
+
+/** Resolve a CSV template reference (object or registered name). */
+function resolveCsvTemplate(
+  template?: CsvTemplate | string
+): CsvTemplate | undefined {
+  if (!template) return undefined;
+  if (typeof template === "string") return csvTemplates.get(template);
+  return template;
+}
+
+/** Registry of named CSV templates. */
+const csvTemplates = new Map<string, CsvTemplate>();
+
+/** Register a named CSV template. */
+export function registerCsvTemplate(template: CsvTemplate): void {
+  csvTemplates.set(template.name, template);
+}
+
+/** List registered CSV template names. */
+export function listCsvTemplates(): string[] {
+  return Array.from(csvTemplates.keys());
+}
+
+/** Default CSV columns covering all invoice fields. */
+export const DEFAULT_CSV_COLUMNS: CsvColumn[] = [
+  { header: "ID", value: (i) => i.id },
+  { header: "Creator", value: (i) => i.creator ?? "" },
+  {
+    header: "Recipients",
+    value: (i) => (i.recipients ?? []).map((r) => `${r.address}:${r.amount}`).join("|"),
+  },
+  { header: "Token", value: (i) => i.token ?? "" },
+  { header: "Deadline", value: (i) => String(i.deadline ?? "") },
+  { header: "Funded", value: (i) => i.funded?.toString() ?? "0" },
+  { header: "Status", value: (i) => i.status ?? "" },
+  {
+    header: "Payments",
+    value: (i) => (i.payments ?? []).map((p) => `${p.payer}:${p.amount}`).join("|"),
+  },
+  { header: "Memo", value: (i) => i.memo ?? "" },
+  { header: "ScheduledReleaseDate", value: (i) => String(i.scheduledReleaseDate ?? "") },
+  { header: "ClonedFrom", value: (i) => i.clonedFrom ?? "" },
+  { header: "GroupId", value: (i) => i.groupId ?? "" },
+];
+
+/** Escape a single CSV field per RFC 4180. */
+export function escapeCsvField(value: string): string {
+  if (/[",\r\n]/.test(value)) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+/**
+ * Export an invoice with a unified options object.
+ * Dispatches to PDF/CSV (and other formats) while preserving all fields.
+ */
+export function exportInvoiceWithOptions(
+  invoice: Invoice,
+  options: ExportOptions
+): string {
+  switch (options.format) {
+    case "pdf":
+      return exportAsPdf(
+        invoice,
+        options.template as PdfTemplate | string | undefined,
+        options.styling
+      );
+    case "csv":
+      return exportAsCsv(invoice, options.template as CsvTemplate | string | undefined);
+    case "json":
+      return exportAsJson(invoice);
+    case "text":
+      return exportAsText(invoice);
+    default:
+      throw new UnknownExportFormatError(options.format as string);
+  }
 }
 
 /**
@@ -91,31 +257,19 @@ export function exportAsJson(invoice: Invoice): string {
   return JSON.stringify(data, null, 2);
 }
 
-/** Export invoice as CSV. */
-export function exportAsCsv(invoice: Invoice): string {
-  const headers = [
-    "ID", "Creator", "Recipients", "Token", "Deadline",
-    "Funded", "Status", "Payments",
-  ];
-  const recipients = (invoice.recipients ?? [])
-    .map((r) => `${r.address}:${r.amount}`)
-    .join("|");
-  const payments = (invoice.payments ?? [])
-    .map((p) => `${p.payer}:${p.amount}`)
-    .join("|");
-
-  const row = [
-    invoice.id,
-    invoice.creator ?? "",
-    recipients,
-    invoice.token ?? "",
-    String(invoice.deadline ?? ""),
-    invoice.funded?.toString() ?? "0",
-    invoice.status ?? "",
-    payments,
-  ];
-
-  return [headers.join(","), row.join(",")].join("\n");
+/**
+ * Export invoice as CSV with proper escaping and optional template.
+ * Preserves all invoice fields by default (no data loss).
+ */
+export function exportAsCsv(
+  invoice: Invoice,
+  template?: CsvTemplate | string
+): string {
+  const resolved = resolveCsvTemplate(template);
+  const columns = resolved?.columns ?? DEFAULT_CSV_COLUMNS;
+  const headers = columns.map((c) => escapeCsvField(c.header)).join(",");
+  const row = columns.map((c) => escapeCsvField(c.value(invoice))).join(",");
+  return [headers, row].join("\n");
 }
 
 /** Export invoice as human-readable text. */
@@ -164,3 +318,14 @@ export function registerExportBuilder(format: string, builder: ExportBuilder): v
 export function listExportBuilders(): string[] {
   return Array.from(builders.keys());
 }
+
+// Register built-in templates.
+registerPdfTemplate({
+  name: "default",
+  title: "StellarSplit Invoice",
+  styling: { fontSize: 12, margin: 40 },
+});
+registerCsvTemplate({
+  name: "default",
+  columns: DEFAULT_CSV_COLUMNS,
+});

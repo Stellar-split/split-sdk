@@ -113,6 +113,41 @@ export type DebugModeEvent =
 
 export type DebugModeEventListener = (event: DebugModeEvent) => void;
 
+/** Actions recorded against a stored key for compliance tracking. */
+export type KeyUsageAction =
+  | "key_access"
+  | "key_rotation"
+  | "key_access_denied";
+
+/**
+ * A single key-usage audit record.
+ *
+ * Captures who accessed (or attempted to access) a stored key, which key was
+ * targeted, and the outcome. Key material itself is never recorded.
+ */
+export interface KeyUsageAuditEntry {
+  /** Identifier of the key that was acted upon. */
+  keyId: string;
+  /** The action performed against the key. */
+  action: KeyUsageAction;
+  /** Principal (user, service, tenant) that performed the action. */
+  actor: string;
+  /** Whether the action was permitted. */
+  authorized: boolean;
+  /** When the action occurred (epoch ms). */
+  timestamp: number;
+  /** Optional free-form context (e.g. reason for denial, rotation version). */
+  metadata?: Record<string, unknown>;
+}
+
+/** Lifecycle events emitted for key-usage auditing. */
+export type KeyUsageAuditEvent =
+  | { type: "key_accessed"; entry: KeyUsageAuditEntry }
+  | { type: "key_rotated"; entry: KeyUsageAuditEntry }
+  | { type: "key_access_denied"; entry: KeyUsageAuditEntry };
+
+export type KeyUsageAuditEventListener = (event: KeyUsageAuditEvent) => void;
+
 const STELLAR_ADDRESS_RE = /^G[A-Z0-9]{55}$/;
 
 /** Detect if a string value looks like base64-encoded XDR. */
@@ -131,6 +166,8 @@ export class AuditLogger {
   >();
   private readonly crossTenantAudits: CrossTenantInvoiceAuditEntry[] = [];
   private readonly crossTenantListeners = new Set<CrossTenantAuditEventListener>();
+  private readonly keyUsageAudits: KeyUsageAuditEntry[] = [];
+  private readonly keyUsageListeners = new Set<KeyUsageAuditEventListener>();
   private readonly debugListeners = new Set<DebugModeEventListener>();
   private debugEnabled = false;
   private sequence = 0;
@@ -505,6 +542,93 @@ export class AuditLogger {
   private emitCrossTenantAudit(event: CrossTenantAuditEvent): void {
     for (const listener of this.crossTenantListeners) {
       listener(event);
+    }
+  }
+
+  /**
+   * Subscribe to key-usage audit lifecycle events.
+   *
+   * @returns an unsubscribe function.
+   */
+  onKeyUsageAudit(listener: KeyUsageAuditEventListener): () => void {
+    this.keyUsageListeners.add(listener);
+    return () => {
+      this.keyUsageListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Record a key-usage audit entry.
+   *
+   * Persists the entry to the in-memory key-usage trail, writes a sanitized
+   * `AuditEntry` to the configured sink, and emits the matching lifecycle
+   * event. Key material is never included in the recorded metadata.
+   */
+  recordKeyUsageAudit(entry: KeyUsageAuditEntry): void {
+    this.keyUsageAudits.push(entry);
+
+    this.log({
+      timestamp: entry.timestamp,
+      method: entry.action,
+      params: this.sanitize({
+        keyId: entry.keyId,
+        actor: entry.actor,
+        authorized: entry.authorized,
+        ...(entry.metadata ?? {}),
+      }),
+      success: entry.authorized,
+      durationMs: 0,
+    });
+
+    const eventType =
+      entry.action === "key_rotation"
+        ? "key_rotated"
+        : entry.action === "key_access_denied"
+          ? "key_access_denied"
+          : "key_accessed";
+
+    this.emitKeyUsageAudit({ type: eventType, entry });
+  }
+
+  /**
+   * Query recorded key-usage audit entries.
+   *
+   * All filters are optional and combined with AND semantics. Results are
+   * returned in the order they were recorded.
+   */
+  queryKeyUsageAudits(filter?: {
+    keyId?: string;
+    action?: KeyUsageAction;
+    actor?: string;
+    authorized?: boolean;
+  }): KeyUsageAuditEntry[] {
+    return this.keyUsageAudits.filter((entry) => {
+      if (filter?.keyId && entry.keyId !== filter.keyId) {
+        return false;
+      }
+      if (filter?.action && entry.action !== filter.action) {
+        return false;
+      }
+      if (filter?.actor && entry.actor !== filter.actor) {
+        return false;
+      }
+      if (
+        filter?.authorized !== undefined &&
+        entry.authorized !== filter.authorized
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  private emitKeyUsageAudit(event: KeyUsageAuditEvent): void {
+    for (const listener of this.keyUsageListeners) {
+      try {
+        listener(event);
+      } catch {
+        // A misbehaving listener must never break key-usage auditing.
+      }
     }
   }
 }
