@@ -6,6 +6,8 @@ import type {
   InvoiceTemplate,
   CreateFromTemplateParams,
   SaveTemplateParams,
+  SerializedTemplate,
+  TemplateUsage,
 } from "./types/templates.js";
 import type { CreateInvoiceParams } from "./types.js";
 import { StellarSplitError } from "./errors.js";
@@ -41,7 +43,17 @@ export class TemplateAccessDeniedError extends StellarSplitError {
 }
 
 const templates = new Map<bigint, InvoiceTemplate>();
+const usage = new Map<bigint, TemplateUsage>();
 let nextTemplateId = BigInt(1);
+
+function getUsageRecord(templateId: bigint): TemplateUsage {
+  let record = usage.get(templateId);
+  if (!record) {
+    record = { templateId, count: 0, lastUsedAt: 0 };
+    usage.set(templateId, record);
+  }
+  return record;
+}
 
 export async function saveTemplate(
   params: SaveTemplateParams,
@@ -55,9 +67,11 @@ export async function saveTemplate(
     params: params.params,
     createdAt: Date.now(),
     creator,
+    shared: params.shared ?? false,
   };
 
   templates.set(templateId, template);
+  getUsageRecord(templateId);
   return templateId;
 }
 
@@ -79,7 +93,96 @@ export async function createFromTemplate(
   // In a real implementation, this would invoke the contract
   // to create an invoice with the merged params and return the invoice ID
   const invoiceId = BigInt(Date.now());
+
+  // Track usage
+  const record = getUsageRecord(params.templateId);
+  record.count += 1;
+  record.lastUsedAt = Date.now();
+
   return invoiceId;
+}
+
+export async function updateTemplate(
+  templateId: bigint,
+  updates: Partial<SaveTemplateParams>,
+  creator: string
+): Promise<InvoiceTemplate> {
+  const template = templates.get(templateId);
+  if (!template) {
+    throw new TemplateNotFoundError(templateId);
+  }
+
+  if (template.creator !== creator) {
+    throw new TemplateAccessDeniedError(templateId);
+  }
+
+  if (updates.name !== undefined) {
+    template.name = updates.name;
+  }
+  if (updates.params !== undefined) {
+    template.params = { ...template.params, ...updates.params };
+  }
+  if (updates.shared !== undefined) {
+    template.shared = updates.shared;
+  }
+
+  templates.set(templateId, template);
+  return template;
+}
+
+export async function setTemplateSharing(
+  templateId: bigint,
+  shared: boolean,
+  creator: string
+): Promise<InvoiceTemplate> {
+  return updateTemplate(templateId, { shared }, creator);
+}
+
+export async function exportTemplate(
+  templateId: bigint
+): Promise<SerializedTemplate> {
+  const template = templates.get(templateId);
+  if (!template) {
+    throw new TemplateNotFoundError(templateId);
+  }
+
+  return {
+    name: template.name,
+    params: { ...template.params },
+    shared: template.shared ?? false,
+    version: 1,
+  };
+}
+
+export async function importTemplate(
+  serialized: SerializedTemplate,
+  creator: string
+): Promise<bigint> {
+  if (!serialized || typeof serialized.name !== "string" || !serialized.params) {
+    throw new StellarSplitError(
+      "Invalid serialized template",
+      "TEMPLATE_INVALID",
+      {}
+    );
+  }
+
+  return saveTemplate(
+    {
+      name: serialized.name,
+      params: serialized.params,
+      shared: serialized.shared ?? false,
+    },
+    creator
+  );
+}
+
+export async function getTemplateUsage(
+  templateId: bigint
+): Promise<TemplateUsage> {
+  if (!templates.has(templateId)) {
+    throw new TemplateNotFoundError(templateId);
+  }
+  return { ...getUsageRecord(templateId) };
 }
 
 export async function deleteTemplate(
@@ -116,4 +219,16 @@ export async function listTemplates(creator: string): Promise<InvoiceTemplate[]>
   }
 
   return creatorTemplates.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export async function listSharedTemplates(): Promise<InvoiceTemplate[]> {
+  const sharedTemplates: InvoiceTemplate[] = [];
+
+  for (const template of templates.values()) {
+    if (template.shared) {
+      sharedTemplates.push(template);
+    }
+  }
+
+  return sharedTemplates.sort((a, b) => b.createdAt - a.createdAt);
 }

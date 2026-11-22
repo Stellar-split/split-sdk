@@ -123,6 +123,23 @@ function safeStringify(value: unknown): string {
   });
 }
 
+/**
+ * Aggregate statistics over stored log entries.
+ * Provides a quick debugging summary without iterating entries manually.
+ */
+export interface ErrorLogStats {
+  /** Total number of log entries currently stored. */
+  total: number;
+  /** Count of entries per log level. */
+  byLevel: Record<LogLevel, number>;
+  /** Timestamp (ms) of the oldest stored entry, or undefined when empty. */
+  oldestTimestamp: number | undefined;
+  /** Timestamp (ms) of the newest stored entry, or undefined when empty. */
+  newestTimestamp: number | undefined;
+  /** Time span in milliseconds between oldest and newest; 0 when fewer than two entries. */
+  spanMs: number;
+}
+
 /** Filter criteria for querying stored logs. */
 export interface LogFilter {
   /** Exact level match. */
@@ -153,6 +170,8 @@ export interface LogStorage {
   clear(): void;
   /** Total count of stored logs. */
   count(): number;
+  /** Aggregate statistics over stored entries. */
+  getStats(): ErrorLogStats;
 }
 
 /**
@@ -232,6 +251,39 @@ export class MemoryLogStorage implements LogStorage {
   count(): number {
     return this.entries.length;
   }
+
+  getStats(): ErrorLogStats {
+    const byLevel: Record<LogLevel, number> = {
+      debug: 0,
+      info: 0,
+      warn: 0,
+      error: 0,
+      fatal: 0,
+    };
+    let oldestTimestamp: number | undefined;
+    let newestTimestamp: number | undefined;
+
+    for (const entry of this.entries) {
+      byLevel[entry.level]++;
+      if (oldestTimestamp === undefined || entry.timestamp < oldestTimestamp) {
+        oldestTimestamp = entry.timestamp;
+      }
+      if (newestTimestamp === undefined || entry.timestamp > newestTimestamp) {
+        newestTimestamp = entry.timestamp;
+      }
+    }
+
+    return {
+      total: this.entries.length,
+      byLevel,
+      oldestTimestamp,
+      newestTimestamp,
+      spanMs:
+        oldestTimestamp !== undefined && newestTimestamp !== undefined && this.entries.length >= 2
+          ? newestTimestamp - oldestTimestamp
+          : 0,
+    };
+  }
 }
 
 /** Console storage sink that formats and logs to console. */
@@ -284,6 +336,12 @@ export class ConsoleLogStorage implements LogStorage {
   count(): number {
     return this.memoryFallback ? this.memoryFallback.count() : 0;
   }
+
+  getStats(): ErrorLogStats {
+    return this.memoryFallback
+      ? this.memoryFallback.getStats()
+      : { total: 0, byLevel: { debug: 0, info: 0, warn: 0, error: 0, fatal: 0 }, oldestTimestamp: undefined, newestTimestamp: undefined, spanMs: 0 };
+  }
 }
 
 /** Multiplexes log entries to multiple storage sinks. */
@@ -317,6 +375,12 @@ export class MultiLogStorage implements LogStorage {
 
   count(): number {
     return this.sinks.length > 0 ? this.sinks[0].count() : 0;
+  }
+
+  getStats(): ErrorLogStats {
+    return this.sinks.length > 0
+      ? this.sinks[0].getStats()
+      : { total: 0, byLevel: { debug: 0, info: 0, warn: 0, error: 0, fatal: 0 }, oldestTimestamp: undefined, newestTimestamp: undefined, spanMs: 0 };
   }
 }
 
@@ -507,6 +571,14 @@ export class ErrorLogger {
     return this.storage.count();
   }
 
+  /**
+   * Returns aggregate statistics over stored log entries.
+   * Useful for dashboards and debugging summaries.
+   */
+  getStats(): ErrorLogStats {
+    return this.storage.getStats();
+  }
+
   /** Format a given log entry using the active formatter. */
   format(entry: LogEntry): string {
     return this.formatter(entry);
@@ -538,4 +610,9 @@ export function logError(
   context?: Record<string, unknown>
 ): LogEntry | null {
   return defaultErrorLogger.error(message, error, context);
+}
+
+/** Convenience function to get aggregate stats from the default logger. */
+export function getLogStats(): ErrorLogStats {
+  return defaultErrorLogger.getStats();
 }

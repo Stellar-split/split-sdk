@@ -68,6 +68,86 @@ export {
   serializeInvoiceTemplate,
   deserializeInvoiceTemplate,
 } from "./invoiceTemplate.js";
+
+// Invoice QR code generation (#1241)
+export {
+  generateInvoiceQRCode,
+  generateInvoiceQRCodeDataUrl,
+  generateInvoiceQRCodeSvg,
+  generateInvoiceQRCodeBuffer,
+  buildInvoiceQRPayload,
+  DEFAULT_QR_OPTIONS,
+  QR_SIZE_PRESETS,
+  QR_EXPORT_FORMATS,
+} from "./invoiceQrCode.js";
+export type {
+  InvoiceQRCodeOptions,
+  InvoiceQRCodeResult,
+  InvoiceQRCodePayload,
+  QRExportFormat,
+  QRSizePreset,
+  QRErrorCorrectionLevel,
+  QRColorOptions,
+} from "./invoiceQrCode.js";
+
+// Invoice templates (#1244)
+export {
+  InvoiceTemplateRegistry,
+  defaultInvoiceTemplateRegistry,
+  createInvoiceTemplate,
+  applyInvoiceTemplate,
+  shareInvoiceTemplate,
+  importSharedInvoiceTemplate,
+  getInvoiceTemplateUsage,
+  resetInvoiceTemplateUsage,
+} from "./invoiceTemplates.js";
+export type {
+  InvoiceTemplateDefinition,
+  InvoiceTemplateCustomization,
+  InvoiceTemplateUsageStats,
+  SharedInvoiceTemplate,
+  CreateInvoiceTemplateParams,
+  ApplyInvoiceTemplateParams,
+  ApplyInvoiceTemplateResult,
+} from "./invoiceTemplates.js";
+
+// Recipient suggestions (#1245)
+export {
+  RecipientSuggestionEngine,
+  defaultRecipientSuggestionEngine,
+  suggestRecipients,
+  recordRecipientSelection,
+  getRecipientSuggestionStats,
+  resetRecipientSuggestionStats,
+} from "./recipientSuggestions.js";
+export type {
+  RecipientSuggestion,
+  RecipientSuggestionOptions,
+  RecipientSuggestionFilter,
+  RecipientSuggestionStats,
+  RecipientHistoryEntry,
+} from "./recipientSuggestions.js";
+
+// Payment reminders (#1246)
+export {
+  PaymentReminderScheduler,
+  defaultPaymentReminderScheduler,
+  schedulePaymentReminder,
+  cancelPaymentReminder,
+  getPaymentReminder,
+  listPaymentReminders,
+  getPaymentReminderStats,
+  resetPaymentReminderStats,
+} from "./paymentReminders.js";
+export type {
+  PaymentReminderConfig,
+  PaymentReminderScheduleOptions,
+  PaymentReminder,
+  PaymentReminderStatus,
+  PaymentReminderDelivery,
+  PaymentReminderStats,
+  PaymentReminderDeliveryHandler,
+} from "./paymentReminders.js";
 export {
   validateBulkImport,
   SUPPORTED_SCHEMA_VERSIONS,
@@ -457,6 +537,29 @@ export { LobstrAdapter } from "./wallets/adapters/LobstrAdapter.js";
 export type { LobstrAdapterOptions } from "./wallets/adapters/LobstrAdapter.js";
 export { WalletConnectionTimeoutError, isWalletConnectionTimeoutError } from "./errors.js";
 
+// Multi-wallet support (issue #1221)
+export { MultiWalletManager } from "./wallets/MultiWalletManager.js";
+export { WalletSessionManager } from "./wallets/WalletSessionManager.js";
+export { MetaMaskAdapter } from "./wallets/adapters/MetaMaskAdapter.js";
+export { WalletConnectAdapter } from "./wallets/adapters/WalletConnectAdapter.js";
+export { LedgerAdapter } from "./wallets/adapters/LedgerAdapter.js";
+export { FreighterAdapter } from "./wallets/adapters/FreighterAdapter.js";
+export type {
+  WalletAdapter,
+  WalletType,
+  WalletDetectionResult,
+} from "./wallets/types.js";
+export {
+  WalletAdapterError,
+  isWalletAdapterError,
+  WalletNotDetectedError,
+  isWalletNotDetectedError,
+  WalletSwitchError,
+  isWalletSwitchError,
+  UnsupportedWalletError,
+  isUnsupportedWalletError,
+} from "./errors.js";
+
 export { checkRPCHealth } from "./health.js";
 export { FallbackChain, FallbackExhaustedError } from "./fallbackChain.js";
 
@@ -660,6 +763,16 @@ export {
   isTransactionVerificationError,
 } from "./errors.js";
 
+// Comprehensive error code registry and lookups (issue #1261)
+export {
+  SDK_ERROR_CODES,
+  getErrorByCode,
+  getErrorMessage,
+} from "./errors.js";
+export type {
+  SdkErrorCodeDefinition,
+} from "./errors.js";
+
 // Soroban contract address validation (issue #1065)
 export {
   validateContractAddress,
@@ -669,6 +782,18 @@ export {
   CONTRACT_ADDRESS_PREFIX,
 } from "./contractAddressValidator.js";
 export type { ContractAddressValidationResult } from "./contractAddressValidator.js";
+
+// Soroban contract address validation with caching (issue #1259)
+export {
+  ContractAddressValidator,
+  validateContractAddressCached,
+  clearContractAddressCache,
+  getContractAddressValidationStats,
+} from "./contractAddressValidator.js";
+export type {
+  ContractAddressValidatorOptions,
+  ContractAddressValidationStats,
+} from "./contractAddressValidator.js";
 
 // Pre-submit transaction verification (issue #1066)
 export {
@@ -684,6 +809,17 @@ export type {
   SignatureVerificationResult,
 } from "./transactionVerifier.js";
 
+// Pre-submit transaction verification with custom rules (issue #1260)
+export {
+  TransactionVerifier,
+  getTransactionVerificationStats,
+} from "./transactionVerifier.js";
+export type {
+  VerificationRule,
+  TransactionVerifierOptions,
+  TransactionVerificationStats,
+} from "./transactionVerifier.js";
+
 // Error recovery strategies (issue #1068)
 export {
   RECOVERY_STRATEGY_TABLE,
@@ -696,6 +832,18 @@ export type {
   RecoveryStrategy,
   RecoveryPlan,
   RecoveryRunOptions,
+} from "./errorRecovery.js";
+
+// Error recovery runner, stats, and hooks (issue #1262)
+export {
+  ErrorRecoveryRunner,
+  getRecoveryStats,
+  resetRecoveryStats,
+} from "./errorRecovery.js";
+export type {
+  RecoveryHook,
+  RecoveryStats,
+  RecoveryRunnerOptions,
 } from "./errorRecovery.js";
 
 // ---------------------------------------------------------------------------
@@ -1132,26 +1280,8 @@ export type { MemoryReport } from "./memoryOptimizer.js";
 export { StreamingDatasetIterator } from "./streamingDataset.js";
 export type { PageResult, StreamingDatasetOptions } from "./streamingDataset.js";
 
-// Transaction Event Tracking (#1264)
-export {
-  TransactionEventTracker,
-  getDefaultTransactionEventTracker,
-  setDefaultTransactionEventTracker,
-  resetDefaultTransactionEventTracker,
-} from "./transactionEvents.js";
-export type {
-  TransactionStep,
-  TransactionEvent,
-  TransactionEventBase,
-  TransactionCreatedEvent,
-  TransactionSimulatedEvent,
-  TransactionSignedEvent,
-  TransactionSubmittedEvent,
-  TransactionConfirmedEvent,
-  TransactionErrorEvent,
-  TransactionEventMap,
-  TransactionEventListener,
-  TransactionEventFilter,
-  TransactionEventStats,
-  TransactionEventTrackerOptions,
-} from "./transactionEvents.js";
+// API Reference Documentation Generator (#1197)
+export * from './apiDocGenerator.js';
+
+// SDK Cookbook (#1198)
+export * from './cookbook.js';

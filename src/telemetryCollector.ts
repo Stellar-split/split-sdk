@@ -21,12 +21,20 @@ interface MethodMetrics {
   latencies: number[];
 }
 
+export interface TelemetryRecord {
+  method: string;
+  success: boolean;
+  durationMs: number;
+  traceId?: string;
+}
+
 export class TelemetryCollector {
   private startTime = Date.now();
   private methods = new Map<string, MethodMetrics>();
+  private records: TelemetryRecord[] = [];
   private readonly windowSize = 100;
 
-  recordMethod(method: string, success: boolean, durationMs: number): void {
+  recordMethod(method: string, success: boolean, durationMs: number, traceId?: string): void {
     const metrics = this.methods.get(method) ?? { count: 0, errors: 0, latencies: [] };
     metrics.count += 1;
     if (!success) {
@@ -37,6 +45,14 @@ export class TelemetryCollector {
       metrics.latencies.shift();
     }
     this.methods.set(method, metrics);
+    this.records.push({ method, success, durationMs, traceId });
+    if (this.records.length > this.windowSize) {
+      this.records.shift();
+    }
+  }
+
+  getRecords(): TelemetryRecord[] {
+    return this.records.map((r) => ({ ...r }));
   }
 
   getReport(): TelemetryReport {
@@ -62,6 +78,7 @@ export class TelemetryCollector {
   reset(): void {
     this.startTime = Date.now();
     this.methods.clear();
+    this.records = [];
   }
 
   private getPercentile(sorted: number[], percentile: number): number {

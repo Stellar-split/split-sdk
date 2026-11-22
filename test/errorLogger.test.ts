@@ -13,6 +13,7 @@ import {
   setDefaultErrorLogger,
   resetDefaultErrorLogger,
   logError,
+  getLogStats,
   type LogEntry,
 } from "../src/errorLogger.js";
 import { StellarSplitError } from "../src/errors.js";
@@ -265,6 +266,80 @@ describe("Issue #1069 — Error Logging", () => {
       expect(entry!.level).toBe("error");
       expect(entry!.message).toBe("Fatal DB crash");
       expect(logger.count()).toBe(1);
+    });
+  });
+
+  describe("Error Log Stats (#1265)", () => {
+    it("returns zero counts and undefined timestamps for an empty logger", () => {
+      const logger = new ErrorLogger({ minLevel: "debug" });
+      const stats = logger.getStats();
+
+      expect(stats.total).toBe(0);
+      expect(stats.byLevel.debug).toBe(0);
+      expect(stats.byLevel.info).toBe(0);
+      expect(stats.byLevel.warn).toBe(0);
+      expect(stats.byLevel.error).toBe(0);
+      expect(stats.byLevel.fatal).toBe(0);
+      expect(stats.oldestTimestamp).toBeUndefined();
+      expect(stats.newestTimestamp).toBeUndefined();
+      expect(stats.spanMs).toBe(0);
+    });
+
+    it("counts entries correctly per level", () => {
+      const storage = new MemoryLogStorage(20);
+      const logger = new ErrorLogger({ minLevel: "debug", storage });
+
+      logger.debug("d1");
+      logger.debug("d2");
+      logger.info("i1");
+      logger.warn("w1");
+      logger.error("e1");
+      logger.fatal("f1");
+
+      const stats = logger.getStats();
+      expect(stats.total).toBe(6);
+      expect(stats.byLevel.debug).toBe(2);
+      expect(stats.byLevel.info).toBe(1);
+      expect(stats.byLevel.warn).toBe(1);
+      expect(stats.byLevel.error).toBe(1);
+      expect(stats.byLevel.fatal).toBe(1);
+    });
+
+    it("reports correct oldest/newest timestamps and span from MemoryLogStorage", () => {
+      const storage = new MemoryLogStorage(10);
+
+      storage.write({ timestamp: 1000, isoTimestamp: new Date(1000).toISOString(), level: "info",  message: "first"  });
+      storage.write({ timestamp: 5000, isoTimestamp: new Date(5000).toISOString(), level: "warn",  message: "middle" });
+      storage.write({ timestamp: 9000, isoTimestamp: new Date(9000).toISOString(), level: "error", message: "last"   });
+
+      const stats = storage.getStats();
+      expect(stats.oldestTimestamp).toBe(1000);
+      expect(stats.newestTimestamp).toBe(9000);
+      expect(stats.spanMs).toBe(8000);
+    });
+
+    it("spanMs is 0 when only one entry is stored", () => {
+      const storage = new MemoryLogStorage(10);
+      storage.write({ timestamp: 4000, isoTimestamp: new Date(4000).toISOString(), level: "info", message: "solo" });
+
+      const stats = storage.getStats();
+      expect(stats.total).toBe(1);
+      expect(stats.spanMs).toBe(0);
+    });
+
+    it("module-level getLogStats delegates to the default logger", () => {
+      const logger = getDefaultErrorLogger();
+      logger.setLevel("debug");
+
+      logError(new Error("boom"), "err1");
+      logger.warn("w1");
+      logger.info("i1");
+
+      const stats = getLogStats();
+      expect(stats.total).toBe(3);
+      expect(stats.byLevel.error).toBe(1);
+      expect(stats.byLevel.warn).toBe(1);
+      expect(stats.byLevel.info).toBe(1);
     });
   });
 });

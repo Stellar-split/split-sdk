@@ -1,5 +1,32 @@
+/** Supported wallet types for multi-wallet support. */
+export type WalletType =
+  | 'metamask'
+  | 'walletconnect'
+  | 'ledger'
+  | 'freighter'
+  | 'lobstr'
+  | 'xbull';
+
+/** Result of detecting a wallet's availability and connection state. */
+export interface WalletDetectionResult {
+  /** Wallet type that was detected. */
+  type: WalletType;
+  /** Whether the wallet is installed / available in the current environment. */
+  available: boolean;
+  /** Whether the wallet is currently connected / authorized. */
+  connected: boolean;
+  /** Public key (G... address) when connected, if known. */
+  address?: string;
+  /** Optional human-readable reason when detection fails. */
+  error?: string;
+}
+
 /** Generic wallet adapter interface for signing Stellar transactions. */
 export interface WalletAdapter {
+  /** Human-readable wallet name (e.g. "MetaMask", "Freighter"). */
+  readonly name?: string;
+  /** Wallet type this adapter implements. */
+  readonly type?: WalletType;
   /** Return the wallet's public key (G... address). */
   getAddress(): Promise<string>;
   /**
@@ -10,6 +37,19 @@ export interface WalletAdapter {
    * @returns Signed transaction XDR.
    */
   signTransaction(xdr: string, network: string): Promise<string>;
+  /** Connect / authorize the wallet. Optional for adapters that need no handshake. */
+  connect?(): Promise<void>;
+  /** Disconnect / revoke the wallet session. */
+  disconnect?(): Promise<void>;
+  /**
+   * Subscribe to account changes (e.g. the user switches accounts).
+   *
+   * @param callback - Invoked with the new public key when the account changes.
+   * @returns An unsubscribe function.
+   */
+  onAccountChange?(callback: (address: string) => void): () => void;
+  /** Whether the wallet is available in the current environment. */
+  isAvailable?(): boolean | Promise<boolean>;
 }
 
 /** Supported source chains for the cross-chain payment bridge. */

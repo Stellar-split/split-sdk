@@ -9,6 +9,10 @@
  * - Split ratios and totals
  * - Invoice metadata
  * - Recipient deduplication
+ *
+ * Also provides a validation-hook entry point (Issue #1251) that runs the
+ * input sanitizer rules before delegating to the individual validators, so
+ * every validator call is sanitized and whitelist-enforced.
  */
 
 export * from "./deadlineValidator.js";
@@ -18,3 +22,25 @@ export * from "./signatureValidator.js";
 export * from "./splitRatioValidator.js";
 export * from "./invoiceMetadataValidator.js";
 export * from "./recipientDeduplicator.js";
+
+// Signature validation tracking and scheme APIs (Issue #1255)
+export {
+  validateSignature,
+  getValidationStats as getSignatureValidationStats,
+} from "./signatureValidator.js";
+
+// Address validation tracking and account verification APIs (Issue #1256)
+export {
+  getAddressValidationStats,
+  verifyAccountExists,
+} from "./addressValidator.js";
+
+// Amount validation tracking APIs (Issue #1257)
+export {
+  getAmountValidationStats,
+} from "./amountValidator.js";
+
+// Deadline validation tracking APIs (Issue #1258)
+export {
+  getDeadlineValidationStats,
+} from "./deadlineValidator.js";
