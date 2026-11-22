@@ -37,6 +37,7 @@
 
 import { StrKey } from "@stellar/stellar-sdk";
 import { InvalidContractAddressError } from "./errors.js";
+import { Cache } from "./cache.js";
 
 /** Total length of a StrKey-encoded contract address, in characters. */
 export const CONTRACT_ADDRESS_LENGTH = 56;
@@ -155,5 +156,191 @@ export function assertValidContractAddress(address: string): void {
   const result = validateContractAddress(address);
   if (!result.valid) {
     throw new InvalidContractAddressError(address, result.errors);
+  }
+}
+
+/** Default time-to-live for cached validation results, in milliseconds. */
+export const DEFAULT_VALIDATION_CACHE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * Performs an on-chain contract existence check (e.g. via RPC
+ * `getContractData`). Resolves `true` when the contract exists.
+ */
+export type ContractVerifier = (address: string) => Promise<boolean>;
+
+/** Options accepted by {@link ContractAddressValidator}. */
+export interface ContractAddressValidatorOptions {
+  /**
+   * Optional on-chain verifier. When omitted, addresses are only checked for
+   * format and checksum and `verified` is reported as `false`.
+   */
+  verifier?: ContractVerifier;
+  /** TTL for cached validation results, in milliseconds. */
+  cacheTtlMs?: number;
+  /** Custom cache instance; defaults to a new {@link Cache}. */
+  cache?: Cache<boolean>;
+}
+
+/** Detailed outcome of a full contract address validation. */
+export interface ContractValidationResult {
+  /** `true` when format, checksum, and (if a verifier is configured) verification pass. */
+  valid: boolean;
+  /** The address that was validated. */
+  address: string;
+  /** `true` when length, prefix, and base32 alphabet checks pass. */
+  format: boolean;
+  /** `true` when the StrKey CRC16 checksum verifies. */
+  checksum: boolean;
+  /** `true` when the on-chain verifier confirmed the contract exists. */
+  verified: boolean;
+  /** `true` when the result was served from the cache. */
+  cached: boolean;
+  /** Human-readable descriptions of every failed rule. */
+  errors: string[];
+}
+
+/** Aggregate validation counters exposed by {@link ContractAddressValidator.getStats}. */
+export interface ContractValidationStats {
+  /** Total number of `validate` calls. */
+  total: number;
+  /** Number of calls that produced a valid result. */
+  valid: number;
+  /** Number of calls that produced an invalid result. */
+  invalid: number;
+  /** Number of calls served from the cache. */
+  cached: number;
+  /** Number of calls that invoked the on-chain verifier. */
+  verified: number;
+}
+
+/**
+ * Stateful Soroban contract address validation service.
+ *
+ * Combines the stateless {@link validateContractAddress} format/checksum
+ * checks with optional on-chain verification and result caching, and tracks
+ * aggregate validation counters.
+ *
+ * @example
+ * ```ts
+ * const validator = new ContractAddressValidator({
+ *   verifier: async (addr) => rpcServer.getContractData(addr, ...).then(() => true, () => false),
+ * });
+ * const result = await validator.validate("C...");
+ * ```
+ */
+export class ContractAddressValidator {
+  private readonly verifier?: ContractVerifier;
+  private readonly cacheTtlMs: number;
+  private readonly cache: Cache<boolean>;
+  private stats: ContractValidationStats = {
+    total: 0,
+    valid: 0,
+    invalid: 0,
+    cached: 0,
+    verified: 0,
+  };
+
+  constructor(options: ContractAddressValidatorOptions = {}) {
+    this.verifier = options.verifier;
+    this.cacheTtlMs = options.cacheTtlMs ?? DEFAULT_VALIDATION_CACHE_TTL_MS;
+    this.cache = options.cache ?? new Cache<boolean>();
+  }
+
+  /**
+   * Validate a contract address.
+   *
+   * Format and checksum are checked first; the on-chain verifier (when
+   * configured) is only invoked for format-valid addresses. Results are
+   * cached by address. Never throws — verification failures are reported in
+   * the returned result.
+   *
+   * @param address - Candidate contract address (any value; non-strings fail).
+   */
+  async validate(address: unknown): Promise<ContractValidationResult> {
+    this.stats.total++;
+
+    const base = validateContractAddress(address);
+    const key = base.address;
+
+    const cached = this.cache.get(key);
+    if (cached !== undefined) {
+      this.stats.cached++;
+      const result: ContractValidationResult = {
+        valid: cached,
+        address: key,
+        format: base.format,
+        checksum: base.checksum,
+        verified: cached && base.format && this.verifier !== undefined,
+        cached: true,
+        errors: cached ? [] : base.errors,
+      };
+      if (result.valid) {
+        this.stats.valid++;
+      } else {
+        this.stats.invalid++;
+      }
+      return result;
+    }
+
+    const errors = [...base.errors];
+    let verified = false;
+
+    if (base.format && this.verifier) {
+      this.stats.verified++;
+      try {
+        verified = await this.verifier(key);
+        if (!verified) {
+          errors.push("Contract address could not be verified on-chain");
+        }
+      } catch (err) {
+        verified = false;
+        const message = err instanceof Error ? err.message : String(err);
+        errors.push(`Contract address verification failed: ${message}`);
+      }
+    }
+
+    const valid = base.valid && (this.verifier ? verified : true);
+    this.cache.set(key, valid, this.cacheTtlMs);
+
+    if (valid) {
+      this.stats.valid++;
+    } else {
+      this.stats.invalid++;
+    }
+
+    return {
+      valid,
+      address: key,
+      format: base.format,
+      checksum: base.checksum,
+      verified,
+      cached: false,
+      errors,
+    };
+  }
+
+  /**
+   * Validate a contract address, throwing {@link InvalidContractAddressError}
+   * with every violated rule when it is not valid.
+   *
+   * @param address - Candidate contract address string.
+   * @throws {InvalidContractAddressError} If the address fails any rule.
+   */
+  async validateOrThrow(address: string): Promise<ContractValidationResult> {
+    const result = await this.validate(address);
+    if (!result.valid) {
+      throw new InvalidContractAddressError(address, result.errors);
+    }
+    return result;
+  }
+
+  /** Return a snapshot of the aggregate validation counters. */
+  getStats(): ContractValidationStats {
+    return { ...this.stats };
+  }
+
+  /** Reset all aggregate validation counters to zero. */
+  resetStats(): void {
+    this.stats = { total: 0, valid: 0, invalid: 0, cached: 0, verified: 0 };
   }
 }

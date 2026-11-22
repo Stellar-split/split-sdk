@@ -763,6 +763,16 @@ export {
   isTransactionVerificationError,
 } from "./errors.js";
 
+// Comprehensive error code registry and lookups (issue #1261)
+export {
+  SDK_ERROR_CODES,
+  getErrorByCode,
+  getErrorMessage,
+} from "./errors.js";
+export type {
+  SdkErrorCodeDefinition,
+} from "./errors.js";
+
 // Soroban contract address validation (issue #1065)
 export {
   validateContractAddress,
@@ -772,6 +782,18 @@ export {
   CONTRACT_ADDRESS_PREFIX,
 } from "./contractAddressValidator.js";
 export type { ContractAddressValidationResult } from "./contractAddressValidator.js";
+
+// Soroban contract address validation with caching (issue #1259)
+export {
+  ContractAddressValidator,
+  validateContractAddressCached,
+  clearContractAddressCache,
+  getContractAddressValidationStats,
+} from "./contractAddressValidator.js";
+export type {
+  ContractAddressValidatorOptions,
+  ContractAddressValidationStats,
+} from "./contractAddressValidator.js";
 
 // Pre-submit transaction verification (issue #1066)
 export {
@@ -787,6 +809,17 @@ export type {
   SignatureVerificationResult,
 } from "./transactionVerifier.js";
 
+// Pre-submit transaction verification with custom rules (issue #1260)
+export {
+  TransactionVerifier,
+  getTransactionVerificationStats,
+} from "./transactionVerifier.js";
+export type {
+  VerificationRule,
+  TransactionVerifierOptions,
+  TransactionVerificationStats,
+} from "./transactionVerifier.js";
+
 // Error recovery strategies (issue #1068)
 export {
   RECOVERY_STRATEGY_TABLE,
@@ -799,6 +832,18 @@ export type {
   RecoveryStrategy,
   RecoveryPlan,
   RecoveryRunOptions,
+} from "./errorRecovery.js";
+
+// Error recovery runner, stats, and hooks (issue #1262)
+export {
+  ErrorRecoveryRunner,
+  getRecoveryStats,
+  resetRecoveryStats,
+} from "./errorRecovery.js";
+export type {
+  RecoveryHook,
+  RecoveryStats,
+  RecoveryRunnerOptions,
 } from "./errorRecovery.js";
 
 // ---------------------------------------------------------------------------
