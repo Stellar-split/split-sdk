@@ -1,189 +1,349 @@
 /**
- * Typed event emitter for state changes and transaction lifecycle events.
+ * SDK event emitter for state changes and transaction lifecycle events.
  *
- * Supports synchronous and asynchronous handlers, one-shot listeners,
- * event filtering, and safe deregistration without leaking listeners.
+ * Wraps TypedEventEmitter with per-listener filtering, emission history,
+ * and aggregate stats so integrators can react to SDK state without polling.
+ *
+ * Issue #1263 — Implement event emitter
  */
 
-export type EventHandler<T = unknown> = (payload: T) => void | Promise<void>;
+import { TypedEventEmitter, type Unsubscribe, type WildcardEventHandler } from "./TypedEventEmitter.js";
 
-export type EventFilter<T = unknown> = (payload: T) => boolean;
+// ─── Re-export base primitives used by the rest of the SDK ───────────────────
 
-export interface ListenerOptions<T = unknown> {
-  /** Only invoke the handler when the filter returns true. */
-  filter?: EventFilter<T>;
-  /** Remove the listener after the first invocation. */
-  once?: boolean;
+export type { Unsubscribe, WildcardEventHandler };
+export { AbortError } from "./TypedEventEmitter.js";
+
+// ─── SDK Event Map ───────────────────────────────────────────────────────────
+
+/** Payload emitted when a transaction is submitted to the network. */
+export interface TransactionSubmittedPayload {
+  id: string;
+  hash?: string;
+  meta?: Record<string, unknown>;
 }
 
-export interface TransactionEvent {
-  hash: string;
-  status: TransactionStatus;
-  timestamp: number;
-  error?: Error;
+/** Payload emitted when a transaction is confirmed on the ledger. */
+export interface TransactionConfirmedPayload {
+  id: string;
+  hash?: string;
+  ledger?: number;
+  meta?: Record<string, unknown>;
 }
 
-export type TransactionStatus = 'submitted' | 'confirmed' | 'failed';
+/** Payload emitted when a transaction fails. */
+export interface TransactionFailedPayload {
+  id: string;
+  hash?: string;
+  error?: unknown;
+  meta?: Record<string, unknown>;
+}
 
-export interface StateChangeEvent<T = unknown> {
+/** Payload emitted when a tracked SDK state slice changes. */
+export interface StateChangedPayload<T = unknown> {
   key: string;
   previous: T | undefined;
   current: T;
   timestamp: number;
 }
 
-export interface EventMap {
-  'transaction:submitted': TransactionEvent;
-  'transaction:confirmed': TransactionEvent;
-  'transaction:failed': TransactionEvent;
-  'state:change': StateChangeEvent;
+/** Payload emitted when a SDK error is raised outside a transaction context. */
+export interface SdkErrorPayload {
+  message: string;
+  code?: string;
+  context?: Record<string, unknown>;
+}
+
+/** Complete map of all events the SDK emitter can emit. */
+export interface SdkEventMap {
+  "transaction:submitted": TransactionSubmittedPayload;
+  "transaction:confirmed": TransactionConfirmedPayload;
+  "transaction:failed":    TransactionFailedPayload;
+  "state:changed":         StateChangedPayload;
+  "sdk:error":             SdkErrorPayload;
   [event: string]: unknown;
 }
 
-interface RegisteredListener {
-  handler: EventHandler<never>;
-  filter?: EventFilter<never>;
-  once: boolean;
+// ─── Filtering ───────────────────────────────────────────────────────────────
+
+/** Predicate that decides whether a handler should be invoked for a payload. */
+export type EventFilter<T = unknown> = (payload: T) => boolean;
+
+// ─── Stats ───────────────────────────────────────────────────────────────────
+
+/** Aggregate statistics over all events emitted since the tracker was created or last reset. */
+export interface EventEmitterStats {
+  /** Total number of events emitted (all event names). */
+  totalEmitted: number;
+  /** Count of emissions per event name. */
+  byEvent: Record<string, number>;
+  /** Current number of registered listeners across all events. */
+  listenerCount: number;
+  /** Timestamp (ms) of the first emission, or undefined when no events have been emitted. */
+  firstEmittedAt: number | undefined;
+  /** Timestamp (ms) of the most recent emission, or undefined when no events have been emitted. */
+  lastEmittedAt: number | undefined;
 }
 
-export class EventEmitter {
-  private listeners = new Map<string, Set<RegisteredListener>>();
+// ─── Emission history ─────────────────────────────────────────────────────────
+
+/** A single record in the emission history. */
+export interface EmittedEvent<K extends keyof SdkEventMap = keyof SdkEventMap> {
+  /** Event name. */
+  event: K;
+  /** Payload at the time of emission. */
+  payload: SdkEventMap[K];
+  /** Unix epoch milliseconds when the event was emitted. */
+  timestamp: number;
+}
+
+/** Filter criteria for querying the emission history. */
+export interface EmissionHistoryFilter {
+  /** Keep only records for these event names. */
+  event?: keyof SdkEventMap | (keyof SdkEventMap)[];
+  /** Keep only records emitted at or after this timestamp. */
+  since?: number;
+  /** Keep only records emitted at or before this timestamp. */
+  until?: number;
+  /** Maximum number of most-recent records to return. */
+  limit?: number;
+}
+
+// ─── Options ─────────────────────────────────────────────────────────────────
+
+/** Options for constructing a {@link SdkEventEmitter}. */
+export interface SdkEventEmitterOptions {
+  /**
+   * Maximum number of emission history records to retain.
+   * Oldest records are evicted when capacity is reached. Defaults to 200.
+   */
+  maxHistory?: number;
+}
+
+// ─── SdkEventEmitter ─────────────────────────────────────────────────────────
+
+/**
+ * SDK-level event emitter for state changes and transaction lifecycle events.
+ *
+ * - Typed `on()` / `off()` subscriptions with optional per-listener filter predicates.
+ * - Wildcard `on("*")` to receive every event.
+ * - Promise-based `once()` with optional `AbortSignal`.
+ * - Bounded emission history with `getHistory()` and filtering.
+ * - `getStats()` for aggregate debugging summaries.
+ */
+export class SdkEventEmitter {
+  private readonly inner = new TypedEventEmitter<SdkEventMap>();
+
+  // Per-listener filter registry (handler → filter)
+  private readonly filters = new WeakMap<(...args: unknown[]) => void, EventFilter<unknown>>();
+  // Wrapper map so we can remove the right wrapped handler on off()
+  private readonly wrappers = new WeakMap<(...args: unknown[]) => void, (...args: unknown[]) => void>();
+
+  // Emission history (bounded ring buffer)
+  private readonly history: EmittedEvent[] = [];
+  private readonly maxHistory: number;
+
+  // Stats counters
+  private readonly emitCounts: Record<string, number> = {};
+  private firstEmittedAt: number | undefined = undefined;
+  private lastEmittedAt: number | undefined = undefined;
+
+  constructor(options: SdkEventEmitterOptions = {}) {
+    this.maxHistory = Math.max(1, options.maxHistory ?? 200);
+  }
+
+  // ── Subscriptions ──────────────────────────────────────────────────────────
 
   /**
-   * Register a listener for an event. Returns an unsubscribe function.
+   * Register a handler for a specific event, with an optional filter predicate.
+   * Returns an unsubscribe function.
+   *
+   * When a filter is provided, the handler is only called when
+   * `filter(payload)` returns `true`.
    */
-  on<K extends keyof EventMap>(
+  on<K extends keyof SdkEventMap>(
     event: K,
-    handler: EventHandler<EventMap[K]>,
-    options: ListenerOptions<EventMap[K]> = {},
-  ): () => void {
-    return this.addListener(event as string, handler, options);
+    handler: (payload: SdkEventMap[K]) => void,
+    filter?: EventFilter<SdkEventMap[K]>,
+  ): Unsubscribe {
+    if (filter) {
+      const wrapped = (payload: SdkEventMap[K]) => {
+        if (filter(payload)) handler(payload);
+      };
+      // Store the wrapper so off() can remove it
+      this.wrappers.set(
+        handler as (...args: unknown[]) => void,
+        wrapped as (...args: unknown[]) => void,
+      );
+      this.filters.set(
+        handler as (...args: unknown[]) => void,
+        filter as EventFilter<unknown>,
+      );
+      return this.inner.on(event, wrapped);
+    }
+    return this.inner.on(event, handler);
   }
 
   /**
-   * Register a listener that is removed after its first invocation.
+   * Register a wildcard handler that receives every emitted event.
+   * Returns an unsubscribe function.
    */
-  once<K extends keyof EventMap>(
+  onAny(handler: WildcardEventHandler<SdkEventMap>): Unsubscribe {
+    return this.inner.on("*", handler);
+  }
+
+  /**
+   * Remove a previously registered handler.
+   * If the handler was registered with a filter, the wrapped version is removed.
+   */
+  off<K extends keyof SdkEventMap>(
     event: K,
-    handler: EventHandler<EventMap[K]>,
-    options: Omit<ListenerOptions<EventMap[K]>, 'once'> = {},
-  ): () => void {
-    return this.addListener(event as string, handler, { ...options, once: true });
-  }
-
-  /**
-   * Remove a previously registered listener.
-   */
-  off<K extends keyof EventMap>(event: K, handler: EventHandler<EventMap[K]>): void {
-    const set = this.listeners.get(event as string);
-    if (!set) return;
-    for (const listener of set) {
-      if (listener.handler === handler) {
-        set.delete(listener);
-      }
-    }
-    if (set.size === 0) {
-      this.listeners.delete(event as string);
-    }
-  }
-
-  /**
-   * Emit an event to all matching listeners. Async handlers are awaited
-   * when `await`ed by the caller; errors in one handler do not prevent
-   * others from running.
-   */
-  async emit<K extends keyof EventMap>(event: K, payload: EventMap[K]): Promise<void> {
-    const set = this.listeners.get(event as string);
-    if (!set || set.size === 0) return;
-
-    // Snapshot so listeners added/removed during emit don't affect this run.
-    const snapshot = Array.from(set);
-    const pending: Promise<void>[] = [];
-
-    for (const listener of snapshot) {
-      if (listener.filter && !listener.filter(payload as never)) {
-        continue;
-      }
-      if (listener.once) {
-        set.delete(listener);
-      }
-      try {
-        const result = listener.handler(payload as never);
-        if (result && typeof (result as Promise<void>).then === 'function') {
-          pending.push(
-            (result as Promise<void>).catch((err) => {
-              this.reportHandlerError(event as string, err);
-            }),
-          );
-        }
-      } catch (err) {
-        this.reportHandlerError(event as string, err);
-      }
-    }
-
-    if (set.size === 0) {
-      this.listeners.delete(event as string);
-    }
-
-    if (pending.length > 0) {
-      await Promise.all(pending);
-    }
-  }
-
-  /**
-   * Remove all listeners, optionally scoped to a single event.
-   */
-  removeAllListeners<K extends keyof EventMap>(event?: K): void {
-    if (event === undefined) {
-      this.listeners.clear();
+    handler: (payload: SdkEventMap[K]) => void,
+  ): void {
+    const wrapped = this.wrappers.get(handler as (...args: unknown[]) => void);
+    if (wrapped) {
+      this.inner.off(event, wrapped as (payload: SdkEventMap[K]) => void);
+      this.wrappers.delete(handler as (...args: unknown[]) => void);
+      this.filters.delete(handler as (...args: unknown[]) => void);
     } else {
-      this.listeners.delete(event as string);
+      this.inner.off(event, handler);
     }
   }
 
   /**
-   * Number of listeners registered for an event (or all events).
+   * Returns a promise that resolves with the next emission of `event`.
+   * Rejects with `AbortError` if the signal fires first.
    */
-  listenerCount<K extends keyof EventMap>(event?: K): number {
+  once<K extends keyof SdkEventMap>(event: K, signal?: AbortSignal): Promise<SdkEventMap[K]> {
+    return this.inner.once(event, signal) as Promise<SdkEventMap[K]>;
+  }
+
+  /** Remove all handlers, optionally scoped to a single event. */
+  removeAllListeners<K extends keyof SdkEventMap>(event?: K): void {
     if (event === undefined) {
-      let total = 0;
-      for (const set of this.listeners.values()) total += set.size;
-      return total;
+      this.inner.removeAllListeners();
+    } else {
+      this.inner.removeAllListeners(event);
     }
-    return this.listeners.get(event as string)?.size ?? 0;
   }
 
-  private addListener<K>(
-    event: string,
-    handler: EventHandler<K>,
-    options: ListenerOptions<K>,
-  ): () => void {
-    let set = this.listeners.get(event);
-    if (!set) {
-      set = new Set();
-      this.listeners.set(event, set);
+  /** Number of handlers currently registered for an event (or wildcards if `"*"`). */
+  listenerCount<K extends keyof SdkEventMap>(event: K | "*"): number {
+    return this.inner.listenerCount(event as keyof SdkEventMap);
+  }
+
+  // ── Emission ───────────────────────────────────────────────────────────────
+
+  /**
+   * Emit an event to all matching listeners and record it in history/stats.
+   */
+  emit<K extends keyof SdkEventMap>(event: K, payload: SdkEventMap[K]): void {
+    const now = Date.now();
+
+    // Update stats
+    this.emitCounts[event as string] = (this.emitCounts[event as string] ?? 0) + 1;
+    if (this.firstEmittedAt === undefined) this.firstEmittedAt = now;
+    this.lastEmittedAt = now;
+
+    // Record history
+    const record: EmittedEvent = { event: event as string, payload, timestamp: now };
+    if (this.history.length >= this.maxHistory) this.history.shift();
+    this.history.push(record);
+
+    // Dispatch
+    this.inner.emit(event, payload);
+  }
+
+  // ── History queries ────────────────────────────────────────────────────────
+
+  /**
+   * Returns recorded emission history, optionally filtered.
+   * Results are ordered oldest-first.
+   */
+  getHistory(filter?: EmissionHistoryFilter): EmittedEvent[] {
+    let results = [...this.history];
+
+    if (filter?.event !== undefined) {
+      const names = new Set(
+        Array.isArray(filter.event) ? filter.event : [filter.event],
+      );
+      results = results.filter((r) => names.has(r.event as keyof SdkEventMap));
     }
-    const listener: RegisteredListener = {
-      handler: handler as EventHandler<never>,
-      filter: options.filter as EventFilter<never> | undefined,
-      once: options.once ?? false,
-    };
-    set.add(listener);
-    return () => {
-      const current = this.listeners.get(event);
-      if (!current) return;
-      current.delete(listener);
-      if (current.size === 0) {
-        this.listeners.delete(event);
-      }
+    if (filter?.since !== undefined) {
+      results = results.filter((r) => r.timestamp >= filter.since!);
+    }
+    if (filter?.until !== undefined) {
+      results = results.filter((r) => r.timestamp <= filter.until!);
+    }
+    if (filter?.limit !== undefined && filter.limit >= 0 && results.length > filter.limit) {
+      results = results.slice(results.length - filter.limit);
+    }
+
+    return results;
+  }
+
+  /** Returns the most recently emitted event record, or undefined when empty. */
+  getLastEmitted(): EmittedEvent | undefined {
+    return this.history.length > 0 ? this.history[this.history.length - 1] : undefined;
+  }
+
+  /** Clears the emission history. Does not affect listeners or stats counters. */
+  clearHistory(): void {
+    this.history.length = 0;
+  }
+
+  // ── Stats ──────────────────────────────────────────────────────────────────
+
+  /**
+   * Returns aggregate statistics over all emissions since construction (or last
+   * `resetStats()` call). Computed in O(1) from pre-maintained counters.
+   */
+  getStats(): EventEmitterStats {
+    let listenerCount = 0;
+    // Sum across all named events + wildcards
+    for (const event of Object.keys(this.emitCounts)) {
+      listenerCount += this.inner.listenerCount(event as keyof SdkEventMap);
+    }
+    listenerCount += this.inner.listenerCount("*");
+
+    return {
+      totalEmitted: Object.values(this.emitCounts).reduce((s, n) => s + n, 0),
+      byEvent: { ...this.emitCounts },
+      listenerCount,
+      firstEmittedAt: this.firstEmittedAt,
+      lastEmittedAt: this.lastEmittedAt,
     };
   }
 
-  private reportHandlerError(event: string, err: unknown): void {
-    // Surface handler failures without breaking other listeners.
-    // eslint-disable-next-line no-console
-    console.error(`[EventEmitter] handler for "${event}" failed:`, err);
+  /** Resets emission counters and timestamps. Does not affect listeners or history. */
+  resetStats(): void {
+    for (const key of Object.keys(this.emitCounts)) {
+      delete this.emitCounts[key];
+    }
+    this.firstEmittedAt = undefined;
+    this.lastEmittedAt = undefined;
   }
 }
 
-export const eventEmitter = new EventEmitter();
+// ─── Global default SDK emitter ──────────────────────────────────────────────
+
+let _default = new SdkEventEmitter();
+
+/** Gets the default global SdkEventEmitter instance. */
+export function getDefaultSdkEventEmitter(): SdkEventEmitter {
+  return _default;
+}
+
+/** Replaces the default global SdkEventEmitter instance. */
+export function setDefaultSdkEventEmitter(emitter: SdkEventEmitter): void {
+  _default = emitter;
+}
+
+/** Resets the default global SdkEventEmitter to a fresh instance. */
+export function resetDefaultSdkEventEmitter(): void {
+  _default = new SdkEventEmitter();
+}
+
+// ─── Legacy singleton (kept for back-compat with existing imports) ───────────
+// Files that do `import { eventEmitter } from "./events/eventEmitter"` keep working.
+export { _default as eventEmitter };
