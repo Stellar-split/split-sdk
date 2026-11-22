@@ -559,6 +559,23 @@ export function isValidAmount(amount: unknown, options?: AmountValidationOptions
 }
 
 /**
+ * Parse an amount into raw stroops, throwing on invalid input.
+ *
+ * This is the canonical `parseAmount` entry point for consumers that need the
+ * normalized `bigint` stroop value directly. It delegates to
+ * {@link validateAmountOrThrow} so all range, precision, and boundary rules are
+ * enforced consistently.
+ *
+ * @param amount - The amount to parse (bigint, number, or string).
+ * @param options - Optional validation configuration.
+ * @returns The parsed amount in stroops as a `bigint`.
+ * @throws {AmountValidationError} If parsing or validation fails.
+ */
+export function parseAmount(amount: unknown, options?: AmountValidationOptions): bigint {
+  return validateAmountOrThrow(amount, options);
+}
+
+/**
  * Reusable validator instance for validating amounts with pre-configured rules.
  */
 export class AmountValidator {
@@ -579,16 +596,9 @@ export class AmountValidator {
   }
 
   /**
-   * Get aggregate validation statistics for this validator's tracked calls.
+   * Parse an amount into stroops using configured defaults combined with per-call overrides.
    */
-  getStats(): AmountValidationStats {
-    return getAmountValidationStats();
-  }
-
-  /**
-   * Reset tracked validation statistics.
-   */
-  resetStats(): void {
-    resetAmountValidationStats();
+  parseAmount(amount: unknown, options?: AmountValidationOptions): bigint {
+    return parseAmount(amount, { ...this.defaultOptions, ...options });
   }
 }

@@ -61,6 +61,25 @@ export interface InvoiceStateSubscriptionHandle {
   updateFilter(newFilter: Partial<InvoiceStateFilter>): void;
 }
 
+export interface InvoiceStateSubscriptionStats {
+  /** Number of currently active subscriptions. */
+  activeSubscriptions: number;
+  /** Total number of subscriptions created since construction. */
+  totalSubscriptions: number;
+  /** Total number of updates delivered to subscriber callbacks. */
+  updatesDelivered: number;
+  /** Total number of updates received from the server (before filtering). */
+  updatesReceived: number;
+  /** Number of successful (re)connections. */
+  reconnects: number;
+  /** Number of state-change events detected (status transitions). */
+  stateChanges: number;
+  /** Number of updates replayed after a reconnect. */
+  replayed: number;
+  /** Whether the underlying socket is currently connected. */
+  connected: boolean;
+}
+
 type SubscriberCallback = (event: InvoiceStateUpdate) => void;
 
 interface ActiveSubscription {
@@ -68,6 +87,8 @@ interface ActiveSubscription {
   filter: InvoiceStateFilter;
   callback: SubscriberCallback;
   active: boolean;
+  /** Last known state per invoice, used for change detection and replay. */
+  lastSeen: Map<string, InvoiceStateUpdate>;
 }
 
 function rpcToWsUrl(url: string): string {
@@ -152,6 +173,19 @@ export class InvoiceStateSubscriber {
   private readonly subscriptions = new Map<string, ActiveSubscription>();
   private nextSubId = 1;
 
+  // Statistics
+  private totalSubscriptions = 0;
+  private updatesDelivered = 0;
+  private updatesReceived = 0;
+  private reconnectCount = 0;
+  private stateChangeCount = 0;
+  private replayedCount = 0;
+
+  // Replay buffer: recent updates retained across reconnects to avoid missed updates.
+  private readonly replayBuffer: InvoiceStateUpdate[] = [];
+  private readonly replayBufferLimit = 256;
+  private hasConnectedOnce = false;
+
   // Lifecycle listeners
   private readonly onConnectListeners = new Set<() => void>();
   private readonly onDisconnectListeners = new Set<(reason?: string) => void>();
@@ -194,6 +228,22 @@ export class InvoiceStateSubscriber {
   }
 
   /**
+   * Returns a snapshot of subscription statistics.
+   */
+  getStats(): InvoiceStateSubscriptionStats {
+    return {
+      activeSubscriptions: this.subscriptions.size,
+      totalSubscriptions: this.totalSubscriptions,
+      updatesDelivered: this.updatesDelivered,
+      updatesReceived: this.updatesReceived,
+      reconnects: this.reconnectCount,
+      stateChanges: this.stateChangeCount,
+      replayed: this.replayedCount,
+      connected: this.connected,
+    };
+  }
+
+  /**
    * Subscribe to real-time invoice state updates with optional filter criteria.
    */
   subscribe(
@@ -209,9 +259,11 @@ export class InvoiceStateSubscriber {
       filter: normalizedFilter,
       callback,
       active: true,
+      lastSeen: new Map(),
     };
 
     this.subscriptions.set(subId, subRecord);
+    this.totalSubscriptions++;
 
     if (this.connected && this.ws?.readyState === 1) {
       this.sendSubscriptionFilter(subRecord);
@@ -271,15 +323,26 @@ export class InvoiceStateSubscriber {
     }
 
     this.ws.onopen = () => {
+      const isReconnect = this.hasConnectedOnce;
       this.connected = true;
       this.reconnectAttempts = 0;
       this.startHeartbeat();
+
+      if (isReconnect) {
+        this.reconnectCount++;
+      }
+      this.hasConnectedOnce = true;
 
       // Resubscribe all active subscriptions
       for (const sub of this.subscriptions.values()) {
         if (sub.active) {
           this.sendSubscriptionFilter(sub);
         }
+      }
+
+      // Replay buffered updates so no updates are missed across reconnects.
+      if (isReconnect) {
+        this.replayBufferedUpdates();
       }
 
       for (const cb of this.onConnectListeners) {
@@ -334,18 +397,89 @@ export class InvoiceStateSubscriber {
       const update = this.normalizeInvoiceStateUpdate(raw);
       if (!update) return;
 
-      // Dispatch to all matching subscriptions
-      for (const sub of this.subscriptions.values()) {
-        if (sub.active && matchesFilter(update, sub.filter)) {
-          try {
-            sub.callback(update);
-          } catch {
-            // Consumer handler error should not break event loop
+      this.updatesReceived++;
+      this.bufferUpdate(update);
+      this.dispatchUpdate(update);
+    } catch {
+      // Malformed json message
+    }
+  }
+
+  /**
+   * Detects whether an update represents a state change for a given subscription.
+   * A change occurs when the status transitions or the funded amount increases.
+   */
+  private detectStateChange(
+    sub: ActiveSubscription,
+    update: InvoiceStateUpdate,
+  ): boolean {
+    const previous = sub.lastSeen.get(update.invoiceId);
+    if (!previous) return false;
+    if (previous.status !== update.status) return true;
+    if (update.funded !== previous.funded) return true;
+    return false;
+  }
+
+  /**
+   * Dispatches an update to all matching active subscriptions, applying
+   * change detection and updating per-subscription last-seen state.
+   */
+  private dispatchUpdate(update: InvoiceStateUpdate): void {
+    for (const sub of this.subscriptions.values()) {
+      if (!sub.active) continue;
+      if (!matchesFilter(update, sub.filter)) continue;
+
+      const changed = this.detectStateChange(sub, update);
+      if (changed) {
+        this.stateChangeCount++;
+        if (update.previousStatus === undefined) {
+          const previous = sub.lastSeen.get(update.invoiceId);
+          if (previous) {
+            update = { ...update, previousStatus: previous.status };
           }
         }
       }
-    } catch {
-      // Malformed json message
+
+      sub.lastSeen.set(update.invoiceId, update);
+
+      try {
+        sub.callback(update);
+        this.updatesDelivered++;
+      } catch {
+        // Consumer handler error should not break event loop
+      }
+    }
+  }
+
+  private bufferUpdate(update: InvoiceStateUpdate): void {
+    this.replayBuffer.push(update);
+    if (this.replayBuffer.length > this.replayBufferLimit) {
+      this.replayBuffer.shift();
+    }
+  }
+
+  /**
+   * Replays buffered updates after a reconnect, delivering only updates that
+   * are newer than what each subscription has already seen.
+   */
+  private replayBufferedUpdates(): void {
+    if (this.replayBuffer.length === 0) return;
+    const buffered = this.replayBuffer.slice();
+    for (const update of buffered) {
+      for (const sub of this.subscriptions.values()) {
+        if (!sub.active) continue;
+        if (!matchesFilter(update, sub.filter)) continue;
+        const previous = sub.lastSeen.get(update.invoiceId);
+        if (previous && previous.timestamp >= update.timestamp) continue;
+        sub.lastSeen.set(update.invoiceId, update);
+        try {
+          sub.callback(update);
+          this.updatesDelivered++;
+          this.replayedCount++;
+        } catch {
+          // Consumer handler error should not break event loop
+        }
+      }
     }
   }
 
@@ -490,6 +624,23 @@ export class InvoiceStateSubscriber {
     this.cleanupSocket();
   }
 
+  /**
+   * Remove all subscriptions, clear timers, and tear down the socket.
+   * After destroy the subscriber cannot be reused.
+   */
+  destroy(): void {
+    for (const sub of this.subscriptions.values()) {
+      sub.active = false;
+    }
+    this.subscriptions.clear();
+    this.disconnect();
+    this.onConnectListeners.clear();
+    this.onDisconnectListeners.clear();
+    this.onReconnectListeners.clear();
+    this.onReconnectFailedListeners.clear();
+    this.onErrorListeners.clear();
+  }
+
   // -------------------------------------------------------------------------
   // Event Emitter Helpers
   // -------------------------------------------------------------------------
@@ -518,5 +669,70 @@ export class InvoiceStateSubscriber {
         break;
     }
     return this;
+  }
+
+  off(event: string, cb: (...args: any[]) => void): this {
+    switch (event) {
+      case "connect":
+        this.onConnectListeners.delete(cb as () => void);
+        break;
+      case "disconnect":
+        this.onDisconnectListeners.delete(cb as (reason?: string) => void);
+        break;
+      case "reconnect":
+        this.onReconnectListeners.delete(cb as (attempt: number, max: number) => void);
+        break;
+      case "reconnect_failed":
+        this.onReconnectFailedListeners.delete(cb as (attempts: number) => void);
+        break;
+      case "error":
+        this.onErrorListeners.delete(cb as (err: Error) => void);
+        break;
+    }
+    return this;
+  }
+}
+
+/**
+ * Manages a set of named handlers over an InvoiceStateSubscriber, tracking
+ * handler ids so they can be removed individually or all at once.
+ */
+export class SubscriptionManager {
+  private readonly subscriber: InvoiceStateSubscriber;
+  private readonly handlers = new Map<string, InvoiceStateSubscriptionHandle>();
+  private nextHandlerId = 1;
+
+  constructor(subscriber: InvoiceStateSubscriber) {
+    this.subscriber = subscriber;
+  }
+
+  get size(): number {
+    return this.handlers.size;
+  }
+
+  subscribe(
+    filter: InvoiceStateFilter | string,
+    callback: SubscriberCallback,
+  ): string {
+    const handle = this.subscriber.subscribe(filter, callback);
+    const handlerId = `handler_${this.nextHandlerId++}`;
+    this.handlers.set(handlerId, handle);
+    return handlerId;
+  }
+
+  removeHandler(handlerId: string): boolean {
+    const handle = this.handlers.get(handlerId);
+    if (!handle) return false;
+    handle.unsubscribe();
+    this.handlers.delete(handlerId);
+    return true;
+  }
+
+  destroy(): void {
+    for (const handle of this.handlers.values()) {
+      handle.unsubscribe();
+    }
+    this.handlers.clear();
+    this.subscriber.destroy();
   }
 }
