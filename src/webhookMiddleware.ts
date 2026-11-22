@@ -13,6 +13,12 @@
 import type { Request, Response, NextFunction } from "express";
 import { ValidationError } from "./errors.js";
 import { TypedEventEmitter } from "./events/TypedEventEmitter.js";
+import {
+  CsrfProtection,
+  CsrfValidationError,
+  type CsrfOptions,
+  type CsrfEventContext,
+} from "./csrf.js";
 
 // ============================================================================
 // Type Definitions
@@ -53,6 +59,20 @@ export interface WebhookOptions {
    * @default "x-stellarsplit-nonce"
    */
   nonceHeader?: string;
+
+  /**
+   * Enable CSRF protection for state-changing webhook requests.
+   * When enabled, requests must carry a valid CSRF token (via the configured
+   * header or cookie) or they are rejected with a 403 response.
+   * @default false
+   */
+  csrf?: boolean;
+
+  /**
+   * Configuration for the CSRF protection layer.
+   * Only used when {@link WebhookOptions.csrf} is `true`.
+   */
+  csrfOptions?: CsrfOptions;
 }
 
 /**
@@ -234,6 +254,11 @@ export type WebhookEventEmitter = TypedEventEmitter<WebhookEventMap>;
 export interface WebhookMiddleware extends RequestHandler {
   /** Emits every validated delivery, keyed by {@link InvoiceEventType}. */
   emitter: WebhookEventEmitter;
+  /**
+   * The CSRF protection instance backing this middleware, if CSRF is enabled.
+   * Exposed so callers can generate/refresh tokens and subscribe to CSRF events.
+   */
+  csrf?: CsrfProtection;
 }
 
 // ============================================================================
@@ -537,13 +562,27 @@ export class InvalidPayloadError extends WebhookValidationError {
 // Webhook Middleware Factory
 // ============================================================================
 
-const DEFAULT_OPTIONS: Required<WebhookOptions> = {
+const DEFAULT_OPTIONS: Required<Omit<WebhookOptions, "csrfOptions">> = {
   toleranceSeconds: 300, // 5 minutes
   nonceWindowSize: 1000,
   signatureHeader: "x-stellarsplit-signature",
   timestampHeader: "x-stellarsplit-timestamp",
   nonceHeader: "x-stellarsplit-nonce",
+  csrf: false,
 };
+
+/**
+ * HTTP methods that mutate server state and therefore require CSRF protection.
+ */
+const STATE_CHANGING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/**
+ * Determine whether a request needs CSRF validation.
+ */
+function requiresCsrfValidation(req: Request): boolean {
+  const method = (req.method ?? "GET").toUpperCase();
+  return STATE_CHANGING_METHODS.has(method);
+}
 
 /**
  * Create a secure webhook middleware for Express/Next.js.
@@ -599,13 +638,18 @@ export function createWebhookMiddleware(
     throw new ValidationError("Webhook secret must be a non-empty string");
   }
 
-  const config: Required<WebhookOptions> = {
+  const config: Required<Omit<WebhookOptions, "csrfOptions">> = {
     ...DEFAULT_OPTIONS,
     ...options,
   };
 
   // Initialize LRU cache for nonce tracking
   const nonceCache = new LRUCache<string, number>(config.nonceWindowSize);
+
+  // Optional CSRF protection layer for state-changing requests.
+  const csrfProtection = config.csrf
+    ? new CsrfProtection(options?.csrfOptions)
+    : undefined;
 
   // Typed emitter that publishes every successfully validated delivery, so
   // callers can subscribe per event type instead of branching in a handler.
@@ -623,6 +667,32 @@ export function createWebhookMiddleware(
     next: NextFunction,
   ): Promise<void> => {
     try {
+      // ====================================================================
+      // Step 0: CSRF validation for state-changing requests
+      // ====================================================================
+      if (csrfProtection && requiresCsrfValidation(req)) {
+        const result = csrfProtection.validateRequest(req);
+
+        if (!result.valid) {
+          // Emit a rejection event for observability before failing the request.
+          csrfProtection.emitRejected(req, result.reason ?? "invalid_token");
+          res.status(403).json({
+            error: "CsrfValidationError",
+            message: result.reason ?? "CSRF validation failed",
+          });
+          return;
+        }
+
+        // If the token was rotated during validation, surface the new token so
+        // the client can refresh its stored value.
+        if (result.refreshedToken) {
+          res.setHeader(
+            csrfProtection.options.headerName,
+            result.refreshedToken,
+          );
+        }
+      }
+
       // ====================================================================
       // Step 1: Extract and validate headers
       // ====================================================================
@@ -757,6 +827,16 @@ export function createWebhookMiddleware(
       // All checks passed - proceed to next middleware/handler
       next();
     } catch (error) {
+      // Handle CSRF validation errors
+      if (error instanceof CsrfValidationError) {
+        res.status(403).json({
+          error: error.name,
+          message: error.message,
+          code: error.code,
+        });
+        return;
+      }
+
       // Handle validation errors
       if (error instanceof WebhookValidationError) {
         res.status(400).json({
@@ -779,7 +859,70 @@ export function createWebhookMiddleware(
   // Attach the emitter so callers can `middleware.emitter.on("invoice.paid", ...)`.
   handler.emitter = emitter;
 
+  // Expose the CSRF protection instance (if enabled) so callers can generate
+  // tokens, refresh them, and subscribe to CSRF events.
+  if (csrfProtection) {
+    handler.csrf = csrfProtection;
+  }
+
   return handler;
+}
+
+/**
+ * Generate a fresh CSRF token for a client session.
+ *
+ * Convenience wrapper around {@link CsrfProtection.generateToken} for callers
+ * that only need a token without constructing a full webhook middleware.
+ *
+ * @param options - CSRF configuration options
+ * @returns A newly generated CSRF token
+ */
+export function generateCsrfToken(options?: CsrfOptions): string {
+  return new CsrfProtection(options).generateToken();
+}
+
+/**
+ * Validate a CSRF token against a request without running the full middleware.
+ *
+ * @param req - The incoming request
+ * @param options - CSRF configuration options
+ * @returns True if the request carries a valid CSRF token
+ */
+export function validateCsrfToken(
+  req: Request,
+  options?: CsrfOptions,
+): boolean {
+  return new CsrfProtection(options).validateRequest(req).valid;
+}
+
+/**
+ * Refresh a CSRF token, returning a new token bound to the same session.
+ *
+ * @param token - The existing (possibly expired) token
+ * @param options - CSRF configuration options
+ * @returns A refreshed CSRF token
+ */
+export function refreshCsrfToken(token: string, options?: CsrfOptions): string {
+  return new CsrfProtection(options).refreshToken(token);
+}
+
+/**
+ * Subscribe to CSRF events emitted by a webhook middleware.
+ *
+ * @param middleware - A middleware created with CSRF enabled
+ * @param handler - Callback invoked for every CSRF event
+ * @returns An unsubscribe function
+ */
+export function onCsrfEvent(
+  middleware: WebhookMiddleware,
+  handler: (event: CsrfEventContext) => void,
+): () => void {
+  if (!middleware.csrf) {
+    throw new ValidationError(
+      "CSRF protection is not enabled on this webhook middleware",
+    );
+  }
+  return middleware.csrf.on(handler);
 }
 
 // ============================================================================

@@ -9,6 +9,10 @@
  * - Split ratios and totals
  * - Invoice metadata
  * - Recipient deduplication
+ *
+ * Also provides a validation-hook entry point (Issue #1251) that runs the
+ * input sanitizer rules before delegating to the individual validators, so
+ * every validator call is sanitized and whitelist-enforced.
  */
 
 export * from "./deadlineValidator.js";

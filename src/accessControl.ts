@@ -291,6 +291,136 @@ export class SovereignIdentityManager {
   }
 }
 
+/**
+ * Key access control (issue #1254).
+ *
+ * Provides per-key access rules for the secure key store. Rules are
+ * evaluated before any key material is read or rotated, and every denied
+ * attempt is emitted as an audit event so that unauthorized access is
+ * observable without exposing key material.
+ */
+
+export interface KeyAccessRule {
+  /** Principal (Stellar address or service identity) allowed by the rule. */
+  principal: string;
+  /** Operations the principal may perform on the key. */
+  operations: KeyOperation[];
+}
+
+export type KeyOperation = "read" | "rotate" | "use";
+
+export interface KeyAccessDeniedEvent {
+  keyId: string;
+  principal: string;
+  operation: KeyOperation;
+  reason: string;
+  timestamp: number;
+}
+
+export type KeyAccessDeniedListener = (event: KeyAccessDeniedEvent) => void;
+
+export interface KeyAccessPolicyOptions {
+  /** Default operations granted when no explicit rule matches. */
+  defaultOperations?: KeyOperation[];
+  now?: () => number;
+}
+
+/**
+ * Evaluates per-key access rules and emits audit events on denial.
+ *
+ * Rules are keyed by key id and principal. When no rule exists for a
+ * principal, the configured default operations apply (none by default),
+ * ensuring deny-by-default semantics.
+ */
+export class KeyAccessPolicy {
+  private readonly rules = new Map<string, Map<string, Set<KeyOperation>>>();
+  private readonly defaultOperations: Set<KeyOperation>;
+  private readonly listeners = new Set<KeyAccessDeniedListener>();
+  private readonly now: () => number;
+
+  constructor(options: KeyAccessPolicyOptions = {}) {
+    this.defaultOperations = new Set(options.defaultOperations ?? []);
+    this.now = options.now ?? Date.now;
+  }
+
+  /**
+   * Register a listener for access-denied audit events.
+   *
+   * @returns An unsubscribe function.
+   */
+  onAccessDenied(listener: KeyAccessDeniedListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  /**
+   * Define (or replace) the access rule for a principal on a key.
+   */
+  setRule(keyId: string, rule: KeyAccessRule): void {
+    let principals = this.rules.get(keyId);
+    if (!principals) {
+      principals = new Map();
+      this.rules.set(keyId, principals);
+    }
+    principals.set(rule.principal, new Set(rule.operations));
+  }
+
+  /**
+   * Remove the access rule for a principal on a key.
+   */
+  removeRule(keyId: string, principal: string): void {
+    this.rules.get(keyId)?.delete(principal);
+  }
+
+  /**
+   * Check whether a principal may perform an operation on a key.
+   *
+   * Emits an access-denied audit event when the operation is not allowed.
+   */
+  check(keyId: string, principal: string, operation: KeyOperation): boolean {
+    const allowed = this.isAllowed(keyId, principal, operation);
+    if (!allowed) {
+      this.emitDenied({
+        keyId,
+        principal,
+        operation,
+        reason: "operation not permitted by key access policy",
+        timestamp: this.now(),
+      });
+    }
+    return allowed;
+  }
+
+  /**
+   * Assert that a principal may perform an operation, throwing otherwise.
+   *
+   * The thrown error never includes key material.
+   */
+  assert(keyId: string, principal: string, operation: KeyOperation): void {
+    if (!this.check(keyId, principal, operation)) {
+      throw new Error(
+        `Access denied: ${principal} may not ${operation} key ${keyId}`,
+      );
+    }
+  }
+
+  private isAllowed(
+    keyId: string,
+    principal: string,
+    operation: KeyOperation,
+  ): boolean {
+    const operations =
+      this.rules.get(keyId)?.get(principal) ?? this.defaultOperations;
+    return operations.has(operation);
+  }
+
+  private emitDenied(event: KeyAccessDeniedEvent): void {
+    for (const listener of this.listeners) {
+      listener(event);
+    }
+  }
+}
+
 export type WithdrawalStatus =
   | "pending"
   | "approved"
