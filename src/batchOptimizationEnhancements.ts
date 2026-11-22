@@ -28,6 +28,30 @@ export interface BatchOptimizerOptions {
   priorityOrder?: "asc" | "desc";
 }
 
+export interface BatchStats {
+  /** Total operations submitted to the batch. */
+  totalOps: number;
+  /** Operations that completed successfully. */
+  succeeded: number;
+  /** Operations that failed. */
+  failed: number;
+  /** Batches that completed with a mix of successes and failures. */
+  partialBatches: number;
+  /** Batches that completed with no failures. */
+  successfulBatches: number;
+  /** Batches that completed with no successes. */
+  failedBatches: number;
+  /** Total wall-clock time for the batch run. */
+  durationMs: number;
+}
+
+export interface BatchExecutionResult<T> {
+  results: BatchOpResult<T>[];
+  stats: BatchStats;
+  /** True when at least one op succeeded and at least one failed. */
+  partial: boolean;
+}
+
 /**
  * Execute batch operations in parallel with concurrency control.
  */
@@ -58,6 +82,33 @@ export async function executeInParallel<T>(
     }
   }
   return results;
+}
+
+/**
+ * Aggregate batch results into statistics.
+ */
+export function computeBatchStats<T>(
+  results: BatchOpResult<T>[],
+  durationMs: number
+): BatchStats {
+  let succeeded = 0;
+  let failed = 0;
+  for (const r of results) {
+    if (r.status === "fulfilled") succeeded++;
+    else failed++;
+  }
+  const partialBatches = succeeded > 0 && failed > 0 ? 1 : 0;
+  const successfulBatches = failed === 0 && succeeded > 0 ? 1 : 0;
+  const failedBatches = succeeded === 0 && failed > 0 ? 1 : 0;
+  return {
+    totalOps: results.length,
+    succeeded,
+    failed,
+    partialBatches,
+    successfulBatches,
+    failedBatches,
+    durationMs,
+  };
 }
 
 /**
@@ -127,6 +178,17 @@ export class BatchOptimizer {
     return executeInParallel(ops, executor, this.options);
   }
 
+  /** Execute in parallel and return results with aggregated statistics. */
+  async executeParallelWithStats<T>(
+    ops: BatchOp[],
+    executor: (op: BatchOp) => Promise<T>
+  ): Promise<BatchExecutionResult<T>> {
+    const start = Date.now();
+    const results = await this.executeParallel(ops, executor);
+    const stats = computeBatchStats(results, Date.now() - start);
+    return { results, stats, partial: stats.partialBatches > 0 };
+  }
+
   /** Full optimization pipeline: deduplicate -> prioritize -> execute in parallel */
   async optimize<T>(
     ops: BatchOp[],
@@ -135,5 +197,16 @@ export class BatchOptimizer {
     const deduped = this.deduplicate(ops);
     const prioritized = this.prioritize(deduped);
     return this.executeParallel(prioritized, executor);
+  }
+
+  /** Full optimization pipeline with aggregated statistics. */
+  async optimizeWithStats<T>(
+    ops: BatchOp[],
+    executor: (op: BatchOp) => Promise<T>
+  ): Promise<BatchExecutionResult<T>> {
+    const start = Date.now();
+    const results = await this.optimize(ops, executor);
+    const stats = computeBatchStats(results, Date.now() - start);
+    return { results, stats, partial: stats.partialBatches > 0 };
   }
 }

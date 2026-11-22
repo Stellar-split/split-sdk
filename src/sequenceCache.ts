@@ -9,6 +9,7 @@
 import { Horizon } from "@stellar/stellar-sdk";
 import { SimpleCache } from "./cache.js";
 import { SequenceCacheError } from "./errors.js";
+import { NonceManager } from "./nonceManager.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -81,6 +82,7 @@ export class SequenceCache {
   private readonly server: Horizon.Server;
   private readonly entries: SimpleCache<SequenceEntry>;
   private readonly ttlMs: number;
+  private readonly nonceManager: NonceManager;
 
   /**
    * @param horizonUrl - Horizon server URL (e.g. `"https://horizon.stellar.org"`).
@@ -94,6 +96,7 @@ export class SequenceCache {
       ttlMs: this.ttlMs,
       maxEntries: config.maxEntries ?? 10_000,
     });
+    this.nonceManager = new NonceManager();
   }
 
   // -------------------------------------------------------------------------
@@ -124,7 +127,42 @@ export class SequenceCache {
     entry.offset += 1;
     this.entries.set(`seq:${accountId}`, entry);
 
+    // Record the issued nonce so conflicts can be detected and recovered.
+    this.nonceManager.recordIssued(accountId, nextSeq);
+
     return nextSeq;
+  }
+
+  /**
+   * Report that `sequence` was rejected by Horizon (e.g. a
+   * `SEQUENCE_NUMBER_TOO_OLD` / `tx_bad_seq` submission error).  The nonce
+   * manager marks the nonce as conflicted and the cached entry is
+   * invalidated so the next {@link getSequence} call re-fetches the true
+   * on-chain value.
+   *
+   * @returns `true` when the sequence was known and has been recovered.
+   */
+  async handleSequenceConflict(accountId: string, sequence: bigint): Promise<boolean> {
+    const known = this.nonceManager.markConflict(accountId, sequence);
+    await this.invalidate(accountId);
+    return known;
+  }
+
+  /**
+   * Recover the sequence state for `accountId` after a conflict: discard any
+   * locally tracked nonces and re-fetch the on-chain sequence number.
+   */
+  async recover(accountId: string): Promise<void> {
+    this.nonceManager.reset(accountId);
+    await this.invalidate(accountId);
+  }
+
+  /**
+   * Return nonce tracking statistics for all accounts (or a single account
+   * when `accountId` is provided).
+   */
+  getNonceStats(accountId?: string) {
+    return this.nonceManager.getStats(accountId);
   }
 
   /**
@@ -179,6 +217,7 @@ export class SequenceCache {
    */
   clear(): void {
     this.entries.clear();
+    this.nonceManager.reset();
   }
 
   /**
@@ -210,6 +249,7 @@ export class SequenceCache {
       const base = BigInt(account.sequenceNumber());
       const entry = new SequenceEntry(base, 1, Date.now(), 'valid');
       this.entries.set(`seq:${accountId}`, entry);
+      this.nonceManager.syncBase(accountId, base);
       return entry;
     } catch (err) {
       if (existingEntry && existingEntry.state === 'refreshing') {

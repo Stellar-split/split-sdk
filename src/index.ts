@@ -68,6 +68,86 @@ export {
   serializeInvoiceTemplate,
   deserializeInvoiceTemplate,
 } from "./invoiceTemplate.js";
+
+// Invoice QR code generation (#1241)
+export {
+  generateInvoiceQRCode,
+  generateInvoiceQRCodeDataUrl,
+  generateInvoiceQRCodeSvg,
+  generateInvoiceQRCodeBuffer,
+  buildInvoiceQRPayload,
+  DEFAULT_QR_OPTIONS,
+  QR_SIZE_PRESETS,
+  QR_EXPORT_FORMATS,
+} from "./invoiceQrCode.js";
+export type {
+  InvoiceQRCodeOptions,
+  InvoiceQRCodeResult,
+  InvoiceQRCodePayload,
+  QRExportFormat,
+  QRSizePreset,
+  QRErrorCorrectionLevel,
+  QRColorOptions,
+} from "./invoiceQrCode.js";
+
+// Invoice templates (#1244)
+export {
+  InvoiceTemplateRegistry,
+  defaultInvoiceTemplateRegistry,
+  createInvoiceTemplate,
+  applyInvoiceTemplate,
+  shareInvoiceTemplate,
+  importSharedInvoiceTemplate,
+  getInvoiceTemplateUsage,
+  resetInvoiceTemplateUsage,
+} from "./invoiceTemplates.js";
+export type {
+  InvoiceTemplateDefinition,
+  InvoiceTemplateCustomization,
+  InvoiceTemplateUsageStats,
+  SharedInvoiceTemplate,
+  CreateInvoiceTemplateParams,
+  ApplyInvoiceTemplateParams,
+  ApplyInvoiceTemplateResult,
+} from "./invoiceTemplates.js";
+
+// Recipient suggestions (#1245)
+export {
+  RecipientSuggestionEngine,
+  defaultRecipientSuggestionEngine,
+  suggestRecipients,
+  recordRecipientSelection,
+  getRecipientSuggestionStats,
+  resetRecipientSuggestionStats,
+} from "./recipientSuggestions.js";
+export type {
+  RecipientSuggestion,
+  RecipientSuggestionOptions,
+  RecipientSuggestionFilter,
+  RecipientSuggestionStats,
+  RecipientHistoryEntry,
+} from "./recipientSuggestions.js";
+
+// Payment reminders (#1246)
+export {
+  PaymentReminderScheduler,
+  defaultPaymentReminderScheduler,
+  schedulePaymentReminder,
+  cancelPaymentReminder,
+  getPaymentReminder,
+  listPaymentReminders,
+  getPaymentReminderStats,
+  resetPaymentReminderStats,
+} from "./paymentReminders.js";
+export type {
+  PaymentReminderConfig,
+  PaymentReminderScheduleOptions,
+  PaymentReminder,
+  PaymentReminderStatus,
+  PaymentReminderDelivery,
+  PaymentReminderStats,
+  PaymentReminderDeliveryHandler,
+} from "./paymentReminders.js";
 export {
   validateBulkImport,
   SUPPORTED_SCHEMA_VERSIONS,
@@ -456,6 +536,29 @@ export { connectWallet, getPublicKey, signTransaction } from "./wallet.js";
 export { LobstrAdapter } from "./wallets/adapters/LobstrAdapter.js";
 export type { LobstrAdapterOptions } from "./wallets/adapters/LobstrAdapter.js";
 export { WalletConnectionTimeoutError, isWalletConnectionTimeoutError } from "./errors.js";
+
+// Multi-wallet support (issue #1221)
+export { MultiWalletManager } from "./wallets/MultiWalletManager.js";
+export { WalletSessionManager } from "./wallets/WalletSessionManager.js";
+export { MetaMaskAdapter } from "./wallets/adapters/MetaMaskAdapter.js";
+export { WalletConnectAdapter } from "./wallets/adapters/WalletConnectAdapter.js";
+export { LedgerAdapter } from "./wallets/adapters/LedgerAdapter.js";
+export { FreighterAdapter } from "./wallets/adapters/FreighterAdapter.js";
+export type {
+  WalletAdapter,
+  WalletType,
+  WalletDetectionResult,
+} from "./wallets/types.js";
+export {
+  WalletAdapterError,
+  isWalletAdapterError,
+  WalletNotDetectedError,
+  isWalletNotDetectedError,
+  WalletSwitchError,
+  isWalletSwitchError,
+  UnsupportedWalletError,
+  isUnsupportedWalletError,
+} from "./errors.js";
 
 export { checkRPCHealth } from "./health.js";
 export { FallbackChain, FallbackExhaustedError } from "./fallbackChain.js";
@@ -1132,47 +1235,8 @@ export type { MemoryReport } from "./memoryOptimizer.js";
 export { StreamingDatasetIterator } from "./streamingDataset.js";
 export type { PageResult, StreamingDatasetOptions } from "./streamingDataset.js";
 
-// Invoice Collaboration (#1247)
-export { InvoiceCollaborationManager } from "./invoiceCollaboration.js";
-export type {
-  CollaboratorRole,
-  Collaborator,
-  InvoiceComment,
-  CollaborationApproval,
-  CollaborationNotification,
-  CollaborationEventType,
-  CollaborationEvent,
-  CollaborationEventListener,
-  InvoiceCollaborationOptions,
-} from "./invoiceCollaboration.js";
+// API Reference Documentation Generator (#1197)
+export * from './apiDocGenerator.js';
 
-// Smart Contract ABI Caching (#1248)
-export { ContractAbiCache } from "./contractAbiCache.js";
-export type {
-  AbiCacheEntry,
-  AbiCacheStats,
-  AbiCacheOptions,
-  AbiLoader,
-} from "./contractAbiCache.js";
-
-// Payment Analytics (#1249)
-export { PaymentAnalytics } from "./paymentAnalytics.js";
-export type {
-  PaymentAnalyticsOptions,
-  PaymentMetric,
-  PaymentTrend,
-  PaymentAnalyticsReport,
-  PaymentDashboard,
-  PaymentDashboardWidget,
-  AnalyticsPeriod,
-} from "./paymentAnalytics.js";
-
-// Invoice Versioning (#1250)
-export { InvoiceVersionTracker, InvoiceVersionManager } from "./invoiceVersioning.js";
-export type {
-  InvoiceVersion,
-  InvoiceVersionDiff,
-  VersionStore,
-  RollbackOptions,
-  InvoiceRollbackResult,
-} from "./invoiceVersioning.js";
+// SDK Cookbook (#1198)
+export * from './cookbook.js';

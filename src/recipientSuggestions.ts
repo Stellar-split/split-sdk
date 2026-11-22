@@ -44,6 +44,55 @@ export interface RecipientSuggestion {
   lastInteraction?: number;
 }
 
+/**
+ * Explicit feedback recorded for a suggested recipient.  Positive feedback
+ * (accepted) boosts a recipient's learned affinity; negative feedback
+ * (rejected) penalises it.  Feedback is keyed by address and accumulated.
+ */
+export interface RecipientFeedback {
+  /** Stellar address the feedback applies to. */
+  address: string;
+  /** Whether the suggestion was accepted (true) or dismissed (false). */
+  accepted: boolean;
+  /** Unix timestamp in seconds when the feedback was recorded. */
+  timestamp: number;
+}
+
+/**
+ * Optional metadata used to filter candidates by asset, network or tags.
+ * Candidates without metadata are only filtered out when a filter is set.
+ */
+export interface RecipientMetadata {
+  /** Asset code the recipient prefers to receive (e.g. "XLM", "USDC"). */
+  asset?: string;
+  /** Network identifier the recipient operates on (e.g. "testnet"). */
+  network?: string;
+  /** Free-form tags associated with the recipient. */
+  tags?: string[];
+}
+
+/** Filtering criteria applied to candidates before scoring. */
+export interface RecipientSuggestionFilter {
+  /** Only suggest recipients whose metadata asset matches. */
+  asset?: string;
+  /** Only suggest recipients whose metadata network matches. */
+  network?: string;
+  /** Only suggest recipients whose metadata tags include all of these. */
+  tags?: string[];
+}
+
+/** Aggregate statistics describing suggestion quality over time. */
+export interface SuggestionStats {
+  /** Total number of suggestions served across all calls. */
+  served: number;
+  /** Total number of suggestions accepted via feedback. */
+  accepted: number;
+  /** Total number of suggestions rejected via feedback. */
+  rejected: number;
+  /** Accepted / served ratio in [0, 1]; 0 when nothing has been served. */
+  hitRate: number;
+}
+
 /** Input candidates for a suggestion run. */
 export interface SuggestRecipientsOptions {
   /**
@@ -67,12 +116,25 @@ export interface SuggestRecipientsOptions {
    * Defaults to Date.now() / 1000.
    */
   nowSeconds?: number;
+  /** Optional metadata keyed by address, used for asset/network/tag filters. */
+  metadata?: Record<string, RecipientMetadata>;
+  /** Optional asset/network/tag filtering criteria. */
+  filter?: RecipientSuggestionFilter;
+  /**
+   * Recorded feedback used to learn recipient affinities.  Accepted feedback
+   * boosts a recipient's score; rejected feedback lowers it.
+   */
+  feedback?: RecipientFeedback[];
 }
 
 /** Weight applied to the frequency signal in the composite score. */
 const FREQUENCY_WEIGHT = 0.6;
 /** Weight applied to the recency signal in the composite score. */
 const RECENCY_WEIGHT = 0.4;
+/** Weight applied to the learned feedback signal in the composite score. */
+const FEEDBACK_WEIGHT = 0.2;
+/** Score delta applied per net accepted feedback, capped by the weight. */
+const FEEDBACK_STEP = 0.1;
 
 /**
  * Default maximum number of suggestions returned per call.
@@ -86,10 +148,109 @@ export const DEFAULT_SUGGESTION_LIMIT = 10;
 const RECENCY_HALF_LIFE_SECONDS = 30 * 24 * 60 * 60; // 30 days
 
 /**
+ * Compute a learned feedback signal in [0, 1] for an address from recorded
+ * feedback.  Net accepted feedback is scaled by {@link FEEDBACK_STEP} and
+ * clamped to the {@link FEEDBACK_WEIGHT} ceiling; a neutral 0.5 baseline is
+ * used when no feedback exists so the signal does not distort cold recipients.
+ */
+function feedbackSignal(
+  address: string,
+  feedback: RecipientFeedback[] | undefined,
+): number {
+  if (!feedback || feedback.length === 0) return 0.5;
+  let net = 0;
+  for (const f of feedback) {
+    if (f.address !== address) continue;
+    net += f.accepted ? 1 : -1;
+  }
+  const delta = net * FEEDBACK_STEP;
+  const clamped = Math.max(-FEEDBACK_WEIGHT, Math.min(FEEDBACK_WEIGHT, delta));
+  return 0.5 + clamped;
+}
+
+/**
+ * Determine whether a candidate passes the asset/network/tag filter.  When no
+ * filter is supplied every candidate passes.  Candidates lacking metadata are
+ * rejected only when the corresponding filter criterion is set.
+ */
+function passesFilter(
+  address: string,
+  filter: RecipientSuggestionFilter | undefined,
+  metadata: Record<string, RecipientMetadata> | undefined,
+): boolean {
+  if (!filter) return true;
+  const meta = metadata?.[address];
+  if (filter.asset !== undefined) {
+    if (!meta || meta.asset !== filter.asset) return false;
+  }
+  if (filter.network !== undefined) {
+    if (!meta || meta.network !== filter.network) return false;
+  }
+  if (filter.tags?.length) {
+    const tags = new Set(meta?.tags ?? []);
+    for (const tag of filter.tags) {
+      if (!tags.has(tag)) return false;
+    }
+  }
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Statistics tracking
+// ---------------------------------------------------------------------------
+
+const stats: SuggestionStats = {
+  served: 0,
+  accepted: 0,
+  rejected: 0,
+  hitRate: 0,
+};
+
+function recomputeHitRate(): void {
+  stats.hitRate = stats.served > 0 ? stats.accepted / stats.served : 0;
+}
+
+/**
+ * Return a snapshot of the accumulated suggestion statistics.  The returned
+ * object is a copy and can be safely mutated by the caller.
+ */
+export function getSuggestionStats(): SuggestionStats {
+  return { ...stats };
+}
+
+/** Reset accumulated suggestion statistics (primarily for tests). */
+export function resetSuggestionStats(): void {
+  stats.served = 0;
+  stats.accepted = 0;
+  stats.rejected = 0;
+  stats.hitRate = 0;
+}
+
+/**
+ * Record feedback for a previously served suggestion, updating the learned
+ * affinity and the aggregate statistics.  Returns the updated stats snapshot.
+ */
+export function recordSuggestionFeedback(
+  feedback: RecipientFeedback,
+): SuggestionStats {
+  if (!feedback || typeof feedback.address !== "string") {
+    throw new ValidationError("feedback.address must be a string");
+  }
+  if (feedback.accepted) {
+    stats.accepted += 1;
+  } else {
+    stats.rejected += 1;
+  }
+  recomputeHitRate();
+  return getSuggestionStats();
+}
+
+/**
  * Build ranked recipient suggestions from history and optional contacts.
  *
- * Implements matcher (frequency + recency scoring), filtering (exclude list
- * and min-score threshold) and ranking (score-descending, stable tie-break).
+ * Implements matcher (frequency + recency + learned feedback scoring),
+ * filtering (exclude list, asset/network/tag filter and min-score threshold)
+ * and ranking (score-descending, stable tie-break).
  */
 export function suggestRecipients(
   options: SuggestRecipientsOptions,
@@ -127,11 +288,22 @@ export function suggestRecipients(
     recencyScore: number;
   }> = [];
 
+  // Pre-index history by address so scoring is O(candidates + history)
+  // rather than O(candidates * history).
+  const historyByAddress = new Map<string, RecipientInteraction[]>();
+  for (const h of options.history) {
+    if (typeof h.address !== "string" || h.address.length === 0) continue;
+    const bucket = historyByAddress.get(h.address);
+    if (bucket) bucket.push(h);
+    else historyByAddress.set(h.address, [h]);
+  }
+
   let maxFrequency = 0;
   for (const address of candidateSet) {
     if (exclude.has(address)) continue;
+    if (!passesFilter(address, options.filter, options.metadata)) continue;
 
-    const interactions = options.history.filter((h) => h.address === address);
+    const interactions = historyByAddress.get(address) ?? [];
     const interactionCount = interactions.length;
     if (interactionCount === 0) continue; // no history → not a suggestion
 
@@ -150,18 +322,27 @@ export function suggestRecipients(
     });
   }
 
-  // Second pass: normalize frequency, combine with recency, filter, rank.
+  // Second pass: normalize frequency, combine with recency and learned
+  // feedback, filter, rank.
   const scored: RecipientSuggestion[] = perCandidate.map((c) => {
     const frequencyScore =
       maxFrequency > 0 ? c.interactionCount / maxFrequency : 0; // (0, 1]
+    const learned = feedbackSignal(c.address, options.feedback);
     const score =
-      FREQUENCY_WEIGHT * frequencyScore + RECENCY_WEIGHT * c.recencyScore;
+      FREQUENCY_WEIGHT * frequencyScore +
+      RECENCY_WEIGHT * c.recencyScore +
+      FEEDBACK_WEIGHT * learned;
 
     let reason: string;
     if (c.interactionCount === 1) {
       reason = "Paid once previously";
     } else {
       reason = `Paid ${c.interactionCount} times`;
+    }
+    if (learned > 0.5) {
+      reason += " (accepted before)";
+    } else if (learned < 0.5) {
+      reason += " (dismissed before)";
     }
 
     return {
@@ -182,7 +363,10 @@ export function suggestRecipients(
     return a.address < b.address ? -1 : a.address > b.address ? 1 : 0;
   });
 
-  return filtered.slice(0, limit);
+  const results = filtered.slice(0, limit);
+  stats.served += results.length;
+  recomputeHitRate();
+  return results;
 }
 
 /**

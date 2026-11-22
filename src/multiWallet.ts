@@ -21,6 +21,11 @@ import {
   LedgerFirmwareTooOldError,
   type LedgerAdapterOptions,
 } from "./adapters/ledger.js";
+import {
+  FreighterAdapter,
+  FreighterNotInstalledError,
+  FreighterConnectionError,
+} from "./wallets/adapters/FreighterAdapter.js";
 
 // Re-export specific adapters and errors
 export {
@@ -71,6 +76,19 @@ export class WalletNotAvailableError extends StellarSplitError {
       walletName,
     });
     this.name = "WalletNotAvailableError";
+    this.walletName = walletName;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export class DuplicateWalletError extends StellarSplitError {
+  readonly walletName: string;
+
+  constructor(walletName: string) {
+    super(`A wallet adapter named '${walletName}' is already registered.`, "DUPLICATE_WALLET", {
+      walletName,
+    });
+    this.name = "DuplicateWalletError";
     this.walletName = walletName;
     Object.setPrototypeOf(this, new.target.prototype);
   }
@@ -244,6 +262,7 @@ export type MultiWalletEventType =
   | "wallet:connected"
   | "wallet:disconnected"
   | "wallet:account_changed"
+  | "wallet:switched"
   | "fallback:attempted"
   | "fallback:succeeded"
   | "fallback:exhausted";
@@ -287,11 +306,17 @@ export class MultiWalletManager {
 
   /**
    * Register a wallet adapter.
+   *
+   * @throws {@link DuplicateWalletError} if an adapter with the same name is already registered.
    */
   registerAdapter(adapter: WalletAdapter): void {
-    this.adapters.set(adapter.name.toLowerCase(), adapter);
-    if (!this.defaultOrder.includes(adapter.name.toLowerCase())) {
-      this.defaultOrder.push(adapter.name.toLowerCase());
+    const key = adapter.name.toLowerCase();
+    if (this.adapters.has(key)) {
+      throw new DuplicateWalletError(adapter.name);
+    }
+    this.adapters.set(key, adapter);
+    if (!this.defaultOrder.includes(key)) {
+      this.defaultOrder.push(key);
     }
   }
 
@@ -311,12 +336,21 @@ export class MultiWalletManager {
 
   /**
    * Detect which of the registered wallets are currently available in the environment.
+   *
+   * Uses each adapter's `isAvailable()` when present. MetaMask is detected via
+   * `window.ethereum` and WalletConnect via a stored session (handled by their
+   * respective adapters). Adapters without `isAvailable()` are treated as available.
    */
   async detectAvailable(): Promise<WalletAdapter[]> {
     const available: WalletAdapter[] = [];
     for (const adapter of this.adapters.values()) {
       if (typeof (adapter as any).isAvailable === "function") {
-        const ok = await (adapter as any).isAvailable();
+        let ok = false;
+        try {
+          ok = await (adapter as any).isAvailable();
+        } catch {
+          ok = false;
+        }
         if (ok) available.push(adapter);
       } else {
         available.push(adapter);
@@ -336,6 +370,60 @@ export class MultiWalletManager {
 
     const address = await adapter.connect();
     this.setActiveSession(adapter, address);
+    return address;
+  }
+
+  /**
+   * Switch the active wallet to another registered wallet.
+   *
+   * Disconnects the currently active adapter (if any), connects the target
+   * adapter, and re-subscribes account-change listeners. Emits a
+   * `wallet:switched` event on success.
+   *
+   * @throws {@link WalletNotAvailableError} if the target wallet is not registered.
+   */
+  async switchWallet(walletName: string): Promise<string> {
+    const target = this.getAdapter(walletName);
+    if (!target) {
+      throw new WalletNotAvailableError(walletName);
+    }
+
+    const previousName = this.activeAdapter?.name;
+
+    // Tear down the current session before connecting the new wallet.
+    if (this.activeUnsubscribe) {
+      this.activeUnsubscribe();
+      this.activeUnsubscribe = undefined;
+    }
+    if (this.activeAdapter) {
+      try {
+        this.activeAdapter.disconnect();
+      } catch {
+        // Ignore disconnect errors from the previous wallet.
+      }
+    }
+    this.activeAdapter = null;
+    this.connectedAddress = null;
+
+    const address = await target.connect();
+    this.setActiveSession(target, address);
+
+    this.emit({
+      type: "wallet:switched",
+      walletName: target.name,
+      address,
+      timestamp: Date.now(),
+    });
+
+    // Keep the previous wallet name available for listeners that care.
+    if (previousName && previousName !== target.name) {
+      this.emit({
+        type: "wallet:disconnected",
+        walletName: previousName,
+        timestamp: Date.now(),
+      });
+    }
+
     return address;
   }
 

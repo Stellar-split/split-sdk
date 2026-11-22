@@ -57,8 +57,12 @@ class Telemetry {
   /**
    * Mark a span as active. Events recorded until the matching {@link endSpan}
    * (or {@link runInSpan} scope exit) inherit `spanId` as their `parentSpanId`.
+   * No-op when telemetry is uninitialized or opted out.
    */
   startSpan(spanId: string): void {
+    if (!this.config || this.config.optOut) {
+      return;
+    }
     this.spanStack.push(spanId);
   }
 
@@ -68,6 +72,9 @@ class Telemetry {
    * missed `endSpan` call.
    */
   endSpan(spanId?: string): void {
+    if (!this.config || this.config.optOut) {
+      return;
+    }
     if (spanId === undefined) {
       this.spanStack.pop();
       return;
@@ -84,6 +91,9 @@ class Telemetry {
    * always ended, including on throw or rejection.
    */
   runInSpan<T>(spanId: string, fn: () => T): T {
+    if (!this.config || this.config.optOut) {
+      return fn();
+    }
     this.startSpan(spanId);
     let result: T;
     try {
@@ -105,7 +115,7 @@ class Telemetry {
   }
 
   /**
-   * Record a method call.
+   * Record a method call. No-op when telemetry is uninitialized or opted out.
    */
   recordMethod(method: string, success: boolean, durationMs: number): void {
     if (!this.config || this.config.optOut) {
@@ -230,3 +240,29 @@ class Telemetry {
 }
 
 export const telemetry = new Telemetry();
+
+/**
+ * Test-only handle exposing the singleton's internals so opt-out and metric
+ * accuracy can be verified without leaking state between tests.
+ */
+export const __testing = {
+  reset(): void {
+    if (telemetry["flushInterval"]) {
+      clearInterval(telemetry["flushInterval"]);
+    }
+    telemetry["flushInterval"] = null;
+    telemetry["config"] = null;
+    telemetry["events"] = [];
+    telemetry["spanStack"] = [];
+    telemetry["metrics"] = new Map();
+  },
+  getEvents(): TelemetryEvent[] {
+    return telemetry["events"];
+  },
+  getMetrics(): Map<string, MethodMetrics> {
+    return telemetry["metrics"];
+  },
+  getSpanStack(): string[] {
+    return telemetry["spanStack"];
+  },
+};
