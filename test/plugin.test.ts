@@ -122,3 +122,19 @@ describe("LoggingPlugin", () => {
     expect(r.getPlugins()).toContain("LoggingPlugin");
   });
 });
+
+import { composePlugins } from "../src/plugin.js";
+
+describe("composePlugins / uninstall", () => {
+  it("composes hooks and calls uninstall on removal", () => {
+    const calls: string[] = [];
+    const a = { name: "a", uninstall: () => calls.push("ua"), onError: () => { calls.push("ea"); } };
+    const b = { name: "b", uninstall: () => calls.push("ub"), onError: () => { calls.push("eb"); } };
+    const r = new PluginRegistry();
+    r.use(composePlugins("combo", [a, b]));
+    r.runOnError("pay", new Error("x"));
+    r.removePlugin("combo");
+    expect(calls).toEqual(["eb", "ea", "ub", "ua"]);
+    expect(r.getPlugins()).toEqual([]);
+  });
+});
