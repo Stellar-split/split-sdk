@@ -100,6 +100,199 @@ export interface TransactionSimulatorOptions {
   memoryByteWarningThreshold?: bigint;
 }
 
+/**
+ * Options for the unified `simulateTransaction` entry point.
+ */
+export interface SimulateTransactionOptions {
+  /** Optional transaction identifier. */
+  id?: string;
+  /** Network passphrase. */
+  networkPassphrase?: string;
+  /** Source / fee-payer account address. */
+  sourceAccount?: string;
+  /** Optional metadata associated with the request. */
+  metadata?: Record<string, unknown>;
+  /** Optional baseline report to diff the new simulation against. */
+  baseline?: SimulationReport | SimulationPreview;
+  /** Optional custom RPC simulator hook overriding the instance default. */
+  simulateFn?: (txXdr: string) => Promise<unknown>;
+  /** Whether to bypass the cache for this call. Defaults to false. */
+  skipCache?: boolean;
+}
+
+/**
+ * A predicted error with a stable code and actionable suggestion.
+ */
+export interface PredictedError {
+  code: SimulationErrorCode;
+  message: string;
+  phase: "preflight" | "execution" | "validation";
+  suggestion?: string;
+}
+
+/**
+ * Difference between two simulation previews / reports.
+ */
+export interface SimulationDiff {
+  /** True when the two simulations are considered equivalent. */
+  identical: boolean;
+  statusChanged: boolean;
+  previousStatus?: SimulationStatus;
+  currentStatus: SimulationStatus;
+  /** Resource deltas (current - previous). */
+  cpuInstructionsDelta: bigint;
+  memoryBytesDelta: bigint;
+  minResourceFeeDelta: bigint;
+  /** Error codes present in current but not previous. */
+  newErrorCodes: SimulationErrorCode[];
+  /** Error codes present in previous but not current. */
+  resolvedErrorCodes: SimulationErrorCode[];
+  /** Human-readable summary of the diff. */
+  summary: string;
+}
+
+/**
+ * Result preview returned by `simulateTransaction`.
+ */
+export interface SimulationPreview {
+  simulationId: string;
+  timestamp: number;
+  status: SimulationStatus;
+  executionTimeMs: number;
+  resourceUsage: SimulationResourceUsage;
+  events: SimulationEvent[];
+  warnings: string[];
+  /** Predicted errors with codes and suggestions. */
+  predictedErrors: PredictedError[];
+  recommendations: string[];
+  summary: string;
+  /** Diff against the optional baseline, if provided. */
+  diff?: SimulationDiff;
+  /** Full underlying report for advanced consumers. */
+  report: SimulationReport;
+}
+
+/**
+ * Aggregated simulation statistics.
+ */
+export interface SimulationStats {
+  totalSimulations: number;
+  successCount: number;
+  failedCount: number;
+  errorCount: number;
+  averageLatencyMs: number;
+  /** Histogram of detected error codes across all simulations. */
+  errorCodeHistogram: Record<string, number>;
+}
+
+/**
+ * Side-effect-free execution sandbox for simulation.
+ *
+ * The sandbox never submits transactions or mutates inputs; it only invokes the
+ * provided simulation hook (or the default in-memory evaluator) and returns the
+ * raw response for parsing.
+ */
+export class SimulationSandbox {
+  private readonly simulateFn?: (txXdr: string) => Promise<unknown>;
+
+  constructor(simulateFn?: (txXdr: string) => Promise<unknown>) {
+    this.simulateFn = simulateFn;
+  }
+
+  /**
+   * Execute a simulation in an isolated, side-effect-free manner.
+   * The input XDR string is treated as immutable.
+   */
+  async execute(txXdr: string): Promise<unknown> {
+    if (this.simulateFn) {
+      return this.simulateFn(txXdr);
+    }
+    return defaultSimulate(txXdr);
+  }
+}
+
+/**
+ * Compute the difference between a baseline and a current simulation.
+ */
+export function diffSimulations(
+  baseline: SimulationReport | SimulationPreview,
+  current: SimulationReport | SimulationPreview
+): SimulationDiff {
+  const prevReport = "report" in baseline ? baseline.report : baseline;
+  const currReport = "report" in current ? current.report : current;
+
+  const prevCodes = new Set(prevReport.errors.map((e) => e.code));
+  const currCodes = new Set(currReport.errors.map((e) => e.code));
+
+  const newErrorCodes = [...currCodes].filter((c) => !prevCodes.has(c));
+  const resolvedErrorCodes = [...prevCodes].filter((c) => !currCodes.has(c));
+
+  const cpuInstructionsDelta =
+    currReport.resourceUsage.cpuInstructions - prevReport.resourceUsage.cpuInstructions;
+  const memoryBytesDelta = currReport.resourceUsage.memoryBytes - prevReport.resourceUsage.memoryBytes;
+  const minResourceFeeDelta =
+    currReport.resourceUsage.minResourceFee - prevReport.resourceUsage.minResourceFee;
+
+  const statusChanged = prevReport.status !== currReport.status;
+  const identical =
+    !statusChanged &&
+    newErrorCodes.length === 0 &&
+    resolvedErrorCodes.length === 0 &&
+    cpuInstructionsDelta === 0n &&
+    memoryBytesDelta === 0n &&
+    minResourceFeeDelta === 0n;
+
+  const parts: string[] = [];
+  if (statusChanged) parts.push(`status ${prevReport.status} -> ${currReport.status}`);
+  if (newErrorCodes.length > 0) parts.push(`new errors: ${newErrorCodes.join(", ")}`);
+  if (resolvedErrorCodes.length > 0) parts.push(`resolved errors: ${resolvedErrorCodes.join(", ")}`);
+  if (cpuInstructionsDelta !== 0n) parts.push(`cpu ${cpuInstructionsDelta > 0n ? "+" : ""}${cpuInstructionsDelta}`);
+  if (memoryBytesDelta !== 0n) parts.push(`memory ${memoryBytesDelta > 0n ? "+" : ""}${memoryBytesDelta}`);
+  if (minResourceFeeDelta !== 0n) parts.push(`fee ${minResourceFeeDelta > 0n ? "+" : ""}${minResourceFeeDelta}`);
+
+  return {
+    identical,
+    statusChanged,
+    previousStatus: prevReport.status,
+    currentStatus: currReport.status,
+    cpuInstructionsDelta,
+    memoryBytesDelta,
+    minResourceFeeDelta,
+    newErrorCodes,
+    resolvedErrorCodes,
+    summary: identical ? "No differences detected." : parts.join("; "),
+  };
+}
+
+function defaultSimulate(txXdr: string): unknown {
+  // If string is obviously malformed or contains trigger markers
+  if (txXdr.includes("fail_auth")) {
+    return { error: "HostError: Error(Auth, require_auth failed)" };
+  }
+  if (txXdr.includes("fail_balance")) {
+    return { error: "tx_insufficient_balance: account lacks required funds" };
+  }
+  if (txXdr.includes("fail_budget")) {
+    return { error: "HostError: Error(Budget, CPU limit exceeded)" };
+  }
+  if (txXdr.includes("fail_sequence")) {
+    return { error: "tx_bad_seq: sequence number too old" };
+  }
+  if (txXdr.includes("fail_contract")) {
+    return { error: "HostError: Error(Contract, #123)" };
+  }
+
+  // Default successful simulation stub
+  return {
+    minResourceFee: "150",
+    cost: {
+      cpuInsns: "125000",
+      memBytes: "45000",
+    },
+    events: [{ topic: ["transfer"], data: { amount: 1000n } }],
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -133,12 +326,153 @@ export class TransactionSimulator {
   /** Cache of recent simulation reports keyed by txXdr */
   private readonly cache = new Map<string, { report: SimulationReport; expiresAt: number }>();
 
+  /** Aggregated simulation statistics. */
+  private stats: SimulationStats = {
+    totalSimulations: 0,
+    successCount: 0,
+    failedCount: 0,
+    errorCount: 0,
+    averageLatencyMs: 0,
+    errorCodeHistogram: {},
+  };
+
   constructor(options: TransactionSimulatorOptions = {}) {
     this.simulateFn = options.simulateFn;
     this.enableCache = options.enableCache ?? true;
     this.cacheTtlMs = options.cacheTtlMs ?? 30_000;
     this.cpuWarningLimit = options.cpuInstructionWarningThreshold ?? 80_000_000n;
     this.memWarningLimit = options.memoryByteWarningThreshold ?? 20_000_000n;
+  }
+
+  /**
+   * Unified transaction simulation entry point.
+   *
+   * Returns a `SimulationPreview` with status, resource usage, events, predicted
+   * errors (with codes and suggestions), and an optional diff against a baseline.
+   * Execution happens in a side-effect-free sandbox: inputs are never mutated and
+   * no transaction is ever submitted.
+   *
+   * @param tx - Base64-encoded transaction XDR string.
+   * @param options - Optional simulation options.
+   */
+  async simulateTransaction(
+    tx: string,
+    options: SimulateTransactionOptions = {}
+  ): Promise<SimulationPreview> {
+    const request: SimulationRequest = {
+      txXdr: tx,
+      id: options.id,
+      networkPassphrase: options.networkPassphrase,
+      sourceAccount: options.sourceAccount,
+      metadata: options.metadata,
+    };
+
+    let report: SimulationReport;
+
+    if (options.skipCache || options.simulateFn) {
+      // Bypass instance cache when a per-call hook or explicit skip is requested.
+      report = await this.runSimulation(request, options.simulateFn);
+    } else {
+      report = await this.simulate(request);
+    }
+
+    this.recordStats(report);
+
+    const predictedErrors: PredictedError[] = report.errors.map((e) => ({
+      code: e.code,
+      message: e.message,
+      phase: e.phase,
+      suggestion: e.suggestion,
+    }));
+
+    const preview: SimulationPreview = {
+      simulationId: report.simulationId,
+      timestamp: report.timestamp,
+      status: report.status,
+      executionTimeMs: report.executionTimeMs,
+      resourceUsage: { ...report.resourceUsage },
+      events: report.events.map((ev) => ({ topic: [...ev.topic], data: ev.data })),
+      warnings: [...report.warnings],
+      predictedErrors,
+      recommendations: [...report.recommendations],
+      summary: report.summary,
+      report,
+    };
+
+    if (options.baseline) {
+      preview.diff = diffSimulations(options.baseline, preview);
+    }
+
+    return preview;
+  }
+
+  /**
+   * Retrieve aggregated simulation statistics.
+   */
+  getSimulationStats(): SimulationStats {
+    return {
+      ...this.stats,
+      errorCodeHistogram: { ...this.stats.errorCodeHistogram },
+    };
+  }
+
+  /**
+   * Reset aggregated simulation statistics.
+   */
+  resetSimulationStats(): void {
+    this.stats = {
+      totalSimulations: 0,
+      successCount: 0,
+      failedCount: 0,
+      errorCount: 0,
+      averageLatencyMs: 0,
+      errorCodeHistogram: {},
+    };
+  }
+
+  private async runSimulation(
+    request: SimulationRequest,
+    simulateFn?: (txXdr: string) => Promise<unknown>
+  ): Promise<SimulationReport> {
+    if (!request.txXdr || typeof request.txXdr !== "string") {
+      return this.createInvalidReport("Invalid transaction: txXdr must be a non-empty string.");
+    }
+
+    const startTime = Date.now();
+    const simulationId = request.id ?? `sim_${Math.random().toString(36).substring(2, 10)}`;
+
+    try {
+      const sandbox = new SimulationSandbox(simulateFn ?? this.simulateFn);
+      const rawResult = await sandbox.execute(request.txXdr);
+      const executionTimeMs = Date.now() - startTime;
+      return this.parseSimulationResult(simulationId, rawResult, executionTimeMs);
+    } catch (err) {
+      const executionTimeMs = Date.now() - startTime;
+      return this.createErrorReport(simulationId, err, executionTimeMs);
+    }
+  }
+
+  private recordStats(report: SimulationReport): void {
+    const prevTotal = this.stats.totalSimulations;
+    const newTotal = prevTotal + 1;
+
+    // Incremental average latency.
+    const averageLatencyMs =
+      (this.stats.averageLatencyMs * prevTotal + report.executionTimeMs) / newTotal;
+
+    const histogram = { ...this.stats.errorCodeHistogram };
+    for (const err of report.errors) {
+      histogram[err.code] = (histogram[err.code] ?? 0) + 1;
+    }
+
+    this.stats = {
+      totalSimulations: newTotal,
+      successCount: this.stats.successCount + (report.status === "success" ? 1 : 0),
+      failedCount: this.stats.failedCount + (report.status === "failed" ? 1 : 0),
+      errorCount: this.stats.errorCount + (report.status === "error" ? 1 : 0),
+      averageLatencyMs,
+      errorCodeHistogram: histogram,
+    };
   }
 
   /**
@@ -570,31 +904,6 @@ export class TransactionSimulator {
   }
 
   private defaultSimulate(txXdr: string): unknown {
-    // If string is obviously malformed or contains trigger markers
-    if (txXdr.includes("fail_auth")) {
-      return { error: "HostError: Error(Auth, require_auth failed)" };
-    }
-    if (txXdr.includes("fail_balance")) {
-      return { error: "tx_insufficient_balance: account lacks required funds" };
-    }
-    if (txXdr.includes("fail_budget")) {
-      return { error: "HostError: Error(Budget, CPU limit exceeded)" };
-    }
-    if (txXdr.includes("fail_sequence")) {
-      return { error: "tx_bad_seq: sequence number too old" };
-    }
-    if (txXdr.includes("fail_contract")) {
-      return { error: "HostError: Error(Contract, #123)" };
-    }
-
-    // Default successful simulation stub
-    return {
-      minResourceFee: "150",
-      cost: {
-        cpuInsns: "125000",
-        memBytes: "45000",
-      },
-      events: [{ topic: ["transfer"], data: { amount: 1000n } }],
-    };
+    return defaultSimulate(txXdr);
   }
 }

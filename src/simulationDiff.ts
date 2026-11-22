@@ -223,3 +223,49 @@ export function formatDiffSummary(diff: SimulationComparison | SimulationCompari
   ];
   return lines.join("\n");
 }
+
+// ---------------------------------------------------------------------------
+// previewSimulationDiff — human-readable preview of a SimulationDiff
+// ---------------------------------------------------------------------------
+
+function signed(value: bigint): string {
+  return `${value >= 0n ? "+" : ""}${value}`;
+}
+
+/**
+ * Produce a human-readable, multi-line summary of a {@link SimulationDiff}
+ * suitable for the simulation preview API.
+ *
+ * Reports the fee delta, events added/removed, and resource deltas. When the
+ * simulations are not comparable, returns a single explanatory line.
+ */
+export function formatSimulationDiff(diff: SimulationDiff): string {
+  if (!diff.comparable) {
+    return `Simulations not comparable: ${diff.reason}`;
+  }
+
+  const lines = [
+    `Resource fee: ${signed(diff.feeDelta)} stroops`,
+    `Events added: ${diff.eventsAdded}`,
+    `Events removed: ${diff.eventsRemoved}`,
+    `CPU instructions: ${signed(diff.resourceDelta.cpuInstructions)}`,
+    `Read bytes: ${signed(diff.resourceDelta.readBytes)}`,
+    `Write bytes: ${signed(diff.resourceDelta.writeBytes)}`,
+  ];
+  return lines.join("\n");
+}
+
+/**
+ * Convenience wrapper that diffs two simulation responses and returns a
+ * human-readable preview summary. Equivalent to
+ * `formatSimulationDiff(diffSimulations(before, after))`.
+ *
+ * Never throws for error or restore responses; those yield a "not comparable"
+ * summary instead.
+ */
+export function previewSimulationDiff(
+  before: SorobanRpc.Api.SimulateTransactionResponse,
+  after: SorobanRpc.Api.SimulateTransactionResponse,
+): string {
+  return formatSimulationDiff(diffSimulations(before, after));
+}

@@ -39,6 +39,31 @@ const defaultGenerateTraceId: TraceIdGenerator = generateTraceId;
 
 export class TraceIdManager {
   private _generator: TraceIdGenerator = defaultGenerateTraceId;
+  private _currentTraceId: string | null = null;
+
+  /**
+   * Returns the trace ID of the currently executing top-level operation, or
+   * `null` when no operation scope is active.
+   */
+  current(): string | null {
+    return this._currentTraceId;
+  }
+
+  /**
+   * Runs `fn` within a trace scope. If a trace is already active, the parent
+   * trace ID is inherited; otherwise a fresh trace ID is generated. The scope
+   * is restored after `fn` completes (synchronously or asynchronously).
+   */
+  async runWithTrace<T>(fn: (traceId: string) => Promise<T> | T): Promise<T> {
+    const parent = this._currentTraceId;
+    const traceId = parent ?? this.generate();
+    this._currentTraceId = traceId;
+    try {
+      return await fn(traceId);
+    } finally {
+      this._currentTraceId = parent;
+    }
+  }
 
   setGenerator(generator: TraceIdGenerator): void {
     this._generator = generator;

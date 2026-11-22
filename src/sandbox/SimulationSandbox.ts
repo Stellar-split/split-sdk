@@ -178,6 +178,27 @@ export class SimulationSandbox {
     return new SimulationSandbox().attach(client);
   }
 
+  /**
+   * Side-effect-free fork used by the unified transaction simulator.
+   *
+   * Returns a fresh sandbox plus a proxy of `client` whose mutating methods run
+   * against a forked ledger snapshot: each call still performs its normal
+   * argument encoding, telemetry and audit logic and still invokes the RPC's
+   * `simulateTransaction` for realistic cost/event reporting, but the SDK's
+   * sole submission seam (`_submitTx`) is swapped for a simulation-only
+   * implementation for the duration of the call. `sendTransaction` is therefore
+   * **never** called and nothing is ever broadcast to the network. Earlier calls
+   * in the same session are observable to later ones via the accumulated
+   * {@link SandboxLedgerDiff}.
+   */
+  static forkForSimulation(client: StellarSplitClient): {
+    sandbox: SimulationSandbox;
+    client: SandboxClient<StellarSplitClient>;
+  } {
+    const sandbox = new SimulationSandbox();
+    return { sandbox, client: sandbox.attach(client) };
+  }
+
   /** Rebuild a sandbox from a previously captured {@link snapshot}. */
   static restore(snapshot: SandboxLedgerDiff): SimulationSandbox {
     const sandbox = new SimulationSandbox();

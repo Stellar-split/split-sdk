@@ -27,6 +27,7 @@
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { StellarSplitError } from "./errors.js";
+import { EventEmitter } from "./events.js";
 
 /** Default request header carrying the CSRF token. */
 export const CSRF_HEADER_NAME = "x-csrf-token";
@@ -52,6 +53,35 @@ export class CsrfError extends StellarSplitError {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
+
+// ---------------------------------------------------------------------------
+// CSRF event tracking
+// ---------------------------------------------------------------------------
+
+/** CSRF lifecycle events emitted by {@link CsrfTokenManager}. */
+export type CsrfEventType =
+  | "csrf:token_issued"
+  | "csrf:token_refreshed"
+  | "csrf:token_validated"
+  | "csrf:token_rejected"
+  | "csrf:token_revoked"
+  | "csrf:tokens_revoked_all"
+  | "csrf:cleanup";
+
+/** Payload accompanying every emitted CSRF event. */
+export interface CsrfEvent {
+  /** Event kind. */
+  type: CsrfEventType;
+  /** Session the event relates to, when applicable. */
+  sessionId?: string;
+  /** Epoch milliseconds when the event occurred. */
+  timestamp: number;
+  /** Optional human-readable detail (e.g. rejection reason). */
+  reason?: string;
+}
+
+/** Listener invoked for each emitted {@link CsrfEvent}. */
+export type CsrfEventListener = (event: CsrfEvent) => void;
 
 // ---------------------------------------------------------------------------
 // Token helpers
@@ -149,6 +179,8 @@ export interface CsrfTokenManagerOptions {
   tokenBytes?: number;
   /** Maximum tracked sessions before least-recently-used eviction. Defaults to 10 000. */
   maxSessions?: number;
+  /** Optional emitter used to publish {@link CsrfEvent}s. */
+  emitter?: EventEmitter;
 }
 
 interface StoredCsrfToken {
@@ -209,11 +241,14 @@ export class CsrfTokenManager {
   private readonly _ttlMs: number;
   private readonly _tokenBytes: number;
   private readonly _maxSessions: number;
+  private readonly _emitter?: EventEmitter;
+  private readonly _listeners = new Set<CsrfEventListener>();
 
   constructor(options: CsrfTokenManagerOptions = {}) {
     this._ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
     this._tokenBytes = options.tokenBytes ?? DEFAULT_TOKEN_BYTES;
     this._maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
+    this._emitter = options.emitter;
 
     if (!Number.isFinite(this._ttlMs) || this._ttlMs <= 0) {
       throw new CsrfError("ttlMs must be a positive number", { ttlMs: this._ttlMs });
@@ -237,6 +272,44 @@ export class CsrfTokenManager {
   }
 
   /**
+   * Subscribe to CSRF events emitted by this manager.
+   *
+   * @param listener - Callback invoked for every event.
+   * @returns An unsubscribe function.
+   */
+  onCsrfEvent(listener: CsrfEventListener): () => void {
+    this._listeners.add(listener);
+    return () => {
+      this._listeners.delete(listener);
+    };
+  }
+
+  private _emit(
+    type: CsrfEventType,
+    sessionId?: string,
+    reason?: string,
+  ): void {
+    const event: CsrfEvent = { type, timestamp: Date.now() };
+    if (sessionId !== undefined) event.sessionId = sessionId;
+    if (reason !== undefined) event.reason = reason;
+
+    for (const listener of this._listeners) {
+      try {
+        listener(event);
+      } catch {
+        // Listener failures must never break CSRF processing.
+      }
+    }
+    if (this._emitter) {
+      try {
+        this._emitter.emit(type, event);
+      } catch {
+        // Emitter failures must never break CSRF processing.
+      }
+    }
+  }
+
+  /**
    * Issue (or replace) the CSRF token for `sessionId`.
    *
    * @param sessionId - Session the token is bound to.
@@ -252,6 +325,7 @@ export class CsrfTokenManager {
       hash: hashCsrfToken(token),
       expiresAt: Date.now() + this._ttlMs,
     });
+    this._emit("csrf:token_issued", sid);
     return token;
   }
 
@@ -271,15 +345,25 @@ export class CsrfTokenManager {
     options: { consume?: boolean } = {},
   ): boolean {
     const sid = normalizeSessionId(sessionId);
-    if (typeof token !== "string" || token.length === 0) return false;
-
-    const stored = this._tokens.get(sid);
-    if (!stored) return false;
-    if (stored.expiresAt <= Date.now()) {
-      this._tokens.delete(sid);
+    if (typeof token !== "string" || token.length === 0) {
+      this._emit("csrf:token_rejected", sid, "missing_token");
       return false;
     }
-    if (!hashMatches(stored.hash, token)) return false;
+
+    const stored = this._tokens.get(sid);
+    if (!stored) {
+      this._emit("csrf:token_rejected", sid, "unknown_session");
+      return false;
+    }
+    if (stored.expiresAt <= Date.now()) {
+      this._tokens.delete(sid);
+      this._emit("csrf:token_rejected", sid, "expired");
+      return false;
+    }
+    if (!hashMatches(stored.hash, token)) {
+      this._emit("csrf:token_rejected", sid, "mismatch");
+      return false;
+    }
 
     // Re-insert so a successful validation counts as a recent use for LRU
     // eviction; consumption drops the entry entirely.
@@ -287,6 +371,7 @@ export class CsrfTokenManager {
     if (!options.consume) {
       this._tokens.set(sid, stored);
     }
+    this._emit("csrf:token_validated", sid);
     return true;
   }
 
@@ -298,7 +383,30 @@ export class CsrfTokenManager {
    * @throws {CsrfError} If `sessionId` is empty or too long.
    */
   rotateToken(sessionId: string): string {
-    return this.issueToken(sessionId);
+    const sid = normalizeSessionId(sessionId);
+    const token = this.issueToken(sid);
+    this._emit("csrf:token_refreshed", sid);
+    return token;
+  }
+
+  /**
+   * Refresh the token for `sessionId` only when it is missing or expired.
+   *
+   * Useful for long-lived sessions: callers can refresh lazily without
+   * invalidating a still-valid token on every request.
+   *
+   * @param sessionId - Session to refresh.
+   * @returns The existing raw token is not recoverable, so a new token is
+   *          always returned; `refreshed` reports whether the previous token
+   *          was still valid.
+   */
+  refreshToken(sessionId: string): { token: string; refreshed: boolean } {
+    const sid = normalizeSessionId(sessionId);
+    const stored = this._tokens.get(sid);
+    const stillValid = stored !== undefined && stored.expiresAt > Date.now();
+    const token = this.issueToken(sid);
+    this._emit("csrf:token_refreshed", sid, stillValid ? "rotated" : "renewed");
+    return { token, refreshed: stillValid };
   }
 
   /**
@@ -309,12 +417,17 @@ export class CsrfTokenManager {
    */
   revokeToken(sessionId: string): boolean {
     if (typeof sessionId !== "string") return false;
-    return this._tokens.delete(sessionId.trim());
+    const sid = sessionId.trim();
+    const removed = this._tokens.delete(sid);
+    if (removed) this._emit("csrf:token_revoked", sid);
+    return removed;
   }
 
   /** Revoke every tracked token (e.g. on logout or global invalidation). */
   revokeAll(): void {
+    const count = this._tokens.size;
     this._tokens.clear();
+    this._emit("csrf:tokens_revoked_all", undefined, `count=${count}`);
   }
 
   /**
@@ -330,6 +443,9 @@ export class CsrfTokenManager {
         this._tokens.delete(sid);
         removed++;
       }
+    }
+    if (removed > 0) {
+      this._emit("csrf:cleanup", undefined, `removed=${removed}`);
     }
     return removed;
   }

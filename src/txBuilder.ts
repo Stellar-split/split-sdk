@@ -16,6 +16,7 @@ import { SimulationFailedError, TransactionFailedError, TransactionNotConfirmedE
 import { checkInvoiceExpiry } from "./preflightChecker.js";
 import type { LedgerCloseEstimator } from "./ledgerCloseEstimator.js";
 import { detectFeeSurge, type FeeSurgeConfig } from "./feeSurgeDetector.js";
+import { NonceManager, type NonceManagerConfig } from "./nonceManager.js";
 
 /** Builder for composing multi-operation StellarSplit transactions. */
 export class StellarSplitTxBuilder {
@@ -26,6 +27,7 @@ export class StellarSplitTxBuilder {
   private readonly operations: xdr.Operation[] = [];
   private _surgeConfig?: FeeSurgeConfig;
   private _ledgerEstimator?: LedgerCloseEstimator;
+  private _nonceManager?: NonceManager;
 
   constructor(config: StellarSplitClientConfig, sourceAddress: string) {
     this.config = config;
@@ -57,6 +59,36 @@ export class StellarSplitTxBuilder {
   setLedgerEstimator(estimator: LedgerCloseEstimator): this {
     this._ledgerEstimator = estimator;
     return this;
+  }
+
+  /**
+   * Attach a {@link NonceManager} to enable automatic nonce (sequence number)
+   * management. When set, {@link build} and {@link submit} acquire the next
+   * nonce from the manager instead of hardcoding sequence `0`, and release it
+   * back to the manager if building or submission fails.
+   *
+   * @param manager - A {@link NonceManager} instance (shared across builders
+   *   using the same source account to prevent conflicts).
+   */
+  setNonceManager(manager: NonceManager): this {
+    this._nonceManager = manager;
+    return this;
+  }
+
+  /**
+   * Convenience helper that creates and attaches a {@link NonceManager} for
+   * this builder's source account.
+   *
+   * @param config - Optional nonce manager configuration.
+   */
+  enableNonceManagement(config?: NonceManagerConfig): this {
+    this._nonceManager = new NonceManager(this.sourceAddress, config);
+    return this;
+  }
+
+  /** Returns the attached {@link NonceManager}, if any. */
+  get nonceManager(): NonceManager | undefined {
+    return this._nonceManager;
   }
 
   /**
@@ -184,31 +216,47 @@ export class StellarSplitTxBuilder {
   build(options?: { expiresAt?: number; invoiceId?: string }): Transaction {
     const expiresAt = options?.expiresAt;
     const invoiceId = options?.invoiceId ?? "unknown";
+
+    // Acquire the next nonce from the manager when available; otherwise fall
+    // back to sequence 0 for offline/inspection builds.
+    const nonce = this._nonceManager
+      ? this._nonceManager.acquire()
+      : undefined;
+    const sequence = nonce !== undefined ? String(nonce) : "0";
+
     const sourceAccount = ({
       accountId: () => this.sourceAddress,
-      sequenceNumber: () => "0",
+      sequenceNumber: () => sequence,
       incrementSequenceNumber: () => {},
     } as unknown) as Account;
 
-    const tb = new TransactionBuilder(sourceAccount, {
-      fee: BASE_FEE,
-      networkPassphrase: this.config.networkPassphrase,
-    });
+    try {
+      const tb = new TransactionBuilder(sourceAccount, {
+        fee: BASE_FEE,
+        networkPassphrase: this.config.networkPassphrase,
+      });
 
-    for (const op of this.operations) {
-      tb.addOperation(op);
-    }
+      for (const op of this.operations) {
+        tb.addOperation(op);
+      }
 
-    if (expiresAt !== undefined) {
-      // Enforce invoice expiry at the ledger level via timebounds.
-      const expiry = checkInvoiceExpiry(expiresAt, invoiceId);
-      const timeoutSeconds = Math.max(1, expiry.secondsRemaining);
-      // Cap at 12 hours (43200s) to avoid unreasonable timebounds
-      tb.setTimeout(Math.min(timeoutSeconds, 43200));
-    } else {
-      tb.setTimeout(30);
+      if (expiresAt !== undefined) {
+        // Enforce invoice expiry at the ledger level via timebounds.
+        const expiry = checkInvoiceExpiry(expiresAt, invoiceId);
+        const timeoutSeconds = Math.max(1, expiry.secondsRemaining);
+        // Cap at 12 hours (43200s) to avoid unreasonable timebounds
+        tb.setTimeout(Math.min(timeoutSeconds, 43200));
+      } else {
+        tb.setTimeout(30);
+      }
+      return tb.build();
+    } catch (err) {
+      // Roll back the reserved nonce so it can be reused.
+      if (this._nonceManager && nonce !== undefined) {
+        this._nonceManager.release(nonce);
+      }
+      throw err;
     }
-    return tb.build();
   }
 
   /**
@@ -240,28 +288,57 @@ export class StellarSplitTxBuilder {
       }
     }
 
-    const tb = new TransactionBuilder(account, {
-      fee,
-      networkPassphrase: this.config.networkPassphrase,
-    });
+    // Acquire the next nonce from the manager when available. The manager
+    // tracks the account's on-chain sequence so concurrent submissions do not
+    // collide.
+    const nonce = this._nonceManager
+      ? this._nonceManager.acquire()
+      : undefined;
+    const sequence = nonce !== undefined ? String(nonce) : account.sequenceNumber();
 
-    for (const op of this.operations) tb.addOperation(op);
+    const sourceAccount = ({
+      accountId: () => this.sourceAddress,
+      sequenceNumber: () => sequence,
+      incrementSequenceNumber: () => {},
+    } as unknown) as Account;
 
-    if (expiresAt !== undefined) {
-      const nowSeconds = Math.floor(Date.now() / 1000);
-      const timeoutSeconds = Math.max(1, expiresAt - nowSeconds);
-      tb.setTimeout(Math.min(timeoutSeconds, 43200));
-    } else {
-      tb.setTimeout(30);
+    let tx: Transaction;
+    try {
+      const tb = new TransactionBuilder(sourceAccount, {
+        fee,
+        networkPassphrase: this.config.networkPassphrase,
+      });
+
+      for (const op of this.operations) tb.addOperation(op);
+
+      if (expiresAt !== undefined) {
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        const timeoutSeconds = Math.max(1, expiresAt - nowSeconds);
+        tb.setTimeout(Math.min(timeoutSeconds, 43200));
+      } else {
+        tb.setTimeout(30);
+      }
+      tx = tb.build();
+    } catch (err) {
+      if (this._nonceManager && nonce !== undefined) {
+        this._nonceManager.release(nonce);
+      }
+      throw err;
     }
-    const tx = tb.build();
 
-    const simResult = await this.server.simulateTransaction(tx);
-    if (SorobanRpc.Api.isSimulationError(simResult)) {
-      throw new SimulationFailedError(`Simulation failed: ${simResult.error}`, "submit", simResult.error);
+    let preparedTx: Transaction;
+    try {
+      const simResult = await this.server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(simResult)) {
+        throw new SimulationFailedError(`Simulation failed: ${simResult.error}`, "submit", simResult.error);
+      }
+      preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
+    } catch (err) {
+      if (this._nonceManager && nonce !== undefined) {
+        this._nonceManager.release(nonce);
+      }
+      throw err;
     }
-
-    const preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
 
     const signedXdr = await (this.config.adapter
       ? this.config.adapter.signTransaction(preparedTx.toXDR(), this.config.networkPassphrase)
@@ -272,6 +349,10 @@ export class StellarSplitTxBuilder {
     );
 
     if (sendResult.status === "ERROR") {
+      // Submission rejected — release the nonce so it can be retried.
+      if (this._nonceManager && nonce !== undefined) {
+        this._nonceManager.release(nonce);
+      }
       throw new TransactionFailedError(
         `Transaction failed: ${JSON.stringify(sendResult.errorResult)}`
       );
@@ -290,7 +371,15 @@ export class StellarSplitTxBuilder {
     }
 
     if (getResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
+      if (this._nonceManager && nonce !== undefined) {
+        this._nonceManager.release(nonce);
+      }
       throw new TransactionNotConfirmedError(String(getResult.status));
+    }
+
+    // Confirm the nonce as consumed so the manager advances its sequence.
+    if (this._nonceManager && nonce !== undefined) {
+      this._nonceManager.confirm(nonce);
     }
 
     return { txHash };

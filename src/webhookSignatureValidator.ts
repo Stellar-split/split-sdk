@@ -189,3 +189,13 @@ export function verifyWebhookSignature(
 ): WebhookVerificationResult {
   return new WebhookSignatureValidator(config).verify(payload);
 }
+
+/**
+ * Alias for verifyWebhookSignature, provided for API convenience.
+ */
+export function validateWebhook(
+  payload: WebhookSignaturePayload,
+  config: WebhookSignatureConfig,
+): WebhookVerificationResult {
+  return verifyWebhookSignature(payload, config);
+}

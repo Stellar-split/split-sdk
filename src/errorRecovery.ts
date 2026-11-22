@@ -39,6 +39,7 @@ import {
   StellarSplitError,
 } from "./errors.js";
 import { getSuggestion } from "./errorSuggestions.js";
+import { isRetryableErrorCode } from "./errorCodes.js";
 
 /** The category of remediation recommended for a failure. */
 export type RecoveryAction =
@@ -419,6 +420,211 @@ export interface RecoveryRunOptions {
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Backoff configuration for {@link runWithRecovery}. */
+export interface BackoffOptions {
+  /** Base delay in ms before the first retry. Defaults to the strategy's `backoffMs` or 500. */
+  baseDelayMs?: number;
+  /** Upper bound in ms for any single delay. Defaults to 30_000. */
+  maxDelayMs?: number;
+  /** Exponential growth factor applied per attempt. Defaults to 2. */
+  multiplier?: number;
+  /**
+   * Jitter fraction in `[0, 1]` applied to each delay to avoid thundering
+   * herds. `0` disables jitter; `1` randomizes the delay within `[0, delay]`.
+   * Defaults to 0.2.
+   */
+  jitter?: number;
+}
+
+/** Hooks invoked by {@link runWithRecovery}. */
+export interface RecoveryHooks {
+  /** Called before each retry with the 1-based attempt, error, and delay. */
+  beforeRetry?: (
+    attempt: number,
+    error: unknown,
+    delayMs: number,
+    strategy: RecoveryStrategy,
+  ) => void | Promise<void>;
+  /** Called once when the operation ultimately succeeds. */
+  onSuccess?: (result: unknown, attempts: number) => void | Promise<void>;
+  /** Called once when the operation ultimately fails (non-retryable or exhausted). */
+  onFailure?: (error: unknown, attempts: number) => void | Promise<void>;
+}
+
+/** Options for {@link runWithRecovery}. */
+export interface RecoveryRunnerOptions extends RecoveryHooks, BackoffOptions {
+  /** Code assumed for thrown errors that do not carry one. */
+  code?: SdkErrorCode;
+  /** Abort signal checked before each attempt and during backoff. */
+  signal?: AbortSignal;
+  /** Override the sleep implementation (useful in tests). */
+  sleep?: (ms: number) => Promise<void>;
+  /** Override the maximum number of attempts (overrides the strategy's `maxAttempts`). */
+  maxAttempts?: number;
+  /** Override the random source for jitter (useful in tests). Defaults to `Math.random`. */
+  random?: () => number;
+}
+
+/** Aggregate statistics tracked across all {@link runWithRecovery} calls. */
+export interface RecoveryStats {
+  /** Total operations run. */
+  operations: number;
+  /** Total attempts made across all operations (including first attempts). */
+  attempts: number;
+  /** Operations that ultimately succeeded. */
+  successes: number;
+  /** Operations that ultimately failed. */
+  failures: number;
+  /** Total retries performed (attempts beyond the first). */
+  retries: number;
+  /** Total time spent in backoff delays, in ms. */
+  totalBackoffMs: number;
+  /** Total wall-clock time spent across all operations, in ms. */
+  totalTimeMs: number;
+}
+
+const EMPTY_STATS: RecoveryStats = {
+  operations: 0,
+  attempts: 0,
+  successes: 0,
+  failures: 0,
+  retries: 0,
+  totalBackoffMs: 0,
+  totalTimeMs: 0,
+};
+
+let recoveryStats: RecoveryStats = { ...EMPTY_STATS };
+
+/** Snapshot of the recovery statistics accumulated so far. */
+export function getRecoveryStats(): RecoveryStats {
+  return { ...recoveryStats };
+}
+
+/** Reset the accumulated recovery statistics to zero. */
+export function resetRecoveryStats(): void {
+  recoveryStats = { ...EMPTY_STATS };
+}
+
+/**
+ * Classify an error as transient (safe to retry) or permanent.
+ *
+ * An error is transient when its code is retryable per
+ * {@link isRetryableErrorCode} and its mapped {@link RecoveryStrategy} is
+ * `retryable`. Unknown errors fall back to the conservative generic strategy.
+ */
+export function isTransientError(
+  error: SdkErrorCode | string | Error,
+  fallbackCode?: SdkErrorCode,
+): boolean {
+  const code = extractCode(error) ?? fallbackCode ?? null;
+  if (code === null) {
+    return GENERIC_RECOVERY_STRATEGY.retryable;
+  }
+  if (!isRetryableErrorCode(code)) {
+    return false;
+  }
+  return RECOVERY_STRATEGY_TABLE[code].retryable;
+}
+
+/** Compute the backoff delay for a 1-based retry attempt. */
+function computeBackoff(
+  attempt: number,
+  strategy: RecoveryStrategy,
+  options: BackoffOptions,
+  random: () => number,
+): number {
+  const base = options.baseDelayMs ?? strategy.backoffMs ?? 500;
+  const multiplier = options.multiplier ?? 2;
+  const maxDelay = options.maxDelayMs ?? 30_000;
+  const jitter = Math.min(Math.max(options.jitter ?? 0.2, 0), 1);
+
+  const raw = base * multiplier ** (attempt - 1);
+  const capped = Math.min(raw, maxDelay);
+  if (jitter === 0) {
+    return Math.round(capped);
+  }
+  const spread = capped * jitter;
+  const min = capped - spread;
+  return Math.round(min + random() * spread);
+}
+
+/**
+ * Execute an async operation with automatic recovery for transient failures.
+ *
+ * - Transient errors are retried with exponential backoff and jitter, up to
+ *   `maxAttempts` (defaults to the strategy's `maxAttempts`, else 3).
+ * - Permanent (non-retryable) errors rethrow immediately.
+ * - `beforeRetry`, `onSuccess`, and `onFailure` hooks are invoked at the
+ *   appropriate points.
+ * - An aborted `signal` stops retrying and rethrows the last error.
+ * - Aggregate statistics are recorded and exposed via {@link getRecoveryStats}.
+ *
+ * @param op - The async operation to run.
+ * @param options - Backoff, hook, abort, and override configuration.
+ * @throws The last error when the operation fails permanently or exhausts retries.
+ *
+ * @example
+ * ```ts
+ * const invoice = await runWithRecovery(() => client.getInvoice(id), {
+ *   maxAttempts: 5,
+ *   baseDelayMs: 250,
+ *   beforeRetry: (n, err, delay) => console.warn(`Retry ${n} in ${delay}ms`, err),
+ * });
+ * ```
+ */
+export async function runWithRecovery<T>(
+  op: () => Promise<T>,
+  options: RecoveryRunnerOptions = {},
+): Promise<T> {
+  const sleep = options.sleep ?? defaultSleep;
+  const random = options.random ?? Math.random;
+  const startedAt = Date.now();
+
+  let attempt = 0;
+  let backoffTotal = 0;
+
+  recoveryStats.operations += 1;
+
+  for (;;) {
+    attempt += 1;
+    recoveryStats.attempts += 1;
+
+    try {
+      const result = await op();
+      recoveryStats.successes += 1;
+      recoveryStats.totalBackoffMs += backoffTotal;
+      recoveryStats.totalTimeMs += Date.now() - startedAt;
+      await options.onSuccess?.(result, attempt);
+      return result;
+    } catch (err) {
+      const errCode =
+        err instanceof SdkError ? err.code : (options.code ?? null);
+      const strategy = errCode
+        ? RECOVERY_STRATEGY_TABLE[errCode]
+        : GENERIC_RECOVERY_STRATEGY;
+
+      const transient = isTransientError(err as Error, options.code);
+      const maxAttempts = options.maxAttempts ?? strategy.maxAttempts ?? 3;
+      const canRetry = transient && attempt < maxAttempts;
+
+      if (!canRetry || options.signal?.aborted) {
+        recoveryStats.failures += 1;
+        recoveryStats.totalBackoffMs += backoffTotal;
+        recoveryStats.totalTimeMs += Date.now() - startedAt;
+        await options.onFailure?.(err, attempt);
+        throw err;
+      }
+
+      const delayMs = computeBackoff(attempt, strategy, options, random);
+      recoveryStats.retries += 1;
+      backoffTotal += delayMs;
+
+      await options.beforeRetry?.(attempt, err, delayMs, strategy);
+      await sleep(delayMs);
+    }
+  }
+}
+
 /**
  * Execute an async operation, automatically applying the recovery strategy
  * mapped to the error it throws.
@@ -429,6 +635,8 @@ const defaultSleep = (ms: number): Promise<void> =>
  * - If `op` throws an {@link SdkError} its code selects the strategy; other
  *   errors use `options.code` when provided, else the conservative generic
  *   strategy.
+ *
+ * Delegates to {@link runWithRecovery}.
  *
  * @param op - The async operation to run.
  * @param options - Retry/abort configuration.
@@ -447,32 +655,13 @@ export async function executeWithRecovery<T>(
   op: () => Promise<T>,
   options: RecoveryRunOptions = {},
 ): Promise<T> {
-  const sleep = options.sleep ?? defaultSleep;
-  let attempt = 0;
-
-  for (;;) {
-    try {
-      return await op();
-    } catch (err) {
-      attempt += 1;
-
-      const errCode =
-        err instanceof SdkError ? err.code : (options.code ?? null);
-      const strategy = errCode
-        ? RECOVERY_STRATEGY_TABLE[errCode]
-        : GENERIC_RECOVERY_STRATEGY;
-
-      const maxAttempts = strategy.maxAttempts ?? 3;
-      const canRetry = strategy.retryable && attempt < maxAttempts;
-
-      if (!canRetry || options.signal?.aborted) {
-        throw err;
-      }
-
-      const backoffMs = (strategy.backoffMs ?? 500) * 2 ** (attempt - 1);
-      options.onRetry?.(attempt, strategy);
-      await sleep(backoffMs);
-    }
-  }
+  return runWithRecovery(op, {
+    code: options.code,
+    signal: options.signal,
+    sleep: options.sleep,
+    beforeRetry: options.onRetry
+      ? (attempt, _err, _delay, strategy) => options.onRetry!(attempt, strategy)
+      : undefined,
+  });
 }
 
