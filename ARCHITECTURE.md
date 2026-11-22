@@ -8,6 +8,7 @@ together before building on top of the SDK.
 ## Contents
 
 - [Architecture Map](#architecture-map)
+- [Component Reference](#component-reference)
 - [Design Decision Log](#design-decision-log)
 - [Diagrams](#diagrams)
 - [API Surface](#api-surface)
@@ -41,6 +42,50 @@ CLI / docs tooling  ──▶  Client  ──▶  Wallet adapters
 The client is the only layer that composes the others. Wallet adapters and
 simulation do not know about each other; plugins, interceptors, and telemetry
 hooks are attached to the client and never imported by lower layers.
+
+## Component Reference
+
+Concrete locations of the components described above.
+
+| Component | Location | Role |
+| --- | --- | --- |
+| `StellarSplitClient` | `src/client.ts` | Main client. Extends `TypedEventEmitter`, owns RPC access, signing, simulation, retries, plugin registry, and telemetry. Exposes domain modules as properties. |
+| Domain modules | `src/client/modules/` | Thin, namespaced facades over the client: `client.invoices` (`InvoiceModule`), `client.payments` (`PaymentModule`), `client.disputes`, `client.admin`, `client.groups`, `client.templates`, `client.milestones`. All extend `BaseClientModule`, which holds a reference to the client and delegates to it. |
+| `SplitClient` | `src/client/SplitClient.ts` | Lazy-initializing wrapper around the Soroban RPC server. The RPC connection is created on first use (single-flight), with `preconnect()` for warm-up. Applies input sanitization, rate limiting, CSRF checks, and request timeouts. |
+| Wallet adapters | `src/wallet.ts`, `src/wallets/adapters/`, `src/adapters/` | Freighter, Lobstr, xBull, MetaMask, Ledger, and WalletConnect adapters behind one signing interface. |
+| Errors | `src/errors.ts` | `StellarSplitError` hierarchy. See [docs/ERROR_CODES.md](docs/ERROR_CODES.md). |
+| Retry and resilience | `src/retry.ts`, `src/retryPolicy.ts`, `src/requestRetry.ts`, `src/contractRetryQueue.ts` | Per-method retry policies, backoff, and queued contract retries. |
+| Dedup and caching | `src/dedup.ts`, `src/requestCache.ts`, `src/sequenceCache.ts` | Request deduplication, response caching, and account sequence caching. |
+| Extension points | `src/plugin.ts`, `src/interceptors.ts`, `src/telemetryHooks.ts` | Plugins, RPC interceptors, telemetry hooks. |
+
+### Module delegation
+
+Domain modules add no logic of their own beyond tracing. Each public method wraps the
+corresponding `StellarSplitClient` method in `withTrace(...)` so all telemetry and logs
+for one call share a trace ID:
+
+```
+app ──▶ client.payments.pay(params)
+          └─ withTrace("PaymentModule.pay")
+               └─ StellarSplitClient.pay(params)
+                    ├─ simulate (when `simulate: true`, returns SimulationResult, no submit)
+                    ├─ sign via wallet adapter / signer
+                    └─ submit + confirm, emitting typed client events
+```
+
+### Interaction example
+
+```typescript
+import { StellarSplitClient } from "@stellar-split/sdk";
+
+const client = new StellarSplitClient({ /* rpcUrl, networkPassphrase, contractId, ... */ });
+
+// Dry run first: no transaction is submitted.
+const sim = await client.invoices.create({ ...params, simulate: true });
+
+// Then submit for real.
+const { invoiceId, txHash } = await client.invoices.create(params);
+```
 
 ## Design Decision Log
 
