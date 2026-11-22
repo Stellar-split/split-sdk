@@ -69,6 +69,69 @@ export interface AmountValidationResult {
 /** Unit format of the input amount. */
 export type AmountUnit = "stroops" | "decimal" | "auto";
 
+/**
+ * Currency/asset identifiers with known decimal precision.
+ *
+ * Stellar-native assets use 7 decimals (stroops). Fiat-like currencies use
+ * their conventional minor-unit precision (e.g. 2 for USD/EUR/GBP).
+ */
+export type AmountCurrency =
+  | "XLM"
+  | "USDC"
+  | "USDT"
+  | "USD"
+  | "EUR"
+  | "GBP"
+  | "JPY"
+  | "BTC"
+  | "ETH";
+
+/**
+ * Decimal precision (number of fractional digits) per supported currency.
+ */
+export const CURRENCY_DECIMALS: Readonly<Record<AmountCurrency, number>> = Object.freeze({
+  XLM: 7,
+  USDC: 7,
+  USDT: 7,
+  USD: 2,
+  EUR: 2,
+  GBP: 2,
+  JPY: 0,
+  BTC: 8,
+  ETH: 8,
+});
+
+/**
+ * Resolve the decimal precision for a currency identifier.
+ *
+ * @param currency - Currency identifier (case-insensitive).
+ * @returns Number of decimal places for the currency.
+ * @throws {AmountValidationError} If the currency is not supported.
+ */
+export function getCurrencyDecimals(currency: string): number {
+  const key = currency.trim().toUpperCase() as AmountCurrency;
+  const decimals = CURRENCY_DECIMALS[key];
+  if (decimals === undefined) {
+    throw new AmountValidationError(`Unsupported currency: "${currency}".`, { currency });
+  }
+  return decimals;
+}
+
+/**
+ * Compute the maximum representable amount (in stroops) for a currency,
+ * bounded by both its decimal precision and the Stellar INT64_MAX limit.
+ *
+ * @param currency - Currency identifier.
+ * @returns Maximum amount in stroops.
+ */
+export function getCurrencyMaxStroops(currency: string): bigint {
+  const decimals = getCurrencyDecimals(currency);
+  const unitScale = 10n ** BigInt(decimals);
+  const maxUnits = STELLAR_MAX_INT64 / unitScale;
+  const currencyMax = maxUnits * unitScale;
+  return currencyMax < STELLAR_MAX_INT64 ? currencyMax : STELLAR_MAX_INT64;
+}
+
 /** Options for configuring amount validation behavior. */
 export interface AmountValidationOptions {
   /**
@@ -104,6 +167,112 @@ export interface AmountValidationOptions {
    * Defaults to "auto".
    */
   unit?: AmountUnit;
+  /**
+   * Currency/asset identifier used to derive decimal precision and bounds.
+   * When set, overrides `maxDecimals` (unless explicitly provided) and caps
+   * the maximum bound to the currency's representable range.
+   */
+  currency?: AmountCurrency | string;
+  /**
+   * Alias for {@link AmountValidationOptions.currency}.
+   */
+  asset?: AmountCurrency | string;
+}
+
+/** Record of a single amount validation invocation. */
+export interface AmountValidationRecord {
+  /** The raw input amount as received. */
+  input: unknown;
+  /** Resolved stroops, if parsing succeeded. */
+  stroops?: bigint;
+  /** Whether the amount passed validation. */
+  valid: boolean;
+  /** Validation error messages (empty when valid). */
+  errors: string[];
+  /** Currency used for validation, if any. */
+  currency?: string;
+  /** Effective maximum decimal places applied. */
+  maxDecimals: number;
+  /** Timestamp (ms since epoch) of the validation. */
+  timestamp: number;
+}
+
+/** Aggregate statistics over recorded amount validations. */
+export interface AmountValidationStats {
+  /** Total number of validations recorded. */
+  total: number;
+  /** Number of valid amounts. */
+  valid: number;
+  /** Number of invalid amounts. */
+  invalid: number;
+  /** Number of validations that failed due to exceeding the maximum bound. */
+  overflow: number;
+  /** Number of validations that failed due to precision/decimal errors. */
+  precisionErrors: number;
+  /** Number of validations that failed due to negative amounts. */
+  negativeErrors: number;
+  /** Per-currency validation counts. */
+  byCurrency: Record<string, number>;
+}
+
+const validationRecords: AmountValidationRecord[] = [];
+const MAX_RECORDS = 1000;
+
+/**
+ * Record a validation invocation for statistics tracking.
+ */
+function recordValidation(record: AmountValidationRecord): void {
+  validationRecords.push(record);
+  if (validationRecords.length > MAX_RECORDS) {
+    validationRecords.shift();
+  }
+}
+
+/**
+ * Get aggregate statistics over recorded amount validations.
+ */
+export function getAmountValidationStats(): AmountValidationStats {
+  const stats: AmountValidationStats = {
+    total: 0,
+    valid: 0,
+    invalid: 0,
+    overflow: 0,
+    precisionErrors: 0,
+    negativeErrors: 0,
+    byCurrency: {},
+  };
+
+  for (const record of validationRecords) {
+    stats.total += 1;
+    if (record.valid) {
+      stats.valid += 1;
+    } else {
+      stats.invalid += 1;
+    }
+    if (record.currency) {
+      stats.byCurrency[record.currency] = (stats.byCurrency[record.currency] ?? 0) + 1;
+    }
+    for (const error of record.errors) {
+      if (/exceeds the maximum/i.test(error)) {
+        stats.overflow += 1;
+      }
+      if (/precision|decimal/i.test(error)) {
+        stats.precisionErrors += 1;
+      }
+      if (/negative/i.test(error)) {
+        stats.negativeErrors += 1;
+      }
+    }
+  }
+
+  return stats;
+}
+
+/**
+ * Reset (clear) all recorded amount validations.
+ */
+export function resetAmountValidationStats(): void {
+  validationRecords.length = 0;
 }
 
 /**
@@ -242,7 +411,27 @@ export function validateAmount(
   options?: AmountValidationOptions
 ): AmountValidationResult {
   const errors: string[] = [];
-  const maxDecimals = options?.maxDecimals ?? STELLAR_MAX_DECIMALS;
+  const currency = options?.currency ?? options?.asset;
+  let currencyDecimals: number | undefined;
+  if (currency !== undefined) {
+    try {
+      currencyDecimals = getCurrencyDecimals(currency);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      recordValidation({
+        input: amount,
+        valid: false,
+        errors: [message],
+        currency,
+        maxDecimals: options?.maxDecimals ?? STELLAR_MAX_DECIMALS,
+        timestamp: Date.now(),
+      });
+      return { valid: false, errors: [message] };
+    }
+  }
+
+  const maxDecimals =
+    options?.maxDecimals ?? currencyDecimals ?? STELLAR_MAX_DECIMALS;
   const unit = options?.unit ?? "auto";
 
   let stroops: bigint;
@@ -250,6 +439,14 @@ export function validateAmount(
     stroops = parseToStroops(amount, unit, maxDecimals);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    recordValidation({
+      input: amount,
+      valid: false,
+      errors: [message],
+      currency,
+      maxDecimals,
+      timestamp: Date.now(),
+    });
     return { valid: false, errors: [message] };
   }
 
@@ -288,6 +485,9 @@ export function validateAmount(
 
   // 4. Maximum bound check
   let maxBound: bigint = STELLAR_MAX_INT64;
+  if (currency !== undefined) {
+    maxBound = getCurrencyMaxStroops(currency);
+  }
   if (options?.max !== undefined) {
     try {
       maxBound = parseToStroops(options.max, unit, maxDecimals);
@@ -296,16 +496,32 @@ export function validateAmount(
     }
   }
 
-  if (stroops > maxBound) {
+  // 5. Absolute overflow check against INT64_MAX (no overflow allowed)
+  if (stroops > STELLAR_MAX_INT64 || stroops < -STELLAR_MAX_INT64) {
+    errors.push(
+      `Amount (${stroops} stroops) exceeds the maximum allowed limit of ${STELLAR_MAX_INT64} stroops.`
+    );
+  } else if (stroops > maxBound) {
     errors.push(
       `Amount (${stroops} stroops) exceeds the maximum allowed limit of ${maxBound} stroops.`
     );
   }
 
-  return {
-    valid: errors.length === 0,
+  const valid = errors.length === 0;
+  recordValidation({
+    input: amount,
+    stroops,
+    valid,
     errors,
-    stroops: errors.length === 0 ? stroops : undefined,
+    currency,
+    maxDecimals,
+    timestamp: Date.now(),
+  });
+
+  return {
+    valid,
+    errors,
+    stroops: valid ? stroops : undefined,
   };
 }
 

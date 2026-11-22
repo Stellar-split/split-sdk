@@ -56,6 +56,73 @@ export interface DeadlineValidationResult {
   deadlineSeconds?: bigint;
 }
 
+/** A single recorded deadline validation attempt. */
+export interface DeadlineValidationRecord {
+  /** The raw input that was validated. */
+  input: unknown;
+  /** The normalized deadline in seconds, if parsing succeeded. */
+  deadlineSeconds?: bigint;
+  /** The reference time (seconds) used for the future check. */
+  referenceSeconds: bigint;
+  /** Whether the validation passed. */
+  valid: boolean;
+  /** The error messages produced, if any. */
+  errors: string[];
+  /** Wall-clock time (ms since epoch) at which the validation occurred. */
+  timestamp: number;
+}
+
+/** Aggregate statistics over all recorded deadline validations. */
+export interface DeadlineValidationStats {
+  /** Total number of validations recorded. */
+  total: number;
+  /** Number of validations that passed. */
+  valid: number;
+  /** Number of validations that failed. */
+  invalid: number;
+  /** Number of failures caused by past or non-future deadlines. */
+  pastDeadlineFailures: number;
+  /** Number of failures caused by unparsable / malformed input. */
+  formatFailures: number;
+}
+
+const validationHistory: DeadlineValidationRecord[] = [];
+
+/**
+ * Return aggregate statistics for all deadline validations performed so far.
+ */
+export function getDeadlineValidationStats(): DeadlineValidationStats {
+  let valid = 0;
+  let pastDeadlineFailures = 0;
+  let formatFailures = 0;
+  for (const record of validationHistory) {
+    if (record.valid) {
+      valid++;
+    } else {
+      if (record.deadlineSeconds === undefined) {
+        formatFailures++;
+      } else if (record.errors.some((e) => e.includes("must be in the future"))) {
+        pastDeadlineFailures++;
+      }
+    }
+  }
+  return {
+    total: validationHistory.length,
+    valid,
+    invalid: validationHistory.length - valid,
+    pastDeadlineFailures,
+    formatFailures,
+  };
+}
+
+/**
+ * Clear all recorded deadline validations.
+ */
+export function resetDeadlineValidationStats(): void {
+  validationHistory.length = 0;
+}
+=======
+
 /** Options for configuring deadline validation behavior. */
 export interface DeadlineValidationOptions {
   /**
@@ -162,7 +229,7 @@ export function parseDeadline(input: unknown, autoConvertMs: boolean = true): bi
       throw new DeadlineValidationError("Deadline string cannot be empty.", { input });
     }
 
-    // Check if it is a pure integer string
+    // Check if it is a pure integer string (Unix timestamp in seconds or ms)
     if (/^[+-]?\d+$/.test(trimmed)) {
       try {
         const val = BigInt(trimmed);
@@ -175,14 +242,18 @@ export function parseDeadline(input: unknown, autoConvertMs: boolean = true): bi
       }
     }
 
-    // Try parsing as ISO / date string
+    // ISO-8601 strings with an explicit timezone designator (Z or ±HH:MM / ±HHMM)
+    // are interpreted as absolute instants and normalized to UTC seconds.
+    // Timezone-less strings (e.g. "2030-01-01T00:00:00") are parsed by
+    // `Date.parse` using the host's local timezone; we normalize the resulting
+    // instant to UTC seconds so behavior is consistent across callers.
     const parsedMs = Date.parse(trimmed);
     if (Number.isFinite(parsedMs)) {
       return BigInt(Math.floor(parsedMs / 1000));
     }
 
     throw new DeadlineValidationError(
-      `Invalid deadline string format: "${input}". Must be a Unix timestamp or ISO date string.`,
+      `Invalid deadline string format: "${input}". Must be a Unix timestamp or ISO-8601 date string.`,
       { input }
     );
   }
@@ -219,6 +290,14 @@ export function validateDeadline(
     parsed = parseDeadline(deadline, autoConvertMs);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const refSec = toReferenceSeconds(options?.referenceTime, autoConvertMs);
+    validationHistory.push({
+      input: deadline,
+      referenceSeconds: refSec,
+      valid: false,
+      errors: [message],
+      timestamp: Date.now(),
+    });
     return { valid: false, errors: [message] };
   }
 
@@ -265,10 +344,20 @@ export function validateDeadline(
     }
   }
 
-  return {
-    valid: errors.length === 0,
+  const valid = errors.length === 0;
+  validationHistory.push({
+    input: deadline,
+    deadlineSeconds: parsed,
+    referenceSeconds: refSec,
+    valid,
     errors,
-    deadlineSeconds: errors.length === 0 ? parsed : undefined,
+    timestamp: Date.now(),
+  });
+
+  return {
+    valid,
+    errors,
+    deadlineSeconds: valid ? parsed : undefined,
   };
 }
 
@@ -328,5 +417,19 @@ export class DeadlineValidator {
    */
   validateOrThrow(deadline: unknown, options?: DeadlineValidationOptions): bigint {
     return validateDeadlineOrThrow(deadline, { ...this.defaultOptions, ...options });
+  }
+
+  /**
+   * Return aggregate validation statistics for all validations performed so far.
+   */
+  getStats(): DeadlineValidationStats {
+    return getDeadlineValidationStats();
+  }
+
+  /**
+   * Clear all recorded validation history.
+   */
+  resetStats(): void {
+    resetDeadlineValidationStats();
   }
 }
