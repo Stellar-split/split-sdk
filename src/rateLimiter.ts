@@ -34,6 +34,66 @@ export interface RateLimiterConfig {
   windowMs?: number;
   /** Maximum tracked keys before least-recently-used eviction. Defaults to 10 000. */
   maxTrackedKeys?: number;
+  /**
+   * Per-method overrides (issue #1252). Maps a method name to a budget of
+   * requests allowed per window for that method. Methods not listed fall back
+   * to the global/per-key budgets. Values must be positive integers.
+   */
+  perMethodLimits?: Record<string, number>;
+  /**
+   * Per-user budget within each window (issue #1252). When set, every request
+   * carrying a resolved user identity is additionally constrained by this
+   * budget, independent of the per-key budget.
+   */
+  perUserLimit?: number;
+  /**
+   * Resolves the caller identity for a request (issue #1252). Receives the
+   * method name and its arguments. Returning `undefined` means "anonymous"
+   * (only global/per-method limits apply). Defaults to no resolver.
+   */
+  resolveUser?: (method: string, args: unknown[]) => string | undefined;
+  /**
+   * Optional event sink invoked for every rate-limit decision (issue #1252).
+   * Receives a {@link RateLimitEvent}. Used for logging/metrics.
+   */
+  onEvent?: (event: RateLimitEvent) => void;
+}
+
+/** A rate-limit decision event (issue #1252). */
+export interface RateLimitEvent {
+  /** Method the request targeted. */
+  method: string;
+  /** Resolved user identity, when available. */
+  user?: string;
+  /** Whether the request was admitted. */
+  allowed: boolean;
+  /** Remaining slots after the decision. */
+  remaining: number;
+  /** Milliseconds until capacity is available (0 when allowed). */
+  retryAfterMs: number;
+  /** Which limit produced the decision. */
+  scope: "global" | "method" | "user" | "key";
+  /** Epoch milliseconds of the decision. */
+  timestamp: number;
+}
+
+/** Error thrown when a request is rejected by the rate limiter (issue #1252). */
+export class RateLimitExceededError extends Error {
+  readonly retryAfterMs: number;
+  readonly method: string;
+  readonly user?: string;
+
+  constructor(method: string, retryAfterMs: number, user?: string) {
+    super(
+      `Rate limit exceeded for ${method}` +
+        (user ? ` (user ${user})` : "") +
+        `; retry after ${retryAfterMs}ms`,
+    );
+    this.name = "RateLimitExceededError";
+    this.method = method;
+    this.retryAfterMs = retryAfterMs;
+    this.user = user;
+  }
 }
 
 /** Outcome of a rate-limit check or acquisition attempt. */
@@ -185,6 +245,12 @@ export class RateLimiter {
   private readonly _perKeyLimit: number | undefined;
   private readonly _windowMs: number;
   private readonly _store: RateLimitStore;
+  private readonly _methodStore: RateLimitStore;
+  private readonly _userStore: RateLimitStore;
+  private readonly _perMethodLimits: Readonly<Record<string, number>>;
+  private readonly _perUserLimit: number | undefined;
+  private readonly _resolveUser: ((method: string, args: unknown[]) => string | undefined) | undefined;
+  private readonly _onEvent: ((event: RateLimitEvent) => void) | undefined;
   private _lastRefillTime: number;
   private _queue: PendingAcquire[] = [];
   private _processing = false;
@@ -193,7 +259,16 @@ export class RateLimiter {
     if (!config || typeof config !== "object") {
       throw new RangeError("RateLimiter requires a config object");
     }
-    const { maxRequestsPerSecond, perKeyLimit, windowMs, maxTrackedKeys } = config;
+    const {
+      maxRequestsPerSecond,
+      perKeyLimit,
+      windowMs,
+      maxTrackedKeys,
+      perMethodLimits,
+      perUserLimit,
+      resolveUser,
+      onEvent,
+    } = config;
     if (
       typeof maxRequestsPerSecond !== "number" ||
       !Number.isFinite(maxRequestsPerSecond) ||
@@ -207,6 +282,25 @@ export class RateLimiter {
     if (windowMs !== undefined && (!Number.isFinite(windowMs) || windowMs < 1)) {
       throw new RangeError("windowMs must be a finite number of at least 1");
     }
+    if (perUserLimit !== undefined && (!Number.isInteger(perUserLimit) || perUserLimit < 1)) {
+      throw new RangeError("perUserLimit must be an integer of at least 1");
+    }
+    if (perMethodLimits !== undefined) {
+      if (typeof perMethodLimits !== "object" || perMethodLimits === null) {
+        throw new RangeError("perMethodLimits must be an object");
+      }
+      for (const [method, limit] of Object.entries(perMethodLimits)) {
+        if (!Number.isInteger(limit) || limit < 1) {
+          throw new RangeError(`perMethodLimits["${method}"] must be an integer of at least 1`);
+        }
+      }
+    }
+    if (resolveUser !== undefined && typeof resolveUser !== "function") {
+      throw new RangeError("resolveUser must be a function");
+    }
+    if (onEvent !== undefined && typeof onEvent !== "function") {
+      throw new RangeError("onEvent must be a function");
+    }
 
     this._maxTokens = maxRequestsPerSecond;
     this._perKeyLimit = perKeyLimit;
@@ -214,6 +308,12 @@ export class RateLimiter {
     this._tokens = this._maxTokens;
     this._lastRefillTime = Date.now();
     this._store = new RateLimitStore(maxTrackedKeys);
+    this._methodStore = new RateLimitStore(maxTrackedKeys);
+    this._userStore = new RateLimitStore(maxTrackedKeys);
+    this._perMethodLimits = Object.freeze({ ...(perMethodLimits ?? {}) });
+    this._perUserLimit = perUserLimit;
+    this._resolveUser = resolveUser;
+    this._onEvent = onEvent;
   }
 
   /** Effective window length in milliseconds. */
@@ -224,6 +324,123 @@ export class RateLimiter {
   /** Per-key counter storage (exposed for inspection/metrics). */
   get store(): RateLimitStore {
     return this._store;
+  }
+
+  /** Per-method counter storage (exposed for inspection/metrics). */
+  get methodStore(): RateLimitStore {
+    return this._methodStore;
+  }
+
+  /** Per-user counter storage (exposed for inspection/metrics). */
+  get userStore(): RateLimitStore {
+    return this._userStore;
+  }
+
+  /**
+   * Enforce the rate limit for a method invocation (issue #1252).
+   *
+   * This is the single choke point every SDK entry point must route through:
+   * it resolves the caller identity, applies global, per-method, per-user and
+   * per-key budgets, emits a {@link RateLimitEvent}, and throws
+   * {@link RateLimitExceededError} when the request must be rejected.
+   *
+   * @param method - The method name being invoked.
+   * @param args - The method arguments (used by the user resolver).
+   * @param key - Optional per-key scope (e.g. wallet id).
+   * @throws {RateLimitExceededError} When the request is not admitted.
+   */
+  enforce(method: string, args: unknown[] = [], key?: string): void {
+    const result = this._evaluateScoped(method, args, key, true);
+    if (!result.allowed) {
+      throw new RateLimitExceededError(method, result.retryAfterMs, result.user);
+    }
+  }
+
+  /**
+   * Wrap a function so every invocation is rate limited (issue #1252).
+   *
+   * The returned function enforces the limit before delegating to `fn`, so
+   * callers cannot bypass the limiter by calling the wrapped function
+   * directly.
+   *
+   * @param method - The method name used for per-method limits and events.
+   * @param fn - The function to guard.
+   * @param key - Optional per-key scope.
+   */
+  guard<A extends unknown[], R>(
+    method: string,
+    fn: (...args: A) => R,
+    key?: string,
+  ): (...args: A) => R {
+    return (...args: A): R => {
+      this.enforce(method, args, key);
+      return fn(...args);
+    };
+  }
+
+  private _evaluateScoped(
+    method: string,
+    args: unknown[],
+    key: string | undefined,
+    consume: boolean,
+  ): RateLimitCheck & { user?: string } {
+    const now = Date.now();
+    this._refill(now);
+
+    const user = this._resolveUser ? this._resolveUser(method, args) : undefined;
+
+    const deny = (scope: RateLimitEvent["scope"], retryAfterMs: number): RateLimitCheck & { user?: string } => {
+      this._emit({ method, user, allowed: false, remaining: 0, retryAfterMs, scope, timestamp: now });
+      return { allowed: false, remaining: 0, retryAfterMs, user };
+    };
+
+    if (this._tokens <= 0) {
+      return deny("global", this._msUntilRefill(now));
+    }
+
+    const methodLimit = this._perMethodLimits[method];
+    if (methodLimit !== undefined) {
+      const methodResult = consume
+        ? this._methodStore.consume(method, methodLimit, this._windowMs, now)
+        : this._methodStore.peek(method, methodLimit, this._windowMs, now);
+      if (!methodResult.allowed) {
+        return deny("method", methodResult.retryAfterMs);
+      }
+    }
+
+    if (user && this._perUserLimit !== undefined) {
+      const userResult = consume
+        ? this._userStore.consume(user, this._perUserLimit, this._windowMs, now)
+        : this._userStore.peek(user, this._perUserLimit, this._windowMs, now);
+      if (!userResult.allowed) {
+        return deny("user", userResult.retryAfterMs);
+      }
+    }
+
+    if (key && this._perKeyLimit !== undefined) {
+      const keyResult = consume
+        ? this._store.consume(key, this._perKeyLimit, this._windowMs, now)
+        : this._store.peek(key, this._perKeyLimit, this._windowMs, now);
+      if (!keyResult.allowed) {
+        return deny("key", keyResult.retryAfterMs);
+      }
+    }
+
+    if (consume) {
+      this._tokens--;
+    }
+    const remaining = Math.floor(this._tokens);
+    this._emit({ method, user, allowed: true, remaining, retryAfterMs: 0, scope: "global", timestamp: now });
+    return { allowed: true, remaining, retryAfterMs: 0, user };
+  }
+
+  private _emit(event: RateLimitEvent): void {
+    if (!this._onEvent) return;
+    try {
+      this._onEvent(event);
+    } catch {
+      // Event sinks must never break enforcement.
+    }
   }
 
   /**

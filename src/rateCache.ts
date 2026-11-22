@@ -24,6 +24,22 @@ export interface RateCacheConfig {
   maxSize?: number;
 }
 
+/** Snapshot of {@link RateCache} usage statistics. */
+export interface RateCacheStats {
+  /** Number of cache reads that returned a live (non-expired) entry. */
+  hits: number;
+  /** Number of cache reads that found no entry or an expired entry. */
+  misses: number;
+  /** Number of times the oracle function was invoked (foreground + background). */
+  oracleFetches: number;
+  /** Number of entries evicted due to the `maxSize` limit. */
+  evictions: number;
+  /** Number of entries removed because they were found expired on read. */
+  expirations: number;
+  /** Current number of cached asset pairs. */
+  size: number;
+}
+
 const DEFAULT_TTL_MS = 60_000;
 const DEFAULT_MAX_SIZE = Number.POSITIVE_INFINITY;
 
@@ -47,6 +63,11 @@ export class RateCache<TRate = number> {
   private readonly maxSize: number;
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
   private _running = false;
+  private _hits = 0;
+  private _misses = 0;
+  private _oracleFetches = 0;
+  private _evictions = 0;
+  private _expirations = 0;
 
   constructor(
     oracleOrConfig?: RateOracleFn<TRate> | RateCacheConfig,
@@ -78,11 +99,17 @@ export class RateCache<TRate = number> {
   get(from: string, to: string): TRate | undefined {
     const key = cacheKey(from, to);
     const entry = this.store.get(key);
-    if (!entry) return undefined;
-    if (Date.now() - entry.fetchedAt > this.ttlMs) {
-      this.store.delete(key);
+    if (!entry) {
+      this._misses++;
       return undefined;
     }
+    if (Date.now() - entry.fetchedAt > this.ttlMs) {
+      this.store.delete(key);
+      this._expirations++;
+      this._misses++;
+      return undefined;
+    }
+    this._hits++;
     return entry.rate;
   }
 
@@ -108,9 +135,31 @@ export class RateCache<TRate = number> {
       throw new Error(`No oracle function configured in RateCache for ${from}:${to}`);
     }
 
+    this._oracleFetches++;
     const rate = await this.oracle(from, to);
     this.set(from, to, rate);
     return rate;
+  }
+
+  /** Snapshot of cache usage statistics. */
+  getStats(): RateCacheStats {
+    return {
+      hits: this._hits,
+      misses: this._misses,
+      oracleFetches: this._oracleFetches,
+      evictions: this._evictions,
+      expirations: this._expirations,
+      size: this.store.size,
+    };
+  }
+
+  /** Reset all tracked statistics to zero. Cached entries are preserved. */
+  resetStats(): void {
+    this._hits = 0;
+    this._misses = 0;
+    this._oracleFetches = 0;
+    this._evictions = 0;
+    this._expirations = 0;
   }
 
   /** Remove a single `from -> to` pair from the cache. */
@@ -156,6 +205,7 @@ export class RateCache<TRate = number> {
       const [from, to] = key.split(":");
       if (from === undefined || to === undefined) continue;
       try {
+        this._oracleFetches++;
         const rate = await this.oracle(from, to);
         this.store.set(key, { rate, fetchedAt: Date.now() });
         this.evictOverflow();
@@ -176,6 +226,7 @@ export class RateCache<TRate = number> {
         break;
       }
       this.store.delete(oldestKey);
+      this._evictions++;
     }
   }
 }

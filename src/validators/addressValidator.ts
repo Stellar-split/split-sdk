@@ -32,6 +32,11 @@
 
 import { StrKey } from "@stellar/stellar-sdk";
 import { AddressValidationError } from "../errors.js";
+import {
+  validateContractAddress as validateSorobanContractAddress,
+  isSorobanContractAddress as isSorobanContractAddressShared,
+  type ContractAddressValidationResult,
+} from "../contractAddressValidator.js";
 
 /** Valid Stellar address types supported by the validator. */
 export type StellarAddressType = "account" | "contract" | "muxed";
@@ -76,6 +81,172 @@ export interface AddressValidationOptions {
    * Defaults to true.
    */
   rejectSecretKeys?: boolean;
+  /**
+   * When true, restricts validation to Soroban contract addresses ('C...') only.
+   * Delegates to the shared contract validator in `src/contractAddressValidator.ts`.
+   */
+  contractOnly?: boolean;
+}
+
+/** Options for asynchronous account verification against Horizon. */
+export interface AccountVerificationOptions {
+  /** Horizon base URL. Defaults to the public Horizon endpoint. */
+  horizonUrl?: string;
+  /** Request timeout in milliseconds. Defaults to 10000. */
+  timeoutMs?: number;
+  /** Optional fetch implementation (useful for testing). Defaults to global fetch. */
+  fetchFn?: typeof fetch;
+}
+
+/** Default public Horizon endpoint used for account verification. */
+export const DEFAULT_HORIZON_URL = "https://horizon.stellar.org";
+
+/** A single recorded validation event. */
+export interface AddressValidationRecord {
+  /** The raw address value passed to {@link validateAddress} (stringified if not a string). */
+  address: string;
+  /** Detected address type, if recognizable. */
+  type?: StellarAddressType;
+  /** Whether the address passed validation. */
+  valid: boolean;
+  /** Error messages produced during validation. */
+  errors: string[];
+  /** Timestamp (ms since epoch) when the validation occurred. */
+  timestamp: number;
+}
+
+/** Aggregate statistics over recorded validations. */
+export interface AddressValidationStats {
+  /** Total number of validations recorded. */
+  total: number;
+  /** Number of valid addresses. */
+  valid: number;
+  /** Number of invalid addresses. */
+  invalid: number;
+  /** Counts grouped by detected address type. */
+  byType: Record<StellarAddressType, number>;
+  /** Counts grouped by error message. */
+  byError: Record<string, number>;
+}
+
+/** Internal validation tracking state. */
+const validationRecords: AddressValidationRecord[] = [];
+
+/**
+ * Record a validation event for statistics tracking.
+ *
+ * @param address - Raw address value passed to the validator.
+ * @param result - The validation result.
+ */
+function recordValidation(address: unknown, result: AddressValidationResult): void {
+  let addressStr: string;
+  if (typeof address === "string") {
+    addressStr = address;
+  } else if (address === null || address === undefined) {
+    addressStr = String(address);
+  } else {
+    addressStr = String(address);
+  }
+
+  validationRecords.push({
+    address: addressStr,
+    type: result.type,
+    valid: result.valid,
+    errors: [...result.errors],
+    timestamp: Date.now(),
+  });
+}
+
+/**
+ * Get aggregate statistics for all recorded address validations.
+ *
+ * @returns An {@link AddressValidationStats} snapshot.
+ */
+export function getAddressValidationStats(): AddressValidationStats {
+  const byType: Record<StellarAddressType, number> = {
+    account: 0,
+    contract: 0,
+    muxed: 0,
+  };
+  const byError: Record<string, number> = {};
+  let valid = 0;
+  let invalid = 0;
+
+  for (const record of validationRecords) {
+    if (record.valid) {
+      valid++;
+    } else {
+      invalid++;
+    }
+    if (record.type) {
+      byType[record.type]++;
+    }
+    for (const err of record.errors) {
+      byError[err] = (byError[err] ?? 0) + 1;
+    }
+  }
+
+  return {
+    total: validationRecords.length,
+    valid,
+    invalid,
+    byType,
+    byError,
+  };
+}
+
+/**
+ * Reset all recorded validation statistics.
+ */
+export function resetAddressValidationStats(): void {
+  validationRecords.length = 0;
+}
+
+/**
+ * Verify whether an account exists on the Stellar network via Horizon.
+ *
+ * Only account addresses ('G...') can be verified. Contract and muxed addresses
+ * return `false` because they are not directly queryable as Horizon accounts.
+ *
+ * @param address - The account address to verify.
+ * @param options - Optional Horizon configuration.
+ * @returns `true` if the account exists on-chain, `false` otherwise.
+ */
+export async function verifyAccountExists(
+  address: string,
+  options?: AccountVerificationOptions
+): Promise<boolean> {
+  if (typeof address !== "string") return false;
+  const trimmed = address.trim();
+
+  // Only standard account addresses can be verified via Horizon accounts endpoint.
+  if (detectAddressType(trimmed) !== "account") return false;
+  if (!verifyAddressChecksum(trimmed)) return false;
+
+  const horizonUrl = (options?.horizonUrl ?? DEFAULT_HORIZON_URL).replace(/\/+$/, "");
+  const timeoutMs = options?.timeoutMs ?? 10000;
+  const fetchFn = options?.fetchFn ?? (globalThis.fetch as typeof fetch | undefined);
+  if (!fetchFn) return false;
+
+  const controller =
+    typeof AbortController !== "undefined" ? new AbortController() : undefined;
+  const timer = controller
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : undefined;
+
+  try {
+    const response = await fetchFn(`${horizonUrl}/accounts/${trimmed}`, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: controller?.signal,
+    });
+    if (response.status === 404) return false;
+    return response.ok;
+  } catch {
+    return false;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 /**
@@ -144,40 +315,59 @@ export function validateAddress(
   address: unknown,
   options?: AddressValidationOptions
 ): AddressValidationResult {
+  // Contract-only mode delegates to the shared Soroban contract validator.
+  if (options?.contractOnly === true) {
+    const contractResult = validateSorobanContractAddress(address);
+    return {
+      valid: contractResult.valid,
+      type: contractResult.valid ? "contract" : undefined,
+      errors: contractResult.errors,
+      normalizedAddress: contractResult.normalizedAddress,
+    };
+  }
+
   const errors: string[] = [];
 
   // 1. Type check
   if (address === null || address === undefined) {
-    return {
+    const result: AddressValidationResult = {
       valid: false,
       errors: ["Address is required (received null or undefined)."],
     };
+    recordValidation(address, result);
+    return result;
   }
 
   if (typeof address !== "string") {
-    return {
+    const result: AddressValidationResult = {
       valid: false,
       errors: [`Address must be a string (received ${typeof address}).`],
     };
+    recordValidation(address, result);
+    return result;
   }
 
   const trimmed = address.trim();
   if (trimmed.length === 0) {
-    return {
+    const result: AddressValidationResult = {
       valid: false,
       errors: ["Address string cannot be empty."],
     };
+    recordValidation(address, result);
+    return result;
   }
 
   // 2. Secret key security check
   const rejectSecretKeys = options?.rejectSecretKeys ?? true;
   if (rejectSecretKeys && (trimmed.startsWith("S") || StrKey.isValidEd25519SecretSeed(trimmed))) {
-    return {
+    const result: AddressValidationResult = {
       valid: false,
       errors: [
         "Security error: Secret key ('S...') detected. Private keys must never be used as public addresses.",
       ],
     };
+    recordValidation(address, result);
+    return result;
   }
 
   // 3. Allowed types configuration
@@ -194,7 +384,9 @@ export function validateAddress(
     errors.push(
       `Invalid address prefix: "${firstChar}". Expected "G" (account), "C" (contract), or "M" (muxed).`
     );
-    return { valid: false, errors };
+    const result: AddressValidationResult = { valid: false, errors };
+    recordValidation(address, result);
+    return result;
   }
 
   const detectedType = detectAddressType(trimmed);
@@ -208,7 +400,9 @@ export function validateAddress(
     errors.push(
       `Invalid address length for "${firstChar}" address: got ${trimmed.length} characters, expected ${expectedLen}.`
     );
-    return { valid: false, errors };
+    const result: AddressValidationResult = { valid: false, errors };
+    recordValidation(address, result);
+    return result;
   }
 
   // 6. Character set check (RFC 4648 Base32)
@@ -217,7 +411,9 @@ export function validateAddress(
     errors.push(
       `Address contains invalid Base32 characters: ${invalidChars}. Stellar addresses may only contain uppercase letters A-Z and digits 2-7.`
     );
-    return { valid: false, errors, type: detectedType };
+    const result: AddressValidationResult = { valid: false, errors, type: detectedType };
+    recordValidation(address, result);
+    return result;
   }
 
   // 7. Allowed types restriction check
@@ -225,7 +421,9 @@ export function validateAddress(
     errors.push(
       `Address type "${detectedType}" is not allowed. Allowed types: ${allowedTypes.join(", ")}.`
     );
-    return { valid: false, errors, type: detectedType };
+    const result: AddressValidationResult = { valid: false, errors, type: detectedType };
+    recordValidation(address, result);
+    return result;
   }
 
   // 8. CRC16 Checksum validation
@@ -234,15 +432,19 @@ export function validateAddress(
     errors.push(
       `Address checksum validation failed. The address format is syntactically valid but the CRC16 checksum does not match (potential typo or corruption).`
     );
-    return { valid: false, errors, type: detectedType };
+    const result: AddressValidationResult = { valid: false, errors, type: detectedType };
+    recordValidation(address, result);
+    return result;
   }
 
-  return {
+  const result: AddressValidationResult = {
     valid: true,
     type: detectedType,
     errors: [],
     normalizedAddress: trimmed,
   };
+  recordValidation(address, result);
+  return result;
 }
 
 /**
@@ -279,6 +481,30 @@ export function isStellarAddress(address: unknown, options?: AddressValidationOp
 }
 
 /**
+ * Validate a Soroban contract address ('C...').
+ *
+ * Enforces the C-prefix, 56-character length, RFC 4648 Base32 alphabet, and
+ * CRC16-XModem checksum by delegating to the shared contract validator in
+ * `src/contractAddressValidator.ts`.
+ *
+ * @param address - The candidate contract address.
+ * @returns A {@link ContractAddressValidationResult} object.
+ */
+export function validateContractAddress(address: unknown): ContractAddressValidationResult {
+  return validateSorobanContractAddress(address);
+}
+
+/**
+ * Convenience helper returning `true` if an address is a valid Soroban contract address.
+ *
+ * @param address - Candidate contract address.
+ * @returns `true` if valid, `false` otherwise.
+ */
+export function isSorobanContractAddress(address: unknown): boolean {
+  return isSorobanContractAddressShared(address);
+}
+
+/**
  * Reusable validator instance for validating addresses with pre-configured rules.
  */
 export class AddressValidator {
@@ -296,5 +522,34 @@ export class AddressValidator {
    */
   validateOrThrow(address: unknown, options?: AddressValidationOptions): string {
     return validateAddressOrThrow(address, { ...this.defaultOptions, ...options });
+  }
+
+  /**
+   * Validate an address and verify the account exists on-chain via Horizon.
+   *
+   * Performs synchronous format/checksum validation first, then (for account
+   * addresses) queries Horizon to confirm the account exists.
+   */
+  async validateWithAccountVerification(
+    address: unknown,
+    options?: AddressValidationOptions,
+    verificationOptions?: AccountVerificationOptions
+  ): Promise<AddressValidationResult> {
+    const result = this.validate(address, options);
+    if (!result.valid || !result.normalizedAddress) {
+      return result;
+    }
+    if (result.type !== "account") {
+      return result;
+    }
+    const exists = await verifyAccountExists(result.normalizedAddress, verificationOptions);
+    if (!exists) {
+      return {
+        valid: false,
+        type: result.type,
+        errors: ["Account does not exist on the Stellar network."],
+      };
+    }
+    return result;
   }
 }

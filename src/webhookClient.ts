@@ -5,6 +5,34 @@
 import { createHmac, timingSafeEqual } from "crypto";
 import type { IncomingMessage, ServerResponse } from "http";
 
+export interface WebhookRetryConfig {
+  /** Maximum number of attempts (including the first). Default: 3. */
+  maxAttempts?: number;
+  /** Base delay in milliseconds between retries. Default: 100. */
+  baseDelayMs?: number;
+  /** Maximum delay in milliseconds between retries. Default: 5000. */
+  maxDelayMs?: number;
+  /** Multiplier applied to the delay after each attempt. Default: 2. */
+  backoffMultiplier?: number;
+  /** Whether to add random jitter to the delay. Default: true. */
+  jitter?: boolean;
+}
+
+export interface WebhookClientStats {
+  /** Total number of webhooks received by process(). */
+  received: number;
+  /** Number of webhooks successfully verified and processed. */
+  processed: number;
+  /** Number of webhooks that failed verification or processing. */
+  failed: number;
+  /** Number of handler executions that were retried. */
+  retried: number;
+  /** Number of retry attempts that ultimately succeeded. */
+  retrySucceeded: number;
+  /** Number of retry attempts that ultimately failed. */
+  retryFailed: number;
+}
+
 export interface WebhookClientConfig {
   /** The shared HMAC secret configured for the webhook endpoint. */
   secret: string;
@@ -18,6 +46,8 @@ export interface WebhookClientConfig {
   eventHeader?: string;
   /** Whether process() throws errors or returns them in the result object. Default: true. */
   throwOnError?: boolean;
+  /** Retry configuration for failed handler execution. */
+  retry?: WebhookRetryConfig;
 }
 
 export interface WebhookEventPayload<T = unknown> {
@@ -35,6 +65,8 @@ export interface WebhookProcessResult<T = unknown> {
   handlersExecuted: number;
   error?: Error;
   timestamp?: number;
+  /** Number of retry attempts performed for handler execution. */
+  retries?: number;
 }
 
 export type WebhookHandler<T = unknown> = (
@@ -106,11 +138,21 @@ export class WebhookClient {
   private readonly timestampHeader: string;
   private readonly eventHeader: string;
   private readonly throwOnError: boolean;
+  private readonly retryConfig: Required<WebhookRetryConfig>;
 
   private readonly handlers = new Map<string, Set<WebhookHandler>>();
   private readonly onceHandlers = new Map<string, Set<WebhookHandler>>();
   private readonly errorHandlers = new Set<WebhookErrorHandler>();
   private readonly middlewares: WebhookMiddleware[] = [];
+
+  private readonly stats: WebhookClientStats = {
+    received: 0,
+    processed: 0,
+    failed: 0,
+    retried: 0,
+    retrySucceeded: 0,
+    retryFailed: 0,
+  };
 
   constructor(config: WebhookClientConfig) {
     if (!config || !config.secret) {
@@ -122,6 +164,66 @@ export class WebhookClient {
     this.timestampHeader = (config.timestampHeader ?? "x-stellar-split-timestamp").toLowerCase();
     this.eventHeader = (config.eventHeader ?? "x-stellar-split-event").toLowerCase();
     this.throwOnError = config.throwOnError ?? true;
+    this.retryConfig = {
+      maxAttempts: Math.max(1, config.retry?.maxAttempts ?? 3),
+      baseDelayMs: Math.max(0, config.retry?.baseDelayMs ?? 100),
+      maxDelayMs: Math.max(0, config.retry?.maxDelayMs ?? 5000),
+      backoffMultiplier: Math.max(1, config.retry?.backoffMultiplier ?? 2),
+      jitter: config.retry?.jitter ?? true,
+    };
+  }
+
+  /**
+   * Return a snapshot of the webhook processing statistics.
+   */
+  getStats(): WebhookClientStats {
+    return { ...this.stats };
+  }
+
+  /**
+   * Reset the webhook processing statistics.
+   */
+  resetStats(): void {
+    this.stats.received = 0;
+    this.stats.processed = 0;
+    this.stats.failed = 0;
+    this.stats.retried = 0;
+    this.stats.retrySucceeded = 0;
+    this.stats.retryFailed = 0;
+  }
+
+  private computeRetryDelay(attempt: number): number {
+    const { baseDelayMs, maxDelayMs, backoffMultiplier, jitter } = this.retryConfig;
+    const exponential = baseDelayMs * Math.pow(backoffMultiplier, attempt - 1);
+    const capped = Math.min(exponential, maxDelayMs);
+    if (!jitter) return capped;
+    return Math.floor(Math.random() * capped);
+  }
+
+  private async executeWithRetry<T>(fn: () => Promise<T>): Promise<{ result: T; retries: number }> {
+    const { maxAttempts } = this.retryConfig;
+    let lastError: Error | undefined;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const result = await fn();
+        if (attempt > 1) {
+          this.stats.retrySucceeded++;
+        }
+        return { result, retries: attempt - 1 };
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        if (attempt < maxAttempts) {
+          this.stats.retried++;
+          const delay = this.computeRetryDelay(attempt);
+          if (delay > 0) {
+            await new Promise((resolve) => setTimeout(resolve, delay));
+          }
+        } else {
+          this.stats.retryFailed++;
+        }
+      }
+    }
+    throw lastError ?? new WebhookError("Handler execution failed");
   }
 
   /**
@@ -281,6 +383,7 @@ export class WebhookClient {
     headers: Record<string, string | string[] | undefined> = {},
   ): Promise<WebhookProcessResult<T>> {
     const bodyStr = typeof rawBody === "string" ? rawBody : rawBody.toString("utf8");
+    this.stats.received++;
 
     const signature = this.extractHeader(headers, this.signatureHeader);
     const timestampHeader = this.extractHeader(headers, this.timestampHeader);
@@ -353,7 +456,7 @@ export class WebhookClient {
         this.onceHandlers.delete("*");
       }
 
-      // Run middleware chain then handlers
+      // Run middleware chain then handlers, with retry on handler failure
       let index = -1;
       const dispatch = async (i: number): Promise<void> => {
         if (i <= index) throw new Error("next() called multiple times");
@@ -369,16 +472,20 @@ export class WebhookClient {
         }
       };
 
-      await dispatch(0);
+      const { retries } = await this.executeWithRetry(() => dispatch(0));
+
+      this.stats.processed++;
 
       return {
         success: true,
         event: normalizedPayload,
         handlersExecuted: matchedHandlers.length,
         timestamp: verification.timestamp,
+        retries,
       };
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
+      this.stats.failed++;
 
       // Notify error handlers
       for (const errHandler of this.errorHandlers) {
