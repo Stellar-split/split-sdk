@@ -59,6 +59,22 @@ export interface SerializedError {
   timestamp: number;
 }
 
+/** Query options for the bounded in-memory context store. */
+export interface ErrorContextQuery {
+  operation?: string;
+  invoiceId?: string;
+  accountId?: string;
+  since?: number;
+  limit?: number;
+}
+
+/** A sanitized, serializable error captured for diagnostic queries. */
+export interface StoredErrorContext {
+  id: number;
+  error: SerializedError;
+  context: ErrorContext;
+}
+
 /** Regex matching Stellar secret seed keys (S-addresses, 56 characters). */
 const STELLAR_SECRET_SEED_REGEX = /\bS[A-Z0-9]{55}\b/g;
 
@@ -477,4 +493,85 @@ export function wrapError(
   );
 
   return attachErrorContext(wrapped, mergedContext);
+}
+
+/**
+ * Bounded in-memory index of sanitized error contexts. It indexes common
+ * query dimensions so callers can inspect a failing operation or invoice
+ * without retaining raw errors, private keys, or arbitrary object graphs.
+ */
+export class ErrorContextStore {
+  private readonly entries: StoredErrorContext[] = [];
+  private readonly byOperation = new Map<string, Set<number>>();
+  private readonly byInvoiceId = new Map<string, Set<number>>();
+  private nextId = 1;
+
+  constructor(private readonly maxEntries: number = 500) {}
+
+  capture(error: unknown, additionalContext: Partial<ErrorContext> = {}): StoredErrorContext {
+    const serialized = serializeError(error);
+    const context = sanitizeContext(mergeContext(getErrorContext(error) ?? {}, additionalContext));
+    const entry: StoredErrorContext = { id: this.nextId++, error: { ...serialized, context }, context };
+    this.entries.push(entry);
+    this.index(entry);
+
+    while (this.entries.length > this.maxEntries) {
+      this.removeFromIndex(this.entries.shift()!);
+    }
+    return entry;
+  }
+
+  query(query: ErrorContextQuery = {}): StoredErrorContext[] {
+    const indexed = query.operation
+      ? this.byOperation.get(query.operation)
+      : query.invoiceId
+        ? this.byInvoiceId.get(query.invoiceId)
+        : undefined;
+    const candidates = indexed
+      ? this.entries.filter((entry) => indexed.has(entry.id))
+      : this.entries;
+    const result = candidates.filter((entry) =>
+      (!query.operation || entry.context.operation === query.operation) &&
+      (!query.invoiceId || entry.context.invoiceId === query.invoiceId) &&
+      (!query.accountId || entry.context.accountId === query.accountId) &&
+      (!query.since || (entry.context.timestamp ?? entry.error.timestamp) >= query.since!),
+    );
+    const limit = query.limit && query.limit > 0 ? query.limit : result.length;
+    return result.slice(-limit).reverse();
+  }
+
+  size(): number {
+    return this.entries.length;
+  }
+
+  clear(): void {
+    this.entries.length = 0;
+    this.byOperation.clear();
+    this.byInvoiceId.clear();
+  }
+
+  private index(entry: StoredErrorContext): void {
+    this.addIndex(this.byOperation, entry.context.operation, entry.id);
+    this.addIndex(this.byInvoiceId, entry.context.invoiceId, entry.id);
+  }
+
+  private removeFromIndex(entry: StoredErrorContext): void {
+    this.deleteIndex(this.byOperation, entry.context.operation, entry.id);
+    this.deleteIndex(this.byInvoiceId, entry.context.invoiceId, entry.id);
+  }
+
+  private addIndex(index: Map<string, Set<number>>, key: string | undefined, id: number): void {
+    if (!key) return;
+    const entries = index.get(key) ?? new Set<number>();
+    entries.add(id);
+    index.set(key, entries);
+  }
+
+  private deleteIndex(index: Map<string, Set<number>>, key: string | undefined, id: number): void {
+    if (!key) return;
+    const entries = index.get(key);
+    if (!entries) return;
+    entries.delete(id);
+    if (entries.size === 0) index.delete(key);
+  }
 }
