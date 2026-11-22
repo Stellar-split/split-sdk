@@ -66,6 +66,47 @@ export type {
   LogStats,
 } from "./logger.js";
 
+// Diagnostics: contextual errors, bounded context querying, and aggregation.
+export {
+  ERROR_CONTEXT_SYMBOL,
+  sanitizeContext,
+  mergeContext,
+  attachErrorContext,
+  getErrorContext,
+  hasErrorContext,
+  serializeError,
+  serializeErrorContext,
+  ErrorContextBuilder,
+  createErrorContext,
+  withErrorContext,
+  wrapError,
+  ErrorContextStore,
+} from "./errorContext.js";
+export type {
+  ErrorContext,
+  SerializedError,
+  ErrorContextQuery,
+  StoredErrorContext,
+} from "./errorContext.js";
+export {
+  ErrorAggregator,
+  normalizeErrorMessage,
+  getDefaultErrorAggregator,
+  setDefaultErrorAggregator,
+  resetDefaultErrorAggregator,
+  aggregateError,
+} from "./errorAggregator.js";
+export type {
+  AggregatedErrorGroup,
+  ErrorPattern,
+  ErrorAggregationReport,
+  ErrorAggregatorOptions,
+  ErrorGroupingStrategy,
+  GroupingStrategyType,
+  CustomGroupingResolver,
+  ReportOptions,
+} from "./errorAggregator.js";
+
 export {
   serializeInvoiceTemplate,
   deserializeInvoiceTemplate,
@@ -509,6 +550,16 @@ export { TxQueue } from "./queue.js";
 
 export { replayEvents } from "./events.js";
 export { sdkEvents } from "./events.js";
+export {
+  compileInvoiceEventFilter,
+  filterInvoiceEvents,
+  InvoiceEventFilterEngine,
+} from "./eventFilter.js";
+export type {
+  EventNumberRange,
+  InvoiceEventFilter,
+  EventFilterStats,
+} from "./eventFilter.js";
 export type { FinalityServerLike } from "./finalityChecker.js";
 export { ApprovalWorkflowSequencer, ApprovalSession } from "./approvalWorkflowSequencer.js";
 export type { ApprovalWorkflowOptions, NotificationAdapter, SignatureApplier } from "./approvalWorkflowSequencer.js";
@@ -716,6 +767,8 @@ export type {
   DecodedLedgerEntry,
   DecodedOperation,
   ProtocolStats,
+  InvoiceEvent,
+  InvoiceEventType,
 } from "./types.js";
 export { InvalidTransitionError } from "./types.js";
 
@@ -765,6 +818,16 @@ export {
   isTransactionVerificationError,
 } from "./errors.js";
 
+// Comprehensive error code registry and lookups (issue #1261)
+export {
+  SDK_ERROR_CODES,
+  getErrorByCode,
+  getErrorMessage,
+} from "./errors.js";
+export type {
+  SdkErrorCodeDefinition,
+} from "./errors.js";
+
 // Soroban contract address validation (issue #1065)
 export {
   validateContractAddress,
@@ -774,6 +837,18 @@ export {
   CONTRACT_ADDRESS_PREFIX,
 } from "./contractAddressValidator.js";
 export type { ContractAddressValidationResult } from "./contractAddressValidator.js";
+
+// Soroban contract address validation with caching (issue #1259)
+export {
+  ContractAddressValidator,
+  validateContractAddressCached,
+  clearContractAddressCache,
+  getContractAddressValidationStats,
+} from "./contractAddressValidator.js";
+export type {
+  ContractAddressValidatorOptions,
+  ContractAddressValidationStats,
+} from "./contractAddressValidator.js";
 
 // Pre-submit transaction verification (issue #1066)
 export {
@@ -789,6 +864,17 @@ export type {
   SignatureVerificationResult,
 } from "./transactionVerifier.js";
 
+// Pre-submit transaction verification with custom rules (issue #1260)
+export {
+  TransactionVerifier,
+  getTransactionVerificationStats,
+} from "./transactionVerifier.js";
+export type {
+  VerificationRule,
+  TransactionVerifierOptions,
+  TransactionVerificationStats,
+} from "./transactionVerifier.js";
+
 // Error recovery strategies (issue #1068)
 export {
   RECOVERY_STRATEGY_TABLE,
@@ -801,6 +887,18 @@ export type {
   RecoveryStrategy,
   RecoveryPlan,
   RecoveryRunOptions,
+} from "./errorRecovery.js";
+
+// Error recovery runner, stats, and hooks (issue #1262)
+export {
+  ErrorRecoveryRunner,
+  getRecoveryStats,
+  resetRecoveryStats,
+} from "./errorRecovery.js";
+export type {
+  RecoveryHook,
+  RecoveryStats,
+  RecoveryRunnerOptions,
 } from "./errorRecovery.js";
 
 // ---------------------------------------------------------------------------

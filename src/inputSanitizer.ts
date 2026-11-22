@@ -32,6 +32,7 @@
 import { StrKey } from "@stellar/stellar-sdk";
 import { StellarSplitError } from "./errors.js";
 import { parseAmount } from "./utils.js";
+import { EventEmitter } from "./events.js";
 
 // ---------------------------------------------------------------------------
 // Error
@@ -348,6 +349,425 @@ export function validateAddress(
     );
   }
   return trimmed;
+}
+
+// ---------------------------------------------------------------------------
+// Rule registry (issue #1251)
+// ---------------------------------------------------------------------------
+
+/** Kinds of values the registry knows how to sanitize. */
+export type SanitizationRuleType =
+  | "string"
+  | "number"
+  | "amount"
+  | "address"
+  | "memo"
+  | "metadata"
+  | "object";
+
+/** Options accepted by a {@link SanitizationRule}. */
+export interface SanitizationRuleOptions {
+  /** Maximum length for string-like values. */
+  maxLength?: number;
+  /** Allow `\r`/`\n` in string-like values. Defaults to `false`. */
+  allowNewlines?: boolean;
+  /** Trim surrounding whitespace. Defaults to `true`. */
+  trim?: boolean;
+  /** Inclusive lower bound for numeric/amount values. */
+  min?: string;
+  /** Inclusive upper bound for numeric/amount values. */
+  max?: string;
+  /** Maximum fractional digits for amount values. */
+  maxDecimals?: number;
+  /** Expected StrKey kind for address values. */
+  kind?: "account" | "contract" | "muxed";
+  /** Maximum nesting depth for object/metadata values. */
+  maxDepth?: number;
+  /** Maximum number of keys for object/metadata values. */
+  maxKeys?: number;
+}
+
+/**
+ * A single sanitization rule.
+ *
+ * - `type` selects the built-in sanitizer.
+ * - `pattern` (optional) must match the raw value before sanitization.
+ * - `transform` (optional) post-processes the sanitized value.
+ * - `allowlist` (optional) restricts the accepted values (exact match) or,
+ *   for strings, the set of permitted characters.
+ */
+export interface SanitizationRule {
+  /** Rule identifier used in errors and events. */
+  name: string;
+  /** Built-in sanitizer to apply. */
+  type: SanitizationRuleType;
+  /** Optional pattern the raw value must match. */
+  pattern?: RegExp;
+  /** Optional post-sanitization transform. */
+  transform?: (value: unknown) => unknown;
+  /** Optional allowlist of exact values (or permitted characters for strings). */
+  allowlist?: readonly string[];
+  /** Sanitizer options. */
+  options?: SanitizationRuleOptions;
+}
+
+/** Result of applying a rule to a value. */
+export interface SanitizationResult<T = unknown> {
+  /** The sanitized value. */
+  value: T;
+  /** Name of the rule that produced the value. */
+  rule: string;
+  /** Whether the value was modified by sanitization. */
+  modified: boolean;
+}
+
+const ruleRegistry = new Map<string, SanitizationRule>();
+
+/**
+ * Register (or replace) a named sanitization rule.
+ *
+ * @param rule - Rule definition.
+ * @returns The registered rule.
+ */
+export function registerSanitizationRule(rule: SanitizationRule): SanitizationRule {
+  if (!rule || typeof rule.name !== "string" || rule.name.length === 0) {
+    throw new InputSanitizationError("sanitization rule requires a name", {
+      rule: rule?.name,
+    });
+  }
+  ruleRegistry.set(rule.name, rule);
+  return rule;
+}
+
+/** Retrieve a registered rule by name. */
+export function getSanitizationRule(name: string): SanitizationRule | undefined {
+  return ruleRegistry.get(name);
+}
+
+/** List all registered rule names. */
+export function listSanitizationRules(): string[] {
+  return [...ruleRegistry.keys()];
+}
+
+/** Remove a registered rule. Returns `true` when a rule was removed. */
+export function unregisterSanitizationRule(name: string): boolean {
+  return ruleRegistry.delete(name);
+}
+
+function assertAllowlisted(
+  value: string,
+  rule: SanitizationRule,
+  field: string,
+): void {
+  if (!rule.allowlist) return;
+  if (rule.type === "string" || rule.type === "memo") {
+    const allowed = new Set(rule.allowlist);
+    for (const char of value) {
+      if (!allowed.has(char)) {
+        throw new InputSanitizationError(
+          `${field} contains a character not in the allowlist`,
+          { field, rule: rule.name, char },
+        );
+      }
+    }
+    return;
+  }
+  if (!rule.allowlist.includes(value)) {
+    throw new InputSanitizationError(`${field} is not an allowed value`, {
+      field,
+      rule: rule.name,
+      received: value,
+    });
+  }
+}
+
+function applyRule(
+  rule: SanitizationRule,
+  value: unknown,
+  field: string,
+): unknown {
+  const options = rule.options ?? {};
+  switch (rule.type) {
+    case "string":
+    case "memo": {
+      const maxLength = options.maxLength ?? (rule.type === "memo" ? 28 : undefined);
+      const sanitized = sanitizeString(value as string, {
+        maxLength,
+        allowNewlines: options.allowNewlines ?? false,
+        trim: options.trim,
+        field,
+      });
+      assertAllowlisted(sanitized, rule, field);
+      return sanitized;
+    }
+    case "number": {
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        throw new InputSanitizationError(`${field} must be a finite number`, {
+          field,
+          rule: rule.name,
+        });
+      }
+      if (options.min !== undefined && value < Number(options.min)) {
+        throw new InputSanitizationError(`${field} is below the minimum`, {
+          field,
+          rule: rule.name,
+          min: options.min,
+        });
+      }
+      if (options.max !== undefined && value > Number(options.max)) {
+        throw new InputSanitizationError(`${field} exceeds the maximum`, {
+          field,
+          rule: rule.name,
+          max: options.max,
+        });
+      }
+      return value;
+    }
+    case "amount": {
+      const canonical = validateAmount(value as string | number | bigint, {
+        maxDecimals: options.maxDecimals,
+        min: options.min,
+        field,
+      });
+      if (options.max !== undefined) {
+        const max = validateAmount(options.max, {
+          maxDecimals: options.maxDecimals,
+          min: options.min,
+          field: `${field} maximum`,
+        });
+        if (validateAmount(canonical, { maxDecimals: options.maxDecimals, min: options.min, field }) !== canonical) {
+          // unreachable; keeps canonical value stable
+        }
+        if (BigInt(parseAmount(canonical)) > BigInt(parseAmount(max))) {
+          throw new InputSanitizationError(`${field} exceeds the maximum of ${max}`, {
+            field,
+            rule: rule.name,
+            max,
+          });
+        }
+      }
+      assertAllowlisted(canonical, rule, field);
+      return canonical;
+    }
+    case "address": {
+      const address = validateAddress(value as string, {
+        kind: options.kind,
+        field,
+      });
+      assertAllowlisted(address, rule, field);
+      return address;
+    }
+    case "metadata":
+    case "object": {
+      const sanitized = sanitizeObject(value, {
+        maxDepth: options.maxDepth,
+        maxKeys: options.maxKeys,
+        maxLength: options.maxLength,
+        field,
+      });
+      return sanitized;
+    }
+    default:
+      throw new InputSanitizationError(
+        `${field} uses an unknown sanitization rule type`,
+        { field, rule: rule.name, type: rule.type },
+      );
+  }
+}
+
+/**
+ * Apply a registered rule (or an inline rule) to a value.
+ *
+ * @param ruleOrName - Registered rule name or inline rule definition.
+ * @param value      - Raw value to sanitize.
+ * @param field      - Field name used in error messages/events.
+ * @returns The sanitized value and metadata.
+ * @throws {InputSanitizationError} When the value fails validation.
+ */
+export function applySanitizationRule<T = unknown>(
+  ruleOrName: string | SanitizationRule,
+  value: unknown,
+  field = "input",
+): SanitizationResult<T> {
+  const rule =
+    typeof ruleOrName === "string" ? ruleRegistry.get(ruleOrName) : ruleOrName;
+  if (!rule) {
+    throw new InputSanitizationError(`unknown sanitization rule "${ruleOrName}"`, {
+      field,
+      rule: ruleOrName,
+    });
+  }
+
+  if (rule.pattern) {
+    const raw = typeof value === "string" ? value : String(value);
+    if (!rule.pattern.test(raw)) {
+      throw new InputSanitizationError(`${field} does not match the required pattern`, {
+        field,
+        rule: rule.name,
+      });
+    }
+  }
+
+  const sanitized = applyRule(rule, value, field);
+  const transformed = rule.transform ? rule.transform(sanitized) : sanitized;
+  return {
+    value: transformed as T,
+    rule: rule.name,
+    modified: transformed !== value,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Validation hooks (issue #1251)
+// ---------------------------------------------------------------------------
+
+/** Context passed to validation hooks. */
+export interface ValidationHookContext {
+  /** Method being invoked (e.g. `"createSplit"`). */
+  method: string;
+  /** Field name of the value being validated. */
+  field: string;
+  /** Raw value before sanitization. */
+  raw: unknown;
+}
+
+/** A validation hook invoked before a method executes. */
+export type ValidationHook = (
+  value: unknown,
+  context: ValidationHookContext,
+) => unknown;
+
+const validationHooks = new Map<string, ValidationHook[]>();
+
+/**
+ * Register a validation hook for a method. Hooks run in registration order
+ * and may return a replacement value; throwing aborts the call.
+ *
+ * @param method - Method name, or `"*"` for all methods.
+ * @param hook   - Hook implementation.
+ * @returns An unsubscribe function.
+ */
+export function registerValidationHook(
+  method: string,
+  hook: ValidationHook,
+): () => void {
+  const hooks = validationHooks.get(method) ?? [];
+  hooks.push(hook);
+  validationHooks.set(method, hooks);
+  return () => {
+    const current = validationHooks.get(method);
+    if (!current) return;
+    const index = current.indexOf(hook);
+    if (index >= 0) current.splice(index, 1);
+    if (current.length === 0) validationHooks.delete(method);
+  };
+}
+
+/** Remove all validation hooks (optionally for a single method). */
+export function clearValidationHooks(method?: string): void {
+  if (method === undefined) validationHooks.clear();
+  else validationHooks.delete(method);
+}
+
+/**
+ * Run all validation hooks registered for `method` (plus `"*"` hooks) on a
+ * value. Returns the possibly-replaced value.
+ *
+ * @throws {InputSanitizationError} When a hook rejects the value.
+ */
+export function runValidationHooks(
+  method: string,
+  field: string,
+  value: unknown,
+): unknown {
+  const hooks = [
+    ...(validationHooks.get("*") ?? []),
+    ...(validationHooks.get(method) ?? []),
+  ];
+  let current = value;
+  for (const hook of hooks) {
+    try {
+      current = hook(current, { method, field, raw: value });
+    } catch (error) {
+      if (error instanceof InputSanitizationError) throw error;
+      throw new InputSanitizationError(
+        `${field} failed validation for ${method}`,
+        { method, field, cause: error instanceof Error ? error.message : String(error) },
+      );
+    }
+  }
+  return current;
+}
+
+// ---------------------------------------------------------------------------
+// Sanitization tracking (issue #1251)
+// ---------------------------------------------------------------------------
+
+/** A single sanitization event emitted for tracking. */
+export interface SanitizationEvent {
+  /** Method that triggered sanitization. */
+  method: string;
+  /** Field that was sanitized. */
+  field: string;
+  /** Rule applied (if any). */
+  rule?: string;
+  /** Whether the value was modified. */
+  modified: boolean;
+  /** Whether sanitization succeeded. */
+  success: boolean;
+  /** Error message when `success` is `false`. */
+  error?: string;
+  /** Timestamp (ms since epoch). */
+  timestamp: number;
+}
+
+/** Emitter used to publish sanitization events. */
+export const sanitizationEvents = new EventEmitter<{
+  sanitization: SanitizationEvent;
+}>();
+
+/**
+ * Sanitize a value for a method invocation: runs validation hooks, applies
+ * the rule, and emits a tracking event.
+ *
+ * @param method     - Method name (used for hooks and events).
+ * @param field      - Field name.
+ * @param value      - Raw value.
+ * @param ruleOrName - Rule name or inline rule (optional).
+ * @returns The sanitized value.
+ */
+export function sanitizeForMethod<T = unknown>(
+  method: string,
+  field: string,
+  value: unknown,
+  ruleOrName?: string | SanitizationRule,
+): T {
+  try {
+    const hooked = runValidationHooks(method, field, value);
+    const result = ruleOrName
+      ? applySanitizationRule<T>(ruleOrName, hooked, field)
+      : ({ value: hooked as T, rule: undefined, modified: hooked !== value } as SanitizationResult<T>);
+    sanitizationEvents.emit("sanitization", {
+      method,
+      field,
+      rule: result.rule,
+      modified: result.modified,
+      success: true,
+      timestamp: Date.now(),
+    });
+    return result.value;
+  } catch (error) {
+    sanitizationEvents.emit("sanitization", {
+      method,
+      field,
+      rule: typeof ruleOrName === "string" ? ruleOrName : ruleOrName?.name,
+      modified: false,
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+      timestamp: Date.now(),
+    });
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------------------

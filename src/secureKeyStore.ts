@@ -36,8 +36,15 @@ import {
   pbkdf2 as pbkdf2Cb,
   randomBytes,
 } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { promisify } from "node:util";
 import { StellarSplitError } from "./errors.js";
+import {
+  AccessControl,
+  type AccessPolicy,
+  type AccessContext,
+} from "./accessControl.js";
+import { AuditLogger } from "./auditLogger.js";
 
 const pbkdf2 = promisify(pbkdf2Cb);
 
@@ -57,6 +64,8 @@ const MAX_SECRET_LENGTH = 4_096;
 const MIN_PBKDF2_SALT_BYTES = 16;
 const MIN_PBKDF2_ITERATIONS = 1_000;
 const CONTROL_CHARS = /[\u0000-\u001F\u007F]/;
+const MAX_KEY_VERSION = 1_000_000;
+const MAX_USAGE_EVENTS = 10_000;
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -101,6 +110,24 @@ export class KeyRotationError extends KeyStorageError {
   constructor(message: string, context?: Record<string, unknown>) {
     super(message, "KEY_ROTATION", context);
     this.name = "KeyRotationError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when an access-control policy denies an operation on a secret. */
+export class KeyAccessDeniedError extends KeyStorageError {
+  constructor(message: string, context?: Record<string, unknown>) {
+    super(message, "KEY_ACCESS_DENIED", context);
+    this.name = "KeyAccessDeniedError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a caller fails to supply the required access context. */
+export class KeyAccessContextError extends KeyStorageError {
+  constructor(message: string, context?: Record<string, unknown>) {
+    super(message, "KEY_ACCESS_CONTEXT", context);
+    this.name = "KeyAccessContextError";
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
@@ -156,6 +183,26 @@ interface StoredKeyRecord {
   ciphertext: string;
   createdAt: number;
   updatedAt: number;
+  /** Monotonic per-secret key version, bumped on every rotation. */
+  keyVersion: number;
+}
+
+/** A single recorded key-usage event. Never contains plaintext key material. */
+export interface KeyUsageEvent {
+  /** Operation performed (`set`, `get`, `rotate`, `delete`, `denied`, …). */
+  action: string;
+  /** Secret id the operation targeted. */
+  id: string;
+  /** Whether the operation succeeded. */
+  success: boolean;
+  /** Wall-clock timestamp (ms since epoch). */
+  timestamp: number;
+  /** Key version in effect at the time of the event, when known. */
+  keyVersion?: number;
+  /** Acting principal (from the access context), when known. */
+  principal?: string;
+  /** Failure reason code, when the operation failed. */
+  reason?: string;
 }
 
 /** Options for {@link SecureKeyStore}. */
@@ -164,6 +211,21 @@ export interface SecureKeyStoreOptions {
   masterKey: Uint8Array | Buffer;
   /** Persistence layer. Defaults to {@link MemoryKeyStoreBackend}. */
   backend?: KeyStoreBackend;
+  /**
+   * Access-control engine enforcing per-key policies. When omitted, a fresh
+   * {@link AccessControl} with no policies is created (deny-by-default for
+   * operations that require a policy).
+   */
+  accessControl?: AccessControl;
+  /** Audit logger receiving every key-usage event. */
+  auditLogger?: AuditLogger;
+  /** Event emitter that receives `keyUsage` events. */
+  events?: EventEmitter;
+  /**
+   * When `true`, operations that have no registered policy are denied.
+   * Defaults to `true` so access is controlled by default.
+   */
+  denyByDefault?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -300,6 +362,11 @@ export class SecureKeyStore {
 
   private _masterKey: Buffer;
   private readonly _backend: KeyStoreBackend;
+  private readonly _accessControl: AccessControl;
+  private readonly _auditLogger: AuditLogger;
+  private readonly _events: EventEmitter;
+  private readonly _denyByDefault: boolean;
+  private readonly _usage: KeyUsageEvent[] = [];
   private _destroyed = false;
 
   constructor(options: SecureKeyStoreOptions) {
@@ -316,6 +383,99 @@ export class SecureKeyStore {
       }
     }
     this._backend = backend;
+    this._accessControl = options.accessControl ?? new AccessControl();
+    this._auditLogger = options.auditLogger ?? new AuditLogger();
+    this._events = options.events ?? new EventEmitter();
+    this._denyByDefault = options.denyByDefault ?? true;
+  }
+
+  /**
+   * Register or replace the access policy for a secret id.
+   *
+   * @param id     - Secret id the policy governs.
+   * @param policy - Access policy to enforce.
+   * @throws {KeyStorageError} After `destroy()`.
+   */
+  setAccessPolicy(id: string, policy: AccessPolicy): void {
+    this._assertUsable();
+    const entry = normalizeId(id);
+    this._accessControl.setPolicy(entry, policy);
+    this._recordUsage({ action: "policy.set", id: entry, success: true });
+  }
+
+  /**
+   * Return the recorded key-usage events (oldest first), optionally filtered
+   * by secret id. Events never contain plaintext key material.
+   *
+   * @param id - Optional secret id filter.
+   * @throws {KeyStorageError} After `destroy()`.
+   */
+  getUsageEvents(id?: string): KeyUsageEvent[] {
+    this._assertUsable();
+    const events = id === undefined ? this._usage : this._usage.filter((e) => e.id === id);
+    return events.map((e) => ({ ...e }));
+  }
+
+  /**
+   * Return the current key version for `id` without decrypting the secret.
+   *
+   * @param id - Secret id to inspect.
+   * @throws {KeyNotFoundError} When no record exists for `id`.
+   * @throws {KeyStorageError}  After `destroy()`.
+   */
+  async getKeyVersion(id: string): Promise<number> {
+    this._assertUsable();
+    const entry = normalizeId(id);
+    const record = await this._backend.read(entry);
+    if (record === null) {
+      throw new KeyNotFoundError(`No secret stored for "${entry}"`, { id: entry });
+    }
+    return parseRecord(record, entry).keyVersion;
+  }
+
+  /**
+   * Rotate the encryption of a single secret under the current master key,
+   * bumping its key version and re-sealing it with a fresh IV.
+   *
+   * @param id      - Secret id to rotate.
+   * @param context - Access context for the operation.
+   * @returns The new key version.
+   * @throws {KeyAccessDeniedError}  When the policy denies rotation.
+   * @throws {KeyAccessContextError} When a required context is missing.
+   * @throws {KeyNotFoundError}      When no record exists for `id`.
+   * @throws {KeyIntegrityError}     When the record fails authentication.
+   * @throws {KeyStorageError}       After `destroy()`.
+   */
+  async rotateSecretKey(id: string, context?: AccessContext): Promise<number> {
+    this._assertUsable();
+    const entry = normalizeId(id);
+    this._authorize("rotate", entry, context);
+
+    const raw = await this._backend.read(entry);
+    if (raw === null) {
+      this._recordUsage({ action: "rotate", id: entry, success: false, reason: "not_found" });
+      throw new KeyNotFoundError(`No secret stored for "${entry}"`, { id: entry });
+    }
+    const record = parseRecord(raw, entry);
+    const nextVersion = record.keyVersion + 1;
+    if (nextVersion > MAX_KEY_VERSION) {
+      this._recordUsage({ action: "rotate", id: entry, success: false, reason: "version_overflow" });
+      throw new KeyRotationError(`Key version overflow for "${entry}"`, {
+        id: entry,
+        keyVersion: record.keyVersion,
+      });
+    }
+    const secret = open(raw, entry, this._masterKey);
+    const sealed = seal(secret, record.createdAt, this._masterKey, nextVersion);
+    await this._backend.write(entry, sealed);
+    this._recordUsage({
+      action: "rotate",
+      id: entry,
+      success: true,
+      keyVersion: nextVersion,
+      principal: context?.principal,
+    });
+    return nextVersion;
   }
 
   /**
@@ -329,17 +489,44 @@ export class SecureKeyStore {
    * @throws {KeyStorageError}      On invalid id/secret or after `destroy()`.
    * @throws {KeyIntegrityError}    If an existing record is unreadable.
    */
-  async setSecret(id: string, secret: string): Promise<void> {
+  async setSecret(id: string, secret: string, context?: AccessContext): Promise<void> {
     this._assertUsable();
     const entry = normalizeId(id);
     const plaintext = normalizeSecret(secret);
+    this._authorize("write", entry, context);
 
     const existing = await this._backend.read(entry);
     let createdAt = Date.now();
+    let keyVersion = 1;
     if (existing !== null) {
-      createdAt = parseRecord(existing, entry).createdAt;
+      const record = parseRecord(existing, entry);
+      createdAt = record.createdAt;
+      keyVersion = record.keyVersion + 1;
+      if (keyVersion > MAX_KEY_VERSION) {
+        this._recordUsage({
+          action: "set",
+          id: entry,
+          success: false,
+          reason: "version_overflow",
+          principal: context?.principal,
+        });
+        throw new KeyRotationError(`Key version overflow for "${entry}"`, {
+          id: entry,
+          keyVersion: record.keyVersion,
+        });
+      }
     }
-    await this._backend.write(entry, seal(plaintext, createdAt, this._masterKey));
+    await this._backend.write(
+      entry,
+      seal(plaintext, createdAt, this._masterKey, keyVersion),
+    );
+    this._recordUsage({
+      action: "set",
+      id: entry,
+      success: true,
+      keyVersion,
+      principal: context?.principal,
+    });
   }
 
   /**
@@ -351,14 +538,31 @@ export class SecureKeyStore {
    * @throws {KeyIntegrityError}  When decryption/authentication fails.
    * @throws {KeyStorageError}    After `destroy()`.
    */
-  async getSecret(id: string): Promise<string> {
+  async getSecret(id: string, context?: AccessContext): Promise<string> {
     this._assertUsable();
     const entry = normalizeId(id);
+    this._authorize("read", entry, context);
     const record = await this._backend.read(entry);
     if (record === null) {
+      this._recordUsage({
+        action: "get",
+        id: entry,
+        success: false,
+        reason: "not_found",
+        principal: context?.principal,
+      });
       throw new KeyNotFoundError(`No secret stored for "${entry}"`, { id: entry });
     }
-    return open(record, entry, this._masterKey);
+    const keyVersion = parseRecord(record, entry).keyVersion;
+    const secret = open(record, entry, this._masterKey);
+    this._recordUsage({
+      action: "get",
+      id: entry,
+      success: true,
+      keyVersion,
+      principal: context?.principal,
+    });
+    return secret;
   }
 
   /**
@@ -367,9 +571,18 @@ export class SecureKeyStore {
    * @param id - Storage key to probe.
    * @throws {KeyStorageError} After `destroy()`.
    */
-  async hasSecret(id: string): Promise<boolean> {
+  async hasSecret(id: string, context?: AccessContext): Promise<boolean> {
     this._assertUsable();
-    return (await this._backend.read(normalizeId(id))) !== null;
+    const entry = normalizeId(id);
+    this._authorize("read", entry, context);
+    const present = (await this._backend.read(entry)) !== null;
+    this._recordUsage({
+      action: "has",
+      id: entry,
+      success: true,
+      principal: context?.principal,
+    });
+    return present;
   }
 
   /**
@@ -378,9 +591,30 @@ export class SecureKeyStore {
    * @returns Sorted ids.
    * @throws {KeyStorageError} After `destroy()`.
    */
-  async listSecrets(): Promise<string[]> {
+  async listSecrets(context?: AccessContext): Promise<string[]> {
     this._assertUsable();
-    return (await this._backend.listIds()).slice().sort();
+    const ids = (await this._backend.listIds()).slice().sort();
+    const visible: string[] = [];
+    for (const id of ids) {
+      if (this._isAllowed("read", id, context)) {
+        visible.push(id);
+      } else {
+        this._recordUsage({
+          action: "list.denied",
+          id,
+          success: false,
+          reason: "access_denied",
+          principal: context?.principal,
+        });
+      }
+    }
+    this._recordUsage({
+      action: "list",
+      id: "*",
+      success: true,
+      principal: context?.principal,
+    });
+    return visible;
   }
 
   /**
@@ -389,9 +623,17 @@ export class SecureKeyStore {
    * @param id - Storage key to remove.
    * @throws {KeyStorageError} After `destroy()`.
    */
-  async deleteSecret(id: string): Promise<void> {
+  async deleteSecret(id: string, context?: AccessContext): Promise<void> {
     this._assertUsable();
-    await this._backend.delete(normalizeId(id));
+    const entry = normalizeId(id);
+    this._authorize("delete", entry, context);
+    await this._backend.delete(entry);
+    this._recordUsage({
+      action: "delete",
+      id: entry,
+      success: true,
+      principal: context?.principal,
+    });
   }
 
   /**
@@ -408,12 +650,22 @@ export class SecureKeyStore {
    *   under the current key (rotation aborts before any write).
    * @throws {KeyStorageError} After `destroy()`.
    */
-  async rotateMasterKey(newMasterKey: Uint8Array | Buffer): Promise<void> {
+  async rotateMasterKey(
+    newMasterKey: Uint8Array | Buffer,
+    context?: AccessContext,
+  ): Promise<void> {
     this._assertUsable();
     let next: Buffer;
     try {
       next = validateMasterKey(newMasterKey);
     } catch (err) {
+      this._recordUsage({
+        action: "rotateMasterKey",
+        id: "*",
+        success: false,
+        reason: "invalid_key",
+        principal: context?.principal,
+      });
       throw new KeyRotationError(
         err instanceof Error ? err.message : "Invalid new master key",
         { length: newMasterKey instanceof Uint8Array ? newMasterKey.length : undefined },
@@ -421,12 +673,31 @@ export class SecureKeyStore {
     }
 
     const ids = await this._backend.listIds();
-    const rewritten: Array<{ id: string; record: string }> = [];
+    const rewritten: Array<{ id: string; record: string; keyVersion: number }> = [];
     for (const id of ids) {
       const raw = await this._backend.read(id);
       if (raw === null) continue;
+      const record = parseRecord(raw, id);
+      const nextVersion = record.keyVersion + 1;
+      if (nextVersion > MAX_KEY_VERSION) {
+        this._recordUsage({
+          action: "rotateMasterKey",
+          id,
+          success: false,
+          reason: "version_overflow",
+          principal: context?.principal,
+        });
+        throw new KeyRotationError(`Key version overflow for "${id}"`, {
+          id,
+          keyVersion: record.keyVersion,
+        });
+      }
       const secret = open(raw, id, this._masterKey);
-      rewritten.push({ id, record: seal(secret, parseRecord(raw, id).createdAt, next) });
+      rewritten.push({
+        id,
+        record: seal(secret, record.createdAt, next, nextVersion),
+        keyVersion: nextVersion,
+      });
     }
 
     // All records re-sealed successfully — commit the rewrite, then swap keys.
@@ -435,6 +706,15 @@ export class SecureKeyStore {
     }
     this._masterKey.fill(0);
     this._masterKey = next;
+    for (const { id, keyVersion } of rewritten) {
+      this._recordUsage({
+        action: "rotateMasterKey",
+        id,
+        success: true,
+        keyVersion,
+        principal: context?.principal,
+      });
+    }
   }
 
   /**
@@ -445,10 +725,16 @@ export class SecureKeyStore {
    *
    * @throws {KeyStorageError} After `destroy()`.
    */
-  async cleanup(): Promise<void> {
+  async cleanup(context?: AccessContext): Promise<void> {
     this._assertUsable();
     for (const id of await this._backend.listIds()) {
       await this._backend.delete(id);
+      this._recordUsage({
+        action: "cleanup",
+        id,
+        success: true,
+        principal: context?.principal,
+      });
     }
   }
 
@@ -467,6 +753,82 @@ export class SecureKeyStore {
   private _assertUsable(): void {
     if (this._destroyed) {
       throw new KeyStorageError("SecureKeyStore has been destroyed");
+    }
+  }
+
+  /**
+   * Evaluate the access policy for `action` on `id`.
+   *
+   * Returns `false` when denied; throws {@link KeyAccessContextError} when a
+   * policy exists but no context was supplied.
+   */
+  private _isAllowed(action: string, id: string, context?: AccessContext): boolean {
+    const policy = this._accessControl.getPolicy(id);
+    if (!policy) {
+      return !this._denyByDefault;
+    }
+    if (!context) {
+      throw new KeyAccessContextError(
+        `Access context is required to ${action} secret "${id}"`,
+        { id, action },
+      );
+    }
+    return this._accessControl.isAllowed(action, id, context);
+  }
+
+  /** Enforce the access policy, recording and throwing on denial. */
+  private _authorize(action: string, id: string, context?: AccessContext): void {
+    let allowed: boolean;
+    try {
+      allowed = this._isAllowed(action, id, context);
+    } catch (err) {
+      this._recordUsage({
+        action,
+        id,
+        success: false,
+        reason: "missing_context",
+        principal: context?.principal,
+      });
+      throw err;
+    }
+    if (!allowed) {
+      this._recordUsage({
+        action,
+        id,
+        success: false,
+        reason: "access_denied",
+        principal: context?.principal,
+      });
+      throw new KeyAccessDeniedError(
+        `Access denied: cannot ${action} secret "${id}"`,
+        { id, action, principal: context?.principal },
+      );
+    }
+  }
+
+  /** Record a usage event in memory, the audit log, and the event emitter. */
+  private _recordUsage(event: Omit<KeyUsageEvent, "timestamp">): void {
+    const full: KeyUsageEvent = { ...event, timestamp: Date.now() };
+    this._usage.push(full);
+    if (this._usage.length > MAX_USAGE_EVENTS) {
+      this._usage.splice(0, this._usage.length - MAX_USAGE_EVENTS);
+    }
+    try {
+      this._auditLogger.log("key.usage", {
+        action: full.action,
+        id: full.id,
+        success: full.success,
+        keyVersion: full.keyVersion,
+        principal: full.principal,
+        reason: full.reason,
+      });
+    } catch {
+      // Auditing must never break key operations.
+    }
+    try {
+      this._events.emit("keyUsage", { ...full });
+    } catch {
+      // Listener failures must never break key operations.
     }
   }
 }
@@ -494,10 +856,20 @@ function parseRecord(raw: string, id: string): StoredKeyRecord {
   ) {
     throw new KeyIntegrityError(`Stored record for "${id}" has an invalid shape`, { id });
   }
-  return record as StoredKeyRecord;
+  // Records written before key versioning default to version 1.
+  const keyVersion =
+    typeof record.keyVersion === "number" && Number.isInteger(record.keyVersion) && record.keyVersion >= 1
+      ? record.keyVersion
+      : 1;
+  return { ...(record as StoredKeyRecord), keyVersion };
 }
 
-function seal(plaintext: string, createdAt: number, key: Buffer): string {
+function seal(
+  plaintext: string,
+  createdAt: number,
+  key: Buffer,
+  keyVersion: number = 1,
+): string {
   const iv = randomBytes(GCM_IV_BYTES);
   const cipher = createCipheriv(ALGORITHM, key, iv);
   const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
@@ -508,6 +880,7 @@ function seal(plaintext: string, createdAt: number, key: Buffer): string {
     ciphertext: ciphertext.toString("base64"),
     createdAt,
     updatedAt: Date.now(),
+    keyVersion,
   };
   return JSON.stringify(record);
 }

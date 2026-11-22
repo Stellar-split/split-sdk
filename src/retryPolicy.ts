@@ -17,6 +17,9 @@ import {
   UnauthorizedError,
   CircuitOpenError,
   TransactionNotConfirmedError,
+  InvalidContractAddressError,
+  TransactionVerificationError,
+  isRetryableErrorCode,
 } from "./errors.js";
 
 export interface RetryOptions {
@@ -188,6 +191,15 @@ export function createRetryExecutor(options: RetryPolicyOptions): RetryExecutor 
 }
 
 export function isRetryable(error: unknown): boolean {
+  // Prefer the centralized error-code taxonomy when the error carries a code.
+  if (error instanceof Error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string" && code.length > 0) {
+      return isRetryableErrorCode(code);
+    }
+  }
+
+  // Fallback for uncoded errors: explicit classification by error type.
   if (error instanceof PaymentCooldownActiveError) return true;
   if (error instanceof CircuitOpenError) return true;
   if (error instanceof TransactionNotConfirmedError) return true;
@@ -205,6 +217,8 @@ export function isRetryable(error: unknown): boolean {
   if (error instanceof ContractFrozenError) return false;
   if (error instanceof InvoiceFullyFundedError) return false;
   if (error instanceof DelegateLimitReachedError) return false;
+  if (error instanceof InvalidContractAddressError) return false;
+  if (error instanceof TransactionVerificationError) return false;
 
   if (error instanceof RpcError) {
     return error.statusCode === 429 || error.statusCode === 502 || error.statusCode === 503 || error.statusCode === 504;

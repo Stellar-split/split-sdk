@@ -319,7 +319,7 @@ export class InvoiceVersionTracker {
 
     const version: InvoiceVersion = {
       version: nextVersionNumber,
-      snapshot: Object.freeze({ ...newSnapshot }),
+      snapshot: freezeSnapshot(newSnapshot),
       changedBy,
       changedAt: new Date(),
       changeSummary,
@@ -485,7 +485,8 @@ export class InvoiceVersionTracker {
     const latest = (await this._store.getLatest(invoiceId))!;
     const target = (await this.getVersion(invoiceId, targetVersion))!;
 
-    // Reconstruct restored invoice snapshot
+    // Reconstruct restored invoice snapshot (deep copy so the stored snapshot
+    // is never mutated by callers and no partial writes can occur).
     const restored: Invoice = {
       ...target.snapshot,
       recipients: target.snapshot.recipients.map((r) => ({ ...r })),
@@ -507,7 +508,7 @@ export class InvoiceVersionTracker {
 
     const newVersion: InvoiceVersion = {
       version: nextVersionNumber,
-      snapshot: Object.freeze({ ...restored }),
+      snapshot: freezeSnapshot(restored),
       changedBy,
       changedAt: new Date(),
       changeSummary,
@@ -517,6 +518,8 @@ export class InvoiceVersionTracker {
       metadata: options?.metadata,
     };
 
+    // Single atomic append: the new rollback version is only committed once
+    // fully constructed, so a failure leaves the history untouched.
     await this._store.append(invoiceId, newVersion);
 
     return {
@@ -589,20 +592,21 @@ export class InvoiceVersionTracker {
     let count = 0;
 
     for (const item of rawVersions) {
+      const snapshot: Invoice = {
+        ...item.snapshot,
+        funded: BigInt(item.snapshot?.funded ?? 0),
+        recipients: (item.snapshot?.recipients ?? []).map((r: any) => ({
+          ...r,
+          amount: BigInt(r.amount ?? 0),
+        })),
+        payments: (item.snapshot?.payments ?? []).map((p: any) => ({
+          ...p,
+          amount: BigInt(p.amount ?? 0),
+        })),
+      };
       const v: InvoiceVersion = {
         version: Number(item.version),
-        snapshot: Object.freeze({
-          ...item.snapshot,
-          funded: BigInt(item.snapshot?.funded ?? 0),
-          recipients: (item.snapshot?.recipients ?? []).map((r: any) => ({
-            ...r,
-            amount: BigInt(r.amount ?? 0),
-          })),
-          payments: (item.snapshot?.payments ?? []).map((p: any) => ({
-            ...p,
-            amount: BigInt(p.amount ?? 0),
-          })),
-        }),
+        snapshot: freezeSnapshot(snapshot),
         changedBy: String(item.changedBy ?? ""),
         changedAt: new Date(item.changedAt),
         changeSummary: String(item.changeSummary ?? ""),
@@ -626,6 +630,19 @@ export class InvoiceVersionTracker {
       await this._store.clear(invoiceId);
     }
   }
+}
+
+/**
+ * Produce a deeply frozen copy of an invoice snapshot so that recorded
+ * versions are immutable and cannot be mutated by later updates.
+ */
+function freezeSnapshot(invoice: Invoice): Readonly<Invoice> {
+  const copy: Invoice = {
+    ...invoice,
+    recipients: invoice.recipients.map((r) => Object.freeze({ ...r })),
+    payments: invoice.payments.map((p) => Object.freeze({ ...p })),
+  };
+  return Object.freeze(copy);
 }
 
 /**

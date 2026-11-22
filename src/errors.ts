@@ -2923,3 +2923,168 @@ export function isSignatureValidationError(err: unknown): err is SignatureValida
   return err instanceof SignatureValidationError;
 }
 
+// ---------------------------------------------------------------------------
+// Input sanitization errors (issue #1251)
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown when an input fails sanitization and cannot be safely coerced into
+ * an acceptable value (e.g. it contains a disallowed pattern or is not on the
+ * configured whitelist).
+ */
+export class SanitizationError extends StellarSplitError {
+  /** The name of the input that failed sanitization. */
+  readonly field: string;
+  /** The sanitization rule that rejected the input. */
+  readonly rule: string;
+  /** Human-readable reason(s) the input was rejected. */
+  readonly reasons: string[];
+
+  constructor(field: string, rule: string, reasons: string[], context?: Record<string, unknown>) {
+    super(
+      `Input sanitization failed for "${field}" (rule: ${rule}): ${reasons.join("; ")}`,
+      "SANITIZATION_ERROR",
+      { field, rule, reasons, ...context },
+    );
+    this.name = "SanitizationError";
+    this.field = field;
+    this.rule = rule;
+    this.reasons = reasons;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isSanitizationError(err: unknown): err is SanitizationError {
+  return err instanceof SanitizationError;
+}
+
+/** Thrown when an input value is not present in the configured whitelist. */
+export class WhitelistViolationError extends SanitizationError {
+  /** The rejected value (stringified for safe logging). */
+  readonly value: string;
+
+  constructor(field: string, value: unknown, context?: Record<string, unknown>) {
+    const stringified = typeof value === "string" ? value : String(value);
+    super(field, "whitelist", [`value "${stringified}" is not whitelisted`], context);
+    this.name = "WhitelistViolationError";
+    this.value = stringified;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isWhitelistViolationError(err: unknown): err is WhitelistViolationError {
+  return err instanceof WhitelistViolationError;
+}
+
+// ---------------------------------------------------------------------------
+// Rate limiting errors (issue #1252)
+// ---------------------------------------------------------------------------
+
+/**
+ * Thrown when a request exceeds its configured rate limit.
+ *
+ * Carries the limit metadata so callers can back off intelligently and
+ * surface `retryAfterMs` to end users.
+ */
+export class RateLimitExceededError extends StellarSplitError {
+  /** The rate-limit key (e.g. method name or user identifier) that was exceeded. */
+  readonly key: string;
+  /** The configured maximum number of requests in the window. */
+  readonly limit: number;
+  /** The length of the rate-limit window in milliseconds. */
+  readonly windowMs: number;
+  /** Milliseconds until the caller may retry. */
+  readonly retryAfterMs: number;
+
+  constructor(key: string, limit: number, windowMs: number, retryAfterMs: number) {
+    super(
+      `Rate limit exceeded for "${key}": ${limit} requests per ${windowMs}ms (retry after ${retryAfterMs}ms)`,
+      "RATE_LIMIT_EXCEEDED",
+      { key, limit, windowMs, retryAfterMs },
+    );
+    this.name = "RateLimitExceededError";
+    this.key = key;
+    this.limit = limit;
+    this.windowMs = windowMs;
+    this.retryAfterMs = retryAfterMs;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isRateLimitExceededError(err: unknown): err is RateLimitExceededError {
+  return err instanceof RateLimitExceededError;
+}
+
+// ---------------------------------------------------------------------------
+// CSRF protection errors (issue #1253)
+// ---------------------------------------------------------------------------
+
+/** Thrown when a CSRF token is missing, malformed, expired or does not match. */
+export class CsrfValidationError extends StellarSplitError {
+  /** The reason the token failed validation. */
+  readonly reason: string;
+
+  constructor(reason: string, context?: Record<string, unknown>) {
+    super(`CSRF validation failed: ${reason}`, "CSRF_VALIDATION_FAILED", { reason, ...context });
+    this.name = "CsrfValidationError";
+    this.reason = reason;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isCsrfValidationError(err: unknown): err is CsrfValidationError {
+  return err instanceof CsrfValidationError;
+}
+
+// ---------------------------------------------------------------------------
+// Secure key storage errors (issue #1254)
+// ---------------------------------------------------------------------------
+
+/** Thrown when access to a stored key is denied by the access-control policy. */
+export class KeyAccessDeniedError extends StellarSplitError {
+  /** Identifier of the key whose access was denied. */
+  readonly keyId: string;
+  /** The principal that attempted the access, if known. */
+  readonly principal?: string;
+  /** The operation that was attempted (e.g. "read", "rotate"). */
+  readonly operation: string;
+
+  constructor(keyId: string, operation: string, principal?: string, context?: Record<string, unknown>) {
+    super(
+      `Access denied for key "${keyId}" (operation: ${operation})${principal ? ` for principal "${principal}"` : ""}`,
+      "KEY_ACCESS_DENIED",
+      { keyId, operation, principal, ...context },
+    );
+    this.name = "KeyAccessDeniedError";
+    this.keyId = keyId;
+    this.operation = operation;
+    this.principal = principal;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isKeyAccessDeniedError(err: unknown): err is KeyAccessDeniedError {
+  return err instanceof KeyAccessDeniedError;
+}
+
+/** Thrown when encryption or decryption of a stored key fails. */
+export class KeyEncryptionError extends StellarSplitError {
+  /** Identifier of the key whose encryption operation failed. */
+  readonly keyId: string;
+
+  constructor(keyId: string, message: string, context?: Record<string, unknown>) {
+    super(
+      `Key encryption operation failed for "${keyId}": ${message}`,
+      "KEY_ENCRYPTION_ERROR",
+      { keyId, ...context },
+    );
+    this.name = "KeyEncryptionError";
+    this.keyId = keyId;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isKeyEncryptionError(err: unknown): err is KeyEncryptionError {
+  return err instanceof KeyEncryptionError;
+}
+

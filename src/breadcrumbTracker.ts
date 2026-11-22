@@ -100,6 +100,25 @@ export class RingBufferBreadcrumbStorage implements BreadcrumbStorage {
   }
 }
 
+/**
+ * Aggregate statistics over all stored breadcrumbs.
+ * Useful for dashboards and debugging summaries.
+ */
+export interface BreadcrumbStats {
+  /** Total number of breadcrumbs currently stored. */
+  total: number;
+  /** Count of breadcrumbs per category. */
+  byCategory: Record<string, number>;
+  /** Count of breadcrumbs per level. */
+  byLevel: Record<BreadcrumbLevel, number>;
+  /** Timestamp of the oldest breadcrumb, or undefined when empty. */
+  oldestTimestamp: number | undefined;
+  /** Timestamp of the newest breadcrumb, or undefined when empty. */
+  newestTimestamp: number | undefined;
+  /** Time span in milliseconds between oldest and newest, or 0 when fewer than two items. */
+  spanMs: number;
+}
+
 /** Filter criteria for retrieving breadcrumbs. */
 export interface BreadcrumbFilter {
   /** Filter by category or array of categories. */
@@ -326,6 +345,50 @@ export class BreadcrumbTracker {
     return this.storage.getAll();
   }
 
+  /**
+   * Returns aggregate statistics over the currently stored breadcrumbs.
+   * Useful for dashboards and debugging reports.
+   */
+  getStats(): BreadcrumbStats {
+    const crumbs = this.storage.getAll();
+    const byCategory: Record<string, number> = {};
+    const byLevel: Record<BreadcrumbLevel, number> = {
+      debug: 0,
+      info: 0,
+      warn: 0,
+      error: 0,
+      fatal: 0,
+    };
+
+    let oldestTimestamp: number | undefined;
+    let newestTimestamp: number | undefined;
+
+    for (const crumb of crumbs) {
+      byCategory[crumb.category] = (byCategory[crumb.category] ?? 0) + 1;
+      if (crumb.level && crumb.level in byLevel) {
+        byLevel[crumb.level as BreadcrumbLevel]++;
+      }
+      if (oldestTimestamp === undefined || crumb.timestamp < oldestTimestamp) {
+        oldestTimestamp = crumb.timestamp;
+      }
+      if (newestTimestamp === undefined || crumb.timestamp > newestTimestamp) {
+        newestTimestamp = crumb.timestamp;
+      }
+    }
+
+    return {
+      total: crumbs.length,
+      byCategory,
+      byLevel,
+      oldestTimestamp,
+      newestTimestamp,
+      spanMs:
+        oldestTimestamp !== undefined && newestTimestamp !== undefined && crumbs.length >= 2
+          ? newestTimestamp - oldestTimestamp
+          : 0,
+    };
+  }
+
   /** Clears all stored breadcrumbs. */
   clear(): void {
     this.storage.clear();
@@ -373,4 +436,9 @@ export function getBreadcrumbs(filter?: BreadcrumbFilter): Breadcrumb[] {
 /** Convenience function to clear breadcrumbs in the default tracker. */
 export function clearBreadcrumbs(): void {
   defaultBreadcrumbTracker.clear();
+}
+
+/** Convenience function to get aggregate stats from the default tracker. */
+export function getBreadcrumbStats(): BreadcrumbStats {
+  return defaultBreadcrumbTracker.getStats();
 }

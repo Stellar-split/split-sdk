@@ -19,6 +19,58 @@ export interface ContractEvent {
   timestamp: number;
 }
 
+/** Payload describing a single input sanitization event. */
+export interface SanitizationEventPayload {
+  /** The SDK method whose input was sanitized. */
+  method: string;
+  /** The name of the input field that was sanitized. */
+  field: string;
+  /** The sanitization rule that was applied. */
+  rule: string;
+  /** Whether the input was modified by sanitization. */
+  modified: boolean;
+  /** Whether the input was rejected by validation. */
+  rejected: boolean;
+}
+
+/** Payload describing a rate-limit decision. */
+export interface RateLimitEventPayload {
+  /** Identifier of the rate-limited subject (e.g. user or API key). */
+  subject: string;
+  /** The action or bucket the limit applies to. */
+  action: string;
+  /** The configured maximum number of requests in the window. */
+  limit: number;
+  /** The number of requests observed in the current window. */
+  count: number;
+  /** Whether the request was allowed. */
+  allowed: boolean;
+  /** Unix timestamp, in milliseconds, when the window resets. */
+  resetAt: number;
+}
+
+/** Payload describing a CSRF token lifecycle event. */
+export interface CsrfEventPayload {
+  /** The CSRF event kind that occurred. */
+  type: "generated" | "validated" | "refreshed" | "rejected";
+  /** The session or subject the token is bound to. */
+  subject: string;
+  /** Whether the token was accepted. */
+  valid: boolean;
+}
+
+/** Payload describing a secure key-store operation. */
+export interface KeyStoreEventPayload {
+  /** The key-store operation that occurred. */
+  operation: "stored" | "retrieved" | "rotated" | "deleted" | "denied";
+  /** The identifier of the key involved. */
+  keyId: string;
+  /** The principal performing the operation. */
+  principal: string;
+  /** Whether the operation succeeded. */
+  success: boolean;
+}
+
 /** SDK-level events emitted as internal workflows progress. */
 export interface SDKEventMap extends Record<string, unknown> {
   /** Emitted when a monitored stream has stopped producing data within the allowed interval. */
@@ -33,6 +85,14 @@ export interface SDKEventMap extends Record<string, unknown> {
   approvalReceived: { signerPublicKey: string };
   /** Emitted when the approval workflow reaches its required signer count. */
   approvalWorkflowComplete: { signerCount: number };
+  /** Emitted when an input is sanitized or rejected by validation. */
+  inputSanitized: SanitizationEventPayload;
+  /** Emitted when a rate-limit decision is made. */
+  rateLimitEvent: RateLimitEventPayload;
+  /** Emitted when a CSRF token is generated, validated, refreshed or rejected. */
+  csrfEvent: CsrfEventPayload;
+  /** Emitted when a secure key-store operation is performed. */
+  keyStoreEvent: KeyStoreEventPayload;
 }
 
 /** Shared typed emitter for SDK lifecycle events. */

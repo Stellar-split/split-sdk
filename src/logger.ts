@@ -103,6 +103,8 @@ export interface LogEntry {
   message: string;
   /** Optional contextual metadata and key-value attributes. */
   context?: Record<string, unknown>;
+  /** Optional trace ID correlating this entry with a top-level SDK operation. */
+  traceId?: TraceId;
 }
 
 /**
@@ -157,9 +159,19 @@ export interface LoggerOptions {
    * Initial active enabled flag. If false, behaves as LogLevel.NONE.
    */
   enabled?: boolean;
-  /** Optional entry predicate. Returning false suppresses the entry. */
-  filter?: LogFilter;
+  /**
+   * Trace ID automatically attached to every entry emitted by this logger.
+   * Used to scope a logger to a single top-level SDK operation.
+   */
+  traceId?: TraceId;
 }
+
+/**
+ * Optional trace correlation ID attached to log entries emitted within a traced scope.
+ * Populated by the SDK tracing layer (see src/tracing.ts) so that log lines can be
+ * correlated across the steps of a single logical operation.
+ */
+export type TraceId = string;
 
 /** Stellar secret key pattern (56 characters starting with 'S'). */
 const STELLAR_SECRET_SEED_RE = /\bS[A-Z0-9]{55}\b/g;
