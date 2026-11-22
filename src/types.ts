@@ -2318,96 +2318,195 @@ export interface ProtocolStats {
 }
 
 // ---------------------------------------------------------------------------
-// Transaction Verification Types (Issue #1260)
+// Automatic Nonce Management Types (Issue #1223)
 // ---------------------------------------------------------------------------
 
-/** Severity of a failed verification rule. */
-export type VerificationSeverity = "error" | "warning";
+/** Lifecycle state of a tracked nonce. */
+export type NonceState = "available" | "reserved" | "submitted" | "confirmed" | "failed";
 
-/**
- * A single transaction verification rule.
- *
- * Built-in rules are identified by `name`; custom rules additionally supply a
- * `check` function that inspects the transaction and returns a failure reason
- * (or `null` when the transaction passes).
- */
-export interface VerificationRule {
-  /** Unique rule name, used in reports and for enabling/disabling rules. */
-  name: string;
-  /** Human-readable description of what the rule enforces. */
-  description?: string;
-  /**
-   * Severity applied when the rule fails. `"error"` blocks submission,
-   * `"warning"` is recorded but does not block. Defaults to `"error"`.
-   */
-  severity?: VerificationSeverity;
-  /**
-   * Optional predicate evaluated against the transaction. Returns `null` (or
-   * `undefined`) when the transaction passes, or a failure reason string when
-   * it fails. Built-in rules may omit this and be evaluated internally.
-   */
-  check?: (tx: unknown, context?: Record<string, unknown>) => string | null | undefined;
+/** A single tracked nonce for a source account. */
+export interface NonceRecord {
+  /** Stellar address of the source account this nonce belongs to. */
+  sourceAccount: string;
+  /** The sequence number (nonce) value. */
+  nonce: bigint;
+  /** Current lifecycle state of the nonce. */
+  state: NonceState;
+  /** Unix epoch ms when the nonce was reserved. */
+  reservedAt: number;
+  /** Unix epoch ms when the nonce was last updated. */
+  updatedAt: number;
+  /** Transaction hash associated with this nonce, once submitted. */
+  txHash?: string;
 }
 
-/** A user-supplied verification rule with a required `check` function. */
-export interface CustomVerificationRule extends VerificationRule {
-  /** Predicate evaluated against the transaction; must be provided. */
-  check: (tx: unknown, context?: Record<string, unknown>) => string | null | undefined;
-}
-
-/** Options controlling a {@link TransactionVerifier} instance. */
-export interface TransactionVerifierOptions {
-  /** Additional custom rules appended to the built-in rule set. */
-  customRules?: CustomVerificationRule[];
-  /** Names of built-in rules to skip. */
-  disabledRules?: string[];
-  /**
-   * When `true`, a failing `"warning"` rule is treated as an error and blocks
-   * submission. Defaults to `false`.
-   */
-  strict?: boolean;
-  /** When `true`, verification results are recorded in the tracking stats. Defaults to `true`. */
-  track?: boolean;
-}
-
-/** Outcome of evaluating a single rule against a transaction. */
-export interface VerificationRuleResult {
-  /** Name of the rule that was evaluated. */
-  rule: string;
-  /** Whether the rule passed. */
-  passed: boolean;
-  /** Severity of the rule. */
-  severity: VerificationSeverity;
-  /** Failure reason when `passed` is false. */
-  reason?: string;
-}
-
-/** Aggregate tracking statistics for a verifier instance. */
-export interface VerificationStats {
-  /** Total number of transactions verified. */
-  totalVerified: number;
-  /** Number of transactions that passed verification. */
-  totalPassed: number;
-  /** Number of transactions that failed verification. */
+/** Aggregated nonce management statistics. */
+export interface NonceStats {
+  /** Total number of nonces reserved since tracking began. */
+  totalReserved: number;
+  /** Number of nonces confirmed on-chain. */
+  totalConfirmed: number;
+  /** Number of nonces that failed or were released. */
   totalFailed: number;
-  /** Per-rule failure counts, keyed by rule name. */
-  failuresByRule: Record<string, number>;
+  /** Number of nonces recovered after a gap or failure. */
+  totalRecovered: number;
+  /** Number of nonce conflicts detected. */
+  conflicts: number;
+  /** Number of nonces currently reserved (in flight). */
+  inFlight: number;
 }
 
-/** Report produced by verifying a transaction before submission. */
-export interface TransactionVerificationReport {
-  /** Whether the transaction passed all blocking rules. */
-  valid: boolean;
-  /** Per-rule evaluation results, in evaluation order. */
-  results: VerificationRuleResult[];
-  /** Failure reasons for blocking rules (empty when `valid` is true). */
-  errors: string[];
-  /** Failure reasons for non-blocking rules. */
-  warnings: string[];
-  /** Unix timestamp (ms) when verification ran. */
-  verifiedAt: number;
-  /** Cumulative tracking stats at the time of this verification. */
-  stats: VerificationStats;
+/** Configuration for the nonce manager. */
+export interface NonceManagerConfig {
+  /** Stellar address of the source account whose nonces are managed. */
+  sourceAccount: string;
+  /**
+   * How long (ms) a reserved nonce may stay in flight before it is considered
+   * stale and eligible for recovery. Defaults to 60_000.
+   */
+  reservationTimeoutMs?: number;
+  /**
+   * Maximum number of nonces that may be reserved ahead of the confirmed
+   * sequence. Defaults to 10.
+   */
+  maxLookahead?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Request Timeout & Retry Types (Issue #1224)
+// ---------------------------------------------------------------------------
+
+/** Backoff strategy used between retry attempts. */
+export type BackoffStrategy = "fixed" | "linear" | "exponential";
+
+/** Configuration for request timeouts and retries. */
+export interface RetryConfig {
+  /** Per-attempt timeout in milliseconds. Defaults to 10_000. */
+  timeoutMs?: number;
+  /** Maximum number of retry attempts after the initial attempt. Defaults to 3. */
+  maxRetries?: number;
+  /** Backoff strategy between attempts. Defaults to "exponential". */
+  backoff?: BackoffStrategy;
+  /** Base delay in milliseconds used by the backoff strategy. Defaults to 500. */
+  baseDelayMs?: number;
+  /** Maximum delay in milliseconds between attempts. Defaults to 30_000. */
+  maxDelayMs?: number;
+  /** Optional jitter factor (0..1) applied to each delay. Defaults to 0. */
+  jitter?: number;
+  /** Predicate deciding whether an error is retryable. Defaults to retrying all errors. */
+  isRetryable?: (error: unknown) => boolean;
+}
+
+/** Aggregated retry/timeout statistics. */
+export interface RetryStats {
+  /** Total number of attempts made (including the initial attempt). */
+  totalAttempts: number;
+  /** Number of requests that succeeded on the first attempt. */
+  firstAttemptSuccesses: number;
+  /** Number of requests that succeeded after at least one retry. */
+  retriedSuccesses: number;
+  /** Number of requests that exhausted all retries and failed. */
+  exhaustedFailures: number;
+  /** Number of attempts that timed out. */
+  timeouts: number;
+  /** Total time spent waiting between retries, in milliseconds. */
+  totalBackoffMs: number;
+}
+
+// ---------------------------------------------------------------------------
+// Currency Conversion Types (Issue #1225)
+// ---------------------------------------------------------------------------
+
+/** A single currency conversion rate between two assets. */
+export interface ConversionRate {
+  /** Source asset identifier ("native" or "CODE:ISSUER"). */
+  from: string;
+  /** Target asset identifier ("native" or "CODE:ISSUER"). */
+  to: string;
+  /** Fixed-point rate (1e18 = 1.0) applied when converting from -> to. */
+  rate: bigint;
+  /** Unix epoch ms when this rate was fetched. */
+  fetchedAt: number;
+}
+
+/** Configuration for the currency converter. */
+export interface CurrencyConverterConfig {
+  /** How long (ms) a cached rate remains valid. Defaults to 60_000. */
+  cacheTtlMs?: number;
+  /** Maximum number of cached rate pairs to retain. Defaults to 100. */
+  maxCacheEntries?: number;
+  /** Optional custom rate provider; defaults to the built-in provider. */
+  rateProvider?: (from: string, to: string) => Promise<bigint>;
+}
+
+/** Aggregated currency conversion statistics. */
+export interface ConversionStats {
+  /** Total number of conversions performed. */
+  totalConversions: number;
+  /** Number of conversions served from the rate cache. */
+  cacheHits: number;
+  /** Number of conversions that required a fresh rate fetch. */
+  cacheMisses: number;
+  /** Number of conversions that failed. */
+  failures: number;
+}
+
+// ---------------------------------------------------------------------------
+// Batch Operation Types (Issue #1226)
+// ---------------------------------------------------------------------------
+
+/** Outcome of a single operation within a batch. */
+export interface BatchItemResult<T = unknown> {
+  /** Zero-based index of the operation within the batch. */
+  index: number;
+  /** Whether this operation succeeded. */
+  success: boolean;
+  /** Result value when the operation succeeded. */
+  value?: T;
+  /** Error message when the operation failed. */
+  error?: string;
+}
+
+/** Aggregate result of executing a batch of operations. */
+export interface BatchResult<T = unknown> {
+  /** Per-operation results, in the same order as the input. */
+  results: BatchItemResult<T>[];
+  /** Number of operations that succeeded. */
+  succeeded: number;
+  /** Number of operations that failed. */
+  failed: number;
+  /** Whether every operation succeeded. */
+  allSucceeded: boolean;
+}
+
+/** Configuration for batch execution. */
+export interface BatchConfig {
+  /** Maximum number of operations per batch. Defaults to 100. */
+  maxBatchSize?: number;
+  /**
+   * When `true`, a failing operation does not abort the remaining operations.
+   * Defaults to `true`.
+   */
+  continueOnError?: boolean;
+  /**
+   * When `true`, operations are executed concurrently rather than sequentially.
+   * Defaults to `false`.
+   */
+  concurrent?: boolean;
+}
+
+/** Aggregated batch execution statistics. */
+export interface BatchStats {
+  /** Total number of batches executed. */
+  totalBatches: number;
+  /** Total number of operations submitted across all batches. */
+  totalOperations: number;
+  /** Total number of operations that succeeded. */
+  succeededOperations: number;
+  /** Total number of operations that failed. */
+  failedOperations: number;
+  /** Number of batches that completed with at least one failure (partial batches). */
+  partialBatches: number;
 }
 
 // ---------------------------------------------------------------------------

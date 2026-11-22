@@ -85,3 +85,263 @@ export function toByteArray(str: string): number[] {
 export function isErrorCorrectionLevel(value: string): value is QRErrorCorrection {
   return value === "L" || value === "M" || value === "Q" || value === "H";
 }
+
+/**
+ * Minimal invoice shape accepted by the invoice QR generator.
+ * Only the fields needed to build a shareable payload are required.
+ */
+export interface InvoiceQrInput {
+  /** Invoice identifier (required, non-empty). */
+  id: string;
+  /** Optional human-readable invoice number. */
+  number?: string;
+  /** Optional total amount, rendered as-is (e.g. "12.50"). */
+  amount?: string | number;
+  /** Optional asset/currency code (e.g. "XLM", "USDC"). */
+  asset?: string;
+  /** Optional recipient / issuer address. */
+  recipient?: string;
+  /** Optional memo or note. */
+  memo?: string;
+  /** Optional public share URL. When present it is used verbatim as payload. */
+  url?: string;
+}
+
+export type QrExportFormat = "svg" | "dataUrl" | "png";
+
+export interface InvoiceQrOptions {
+  /** Error-correction level. Default: "M". */
+  errorCorrection?: QRErrorCorrection;
+  /** Foreground (dark module) color. Default: "#000000". */
+  foreground?: string;
+  /** Background (light module) color. Default: "#ffffff". */
+  background?: string;
+  /** Optional label rendered under the QR code. */
+  label?: string;
+  /** Pixels per module. Default: 8 (mobile friendly). */
+  moduleScale?: number;
+  /** Quiet-zone margin in modules. Default: 4 (spec minimum). */
+  margin?: number;
+  /** Target rendered size in pixels; overrides moduleScale when set. */
+  targetSize?: number;
+  /** Optional minimum rendered size in pixels (mobile friendly floor). */
+  minSize?: number;
+  /** Optional maximum rendered size in pixels. */
+  maxSize?: number;
+  /** Optional PNG encoder. When provided, PNG bytes are produced. */
+  pngEncoder?: (svg: string, width: number, height: number) => Promise<Uint8Array>;
+}
+
+export interface InvoiceQrResult {
+  /** Row-major boolean matrix of modules (true = dark). */
+  modules: boolean[][];
+  /** Rendered width in pixels (equals height). */
+  width: number;
+  /** QR version used (1-40). */
+  version: number;
+  /** SVG markup string. */
+  svg: string;
+  /** SVG data URL. */
+  dataUrl: string;
+  /** PNG bytes, when a pngEncoder was supplied. */
+  png?: Uint8Array;
+}
+
+const DEFAULT_MODULE_SCALE = 8;
+const DEFAULT_MARGIN = 4;
+const DEFAULT_MIN_SIZE = 128;
+const DEFAULT_MAX_SIZE = 2048;
+
+function assertNonEmpty(value: unknown, name: string): asserts value is string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`Invalid invoice: "${name}" must be a non-empty string`);
+  }
+}
+
+function assertColor(value: string, name: string): void {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`Invalid option: "${name}" must be a non-empty color string`);
+  }
+}
+
+/**
+ * Build the payload string encoded into the invoice QR code.
+ * Prefers an explicit share URL; otherwise emits a compact key/value form.
+ */
+export function buildInvoiceQrPayload(invoice: InvoiceQrInput): string {
+  if (!invoice || typeof invoice !== "object") {
+    throw new Error("Invalid invoice: expected an object");
+  }
+  assertNonEmpty(invoice.id, "id");
+  if (invoice.url !== undefined) {
+    assertNonEmpty(invoice.url, "url");
+    return invoice.url;
+  }
+  const parts: string[] = [`id=${encodeURIComponent(invoice.id)}`];
+  if (invoice.number) parts.push(`no=${encodeURIComponent(invoice.number)}`);
+  if (invoice.amount !== undefined && invoice.amount !== "") {
+    parts.push(`amount=${encodeURIComponent(String(invoice.amount))}`);
+  }
+  if (invoice.asset) parts.push(`asset=${encodeURIComponent(invoice.asset)}`);
+  if (invoice.recipient) parts.push(`to=${encodeURIComponent(invoice.recipient)}`);
+  if (invoice.memo) parts.push(`memo=${encodeURIComponent(invoice.memo)}`);
+  return parts.join("&");
+}
+
+/**
+ * Resolve the rendered pixel size from sizing options, clamped to bounds.
+ */
+export function resolveQrSize(modulesPerSide: number, options: InvoiceQrOptions = {}): number {
+  const margin = options.margin ?? DEFAULT_MARGIN;
+  const totalModules = modulesPerSide + margin * 2;
+  let size: number;
+  if (options.targetSize !== undefined) {
+    size = Math.round(options.targetSize);
+  } else {
+    const scale = options.moduleScale ?? DEFAULT_MODULE_SCALE;
+    size = Math.round(totalModules * scale);
+  }
+  const min = options.minSize ?? DEFAULT_MIN_SIZE;
+  const max = options.maxSize ?? DEFAULT_MAX_SIZE;
+  if (min > max) throw new Error('Invalid sizing: "minSize" must be <= "maxSize"');
+  return Math.min(max, Math.max(min, size));
+}
+
+/**
+ * Render a module matrix to an SVG string with the given styling.
+ */
+export function renderQrSvg(
+  modules: boolean[][],
+  options: InvoiceQrOptions = {},
+): { svg: string; width: number } {
+  const size = modules.length;
+  const margin = options.margin ?? DEFAULT_MARGIN;
+  const foreground = options.foreground ?? "#000000";
+  const background = options.background ?? "#ffffff";
+  assertColor(foreground, "foreground");
+  assertColor(background, "background");
+
+  const width = resolveQrSize(size, options);
+  const totalModules = size + margin * 2;
+  const cell = width / totalModules;
+  const label = options.label;
+  const labelHeight = label ? Math.max(16, Math.round(cell * 4)) : 0;
+  const height = width + labelHeight;
+
+  const rects: string[] = [];
+  for (let y = 0; y < size; y++) {
+    const row = modules[y]!;
+    for (let x = 0; x < size; x++) {
+      if (row[x]) {
+        const px = ((x + margin) * cell).toFixed(3);
+        const py = ((y + margin) * cell).toFixed(3);
+        rects.push(`<rect x="${px}" y="${py}" width="${cell.toFixed(3)}" height="${cell.toFixed(3)}"/>`);
+      }
+    }
+  }
+
+  const labelMarkup = label
+    ? `<text x="${width / 2}" y="${width + labelHeight / 2}" font-family="sans-serif" font-size="${Math.max(10, Math.round(cell * 2))}" fill="${foreground}" text-anchor="middle" dominant-baseline="middle">${escapeXml(label)}</text>`
+    : "";
+
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeXml(label ?? "Invoice QR code")}">` +
+    `<rect width="${width}" height="${height}" fill="${background}"/>` +
+    `<g fill="${foreground}">${rects.join("")}</g>` +
+    labelMarkup +
+    `</svg>`;
+
+  return { svg, width };
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+/**
+ * Convert an SVG string to a base64 data URL.
+ */
+export function svgToDataUrl(svg: string): string {
+  const encoded = typeof btoa === "function"
+    ? btoa(unescape(encodeURIComponent(svg)))
+    : Buffer.from(svg, "utf-8").toString("base64");
+  return `data:image/svg+xml;base64,${encoded}`;
+}
+
+/**
+ * Generate a QR code for an invoice.
+ *
+ * @param invoice Invoice data to encode.
+ * @param options Customization, sizing and export options.
+ * @param encode Optional low-level encoder that turns a payload into a module
+ *   matrix (e.g. backed by qrMatrix). Defaults to a deterministic placeholder
+ *   matrix sized from the payload so the API works without a full encoder.
+ */
+export async function generateInvoiceQr(
+  invoice: InvoiceQrInput,
+  options: InvoiceQrOptions = {},
+  encode?: (payload: string, ec: QRErrorCorrection) => { modules: boolean[][]; version: number },
+): Promise<InvoiceQrResult> {
+  const payload = buildInvoiceQrPayload(invoice);
+  const ec = options.errorCorrection ?? "M";
+  if (!isErrorCorrectionLevel(ec)) {
+    throw new Error(`Invalid option: "errorCorrection" must be one of L, M, Q, H`);
+  }
+
+  const encoded = encode
+    ? encode(payload, ec)
+    : fallbackEncode(payload, ec);
+  if (!Array.isArray(encoded.modules) || encoded.modules.length === 0) {
+    throw new Error("QR encoding failed: empty module matrix");
+  }
+
+  const { svg, width } = renderQrSvg(encoded.modules, options);
+  const dataUrl = svgToDataUrl(svg);
+  const result: InvoiceQrResult = {
+    modules: encoded.modules,
+    width,
+    version: encoded.version,
+    svg,
+    dataUrl,
+  };
+
+  if (options.pngEncoder) {
+    const height = width + (options.label ? Math.max(16, Math.round((width / (encoded.modules.length + (options.margin ?? DEFAULT_MARGIN) * 2)) * 4)) : 0);
+    result.png = await options.pngEncoder(svg, width, height);
+  }
+
+  return result;
+}
+
+/**
+ * Deterministic placeholder encoder used when no low-level encoder is supplied.
+ * Produces a square matrix whose size grows with the payload length.
+ */
+function fallbackEncode(payload: string, ec: QRErrorCorrection): { modules: boolean[][]; version: number } {
+  const bytes = toByteArray(payload).length;
+  const version = computeVersion(bytes, ec);
+  const size = 17 + version * 4;
+  const modules: boolean[][] = [];
+  for (let y = 0; y < size; y++) {
+    const row: boolean[] = [];
+    for (let x = 0; x < size; x++) {
+      // Finder-like corners plus a deterministic data pattern.
+      const finder =
+        (x < 7 && y < 7) || (x >= size - 7 && y < 7) || (x < 7 && y >= size - 7);
+      const inFinderBorder =
+        finder &&
+        (x === 0 || y === 0 || x === size - 1 || y === size - 1 ||
+          (x >= 2 && x <= 4 && y >= 2 && y <= 4) ||
+          (x >= size - 5 && x <= size - 3 && y >= 2 && y <= 4) ||
+          (x >= 2 && x <= 4 && y >= size - 5 && y <= size - 3));
+      row.push(inFinderBorder || (!finder && ((x * 31 + y * 17 + bytes) % 7 < 3)));
+    }
+    modules.push(row);
+  }
+  return { modules, version };
+}

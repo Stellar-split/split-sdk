@@ -12,6 +12,8 @@ export interface UsageAnalyticsConfig {
   enabled: boolean;
   endpoint?: string;
   flushIntervalMs?: number;
+  /** Explicit opt-out; when true, tracking is disabled regardless of `enabled`. */
+  optOut?: boolean;
 }
 
 /** Snapshot of accumulated call counts, keyed by method name. */
@@ -24,7 +26,7 @@ export class UsageAnalyticsCollector {
 
   constructor(config: UsageAnalyticsConfig) {
     this.config = config;
-    if (config.enabled && (config.flushIntervalMs ?? 60_000) > 0) {
+    if (this.isActive() && (config.flushIntervalMs ?? 60_000) > 0) {
       this.timer = setInterval(
         () => void this.flush(),
         config.flushIntervalMs ?? 60_000
@@ -36,9 +38,14 @@ export class UsageAnalyticsCollector {
     }
   }
 
-  /** Increment the counter for a method name. No-op when disabled. */
+  /** Whether tracking is currently active (enabled and not opted out). */
+  private isActive(): boolean {
+    return this.config.enabled === true && this.config.optOut !== true;
+  }
+
+  /** Increment the counter for a method name. No-op when disabled or opted out. */
   record(method: string): void {
-    if (!this.config.enabled) return;
+    if (!this.isActive()) return;
     this.counts[method] = (this.counts[method] ?? 0) + 1;
   }
 
@@ -52,7 +59,7 @@ export class UsageAnalyticsCollector {
    * Safe to call even when disabled (becomes a no-op).
    */
   async flush(): Promise<void> {
-    if (!this.config.enabled) return;
+    if (!this.isActive()) return;
 
     const snapshot = this.getCounts();
     // Reset before sending so the next window starts clean even on send failure
@@ -100,11 +107,12 @@ export function wrapWithAnalytics<T extends object>(
     enabled: config.usageAnalytics?.enabled ?? false,
     endpoint: config.usageAnalytics?.endpoint,
     flushIntervalMs: config.usageAnalytics?.flushIntervalMs,
+    optOut: config.usageAnalytics?.optOut ?? false,
   };
 
   const instance = collector ?? new UsageAnalyticsCollector(analyticsConfig);
 
-  if (!analyticsConfig.enabled) {
+  if (!analyticsConfig.enabled || analyticsConfig.optOut) {
     return { proxy: client, collector: instance };
   }
 

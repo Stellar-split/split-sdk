@@ -8,6 +8,11 @@ import type { EscalationStep, TimeoutPolicy } from "./types.js";
 import { FallbackChain } from "./fallbackChain.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_BASE_DELAY_MS = 200;
+const DEFAULT_MAX_DELAY_MS = 5_000;
+const DEFAULT_BACKOFF_FACTOR = 2;
+const DEFAULT_JITTER = 0.2;
 
 /**
  * Timeout config: keys are method names, values are milliseconds.
@@ -36,6 +41,117 @@ export type TimeoutResult<T> =
   | { ok: true; value: T }
   | { ok: false; reason: "timeout" | "error"; error?: Error };
 
+/**
+ * Retry configuration.  All fields are optional and fall back to sensible
+ * defaults.  A per-method override may be supplied via {@link RetryConfigMap}.
+ */
+export interface RetryConfig {
+  /** Maximum number of attempts (including the first). Default 3. */
+  maxAttempts?: number;
+  /** Base delay in ms before the first retry. Default 200. */
+  baseDelayMs?: number;
+  /** Upper bound on any single backoff delay in ms. Default 5000. */
+  maxDelayMs?: number;
+  /** Exponential growth factor applied per attempt. Default 2. */
+  backoffFactor?: number;
+  /** Jitter fraction (0..1) applied to each delay. Default 0.2. */
+  jitter?: number;
+  /** Optional predicate to decide whether an error is retryable. */
+  isRetryable?: (error: Error) => boolean;
+}
+
+/**
+ * Retry config keyed by method name.  The special key "default" applies to
+ * any method not explicitly listed.
+ */
+export type RetryConfigMap = {
+  default?: RetryConfig;
+} & Record<string, RetryConfig | undefined>;
+
+/** Aggregated retry/timeout statistics. */
+export interface RetryStats {
+  /** Total attempts made across all calls (including first attempts). */
+  attempts: number;
+  /** Number of calls that ultimately succeeded. */
+  successes: number;
+  /** Number of calls that ultimately failed (non-retryable or exhausted). */
+  failures: number;
+  /** Number of attempts that timed out. */
+  timeouts: number;
+  /** Number of retries performed (attempts beyond the first). */
+  retries: number;
+  /** Total time spent sleeping in backoff, in ms. */
+  totalBackoffMs: number;
+  /** Per-method breakdown of the same counters. */
+  byMethod: Record<string, RetryStats>;
+}
+
+function emptyStats(): RetryStats {
+  return {
+    attempts: 0,
+    successes: 0,
+    failures: 0,
+    timeouts: 0,
+    retries: 0,
+    totalBackoffMs: 0,
+    byMethod: {},
+  };
+}
+
+/**
+ * Default retryable-error classification.  Timeouts, network errors and
+ * transient server failures (5xx / 429) are retryable; everything else is
+ * treated as terminal.
+ */
+export function isRetryableError(error: Error): boolean {
+  if (error instanceof RequestTimeoutError) return true;
+
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string") {
+    const retryableCodes = [
+      "ECONNRESET",
+      "ECONNREFUSED",
+      "ETIMEDOUT",
+      "ENOTFOUND",
+      "EAI_AGAIN",
+      "EPIPE",
+      "REQUEST_TIMEOUT",
+      "NETWORK_ERROR",
+      "RATE_LIMITED",
+    ];
+    if (retryableCodes.includes(code)) return true;
+  }
+
+  const status = (error as { status?: unknown; statusCode?: unknown }).status ??
+    (error as { statusCode?: unknown }).statusCode;
+  if (typeof status === "number") {
+    return status === 429 || (status >= 500 && status <= 599);
+  }
+
+  return false;
+}
+
+/** Compute an exponential backoff delay with jitter for the given attempt. */
+export function computeBackoffDelay(
+  attempt: number,
+  config: RetryConfig = {}
+): number {
+  const baseDelayMs = config.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
+  const maxDelayMs = config.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
+  const factor = config.backoffFactor ?? DEFAULT_BACKOFF_FACTOR;
+  const jitter = Math.min(Math.max(config.jitter ?? DEFAULT_JITTER, 0), 1);
+
+  const exponential = baseDelayMs * Math.pow(factor, Math.max(0, attempt - 1));
+  const capped = Math.min(exponential, maxDelayMs);
+  // Symmetric jitter around the capped delay.
+  const jitterAmount = capped * jitter * (Math.random() * 2 - 1);
+  return Math.max(0, Math.round(capped + jitterAmount));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 const KNOWN_METHODS = [
   "getInvoice",
   "createInvoice",
@@ -61,17 +177,136 @@ const KNOWN_METHODS = [
 
 export class TimeoutManager {
   private readonly _config: { default?: number } & Record<string, number | undefined>;
+  private readonly _retryConfig: RetryConfigMap;
+  private readonly _stats: RetryStats = emptyStats();
 
-  constructor(config: TimeoutConfig) {
+  constructor(config: TimeoutConfig, retryConfig: RetryConfigMap = {}) {
     if (typeof config === "number") {
       this._config = { default: config };
     } else {
       this._config = config;
     }
+    this._retryConfig = retryConfig;
   }
 
   resolveTimeout(method: string): number {
     return this._config[method] ?? this._config.default ?? DEFAULT_TIMEOUT_MS;
+  }
+
+  /** Resolve the effective retry config for a method. */
+  resolveRetryConfig(method: string): Required<Omit<RetryConfig, "isRetryable">> & {
+    isRetryable: (error: Error) => boolean;
+  } {
+    const merged: RetryConfig = {
+      ...(this._retryConfig.default ?? {}),
+      ...(this._retryConfig[method] ?? {}),
+    };
+    return {
+      maxAttempts: Math.max(1, merged.maxAttempts ?? DEFAULT_MAX_ATTEMPTS),
+      baseDelayMs: merged.baseDelayMs ?? DEFAULT_BASE_DELAY_MS,
+      maxDelayMs: merged.maxDelayMs ?? DEFAULT_MAX_DELAY_MS,
+      backoffFactor: merged.backoffFactor ?? DEFAULT_BACKOFF_FACTOR,
+      jitter: merged.jitter ?? DEFAULT_JITTER,
+      isRetryable: merged.isRetryable ?? isRetryableError,
+    };
+  }
+
+  /** Snapshot of accumulated retry/timeout statistics. */
+  getStats(): RetryStats {
+    return {
+      ...this._stats,
+      byMethod: Object.fromEntries(
+        Object.entries(this._stats.byMethod).map(([k, v]) => [k, { ...v }])
+      ),
+    };
+  }
+
+  /** Reset accumulated statistics. */
+  resetStats(): void {
+    this._stats.attempts = 0;
+    this._stats.successes = 0;
+    this._stats.failures = 0;
+    this._stats.timeouts = 0;
+    this._stats.retries = 0;
+    this._stats.totalBackoffMs = 0;
+    this._stats.byMethod = {};
+  }
+
+  private methodStats(method: string): RetryStats {
+    let entry = this._stats.byMethod[method];
+    if (!entry) {
+      entry = emptyStats();
+      this._stats.byMethod[method] = entry;
+    }
+    return entry;
+  }
+
+  private recordAttempt(method: string, timedOut: boolean): void {
+    this._stats.attempts++;
+    this.methodStats(method).attempts++;
+    if (timedOut) {
+      this._stats.timeouts++;
+      this.methodStats(method).timeouts++;
+    }
+  }
+
+  private recordRetry(method: string, backoffMs: number): void {
+    this._stats.retries++;
+    this._stats.totalBackoffMs += backoffMs;
+    const m = this.methodStats(method);
+    m.retries++;
+    m.totalBackoffMs += backoffMs;
+  }
+
+  private recordOutcome(method: string, ok: boolean): void {
+    if (ok) {
+      this._stats.successes++;
+      this.methodStats(method).successes++;
+    } else {
+      this._stats.failures++;
+      this.methodStats(method).failures++;
+    }
+  }
+
+  /**
+   * Run `fn` with the method's configured timeout and retry policy.
+   * Retries use exponential backoff with jitter and only occur for errors
+   * classified as retryable.  Statistics are accumulated on the manager.
+   */
+  async execute<T>(
+    method: string,
+    fn: (signal: AbortSignal) => Promise<T>
+  ): Promise<TimeoutResult<T>> {
+    const timeoutMs = this.resolveTimeout(method);
+    const retry = this.resolveRetryConfig(method);
+
+    let lastResult: TimeoutResult<T> = {
+      ok: false,
+      reason: "error",
+      error: new Error(`No attempts made for ${method}`),
+    };
+
+    for (let attempt = 1; attempt <= retry.maxAttempts; attempt++) {
+      const result = await withTimeout(fn, timeoutMs, method);
+      this.recordAttempt(method, result.reason === "timeout");
+
+      if (result.ok) {
+        this.recordOutcome(method, true);
+        return result;
+      }
+
+      lastResult = result;
+      const error = result.error ?? new Error(`Attempt ${attempt} failed for ${method}`);
+      const canRetry = attempt < retry.maxAttempts && retry.isRetryable(error);
+      if (!canRetry) break;
+
+      const delayMs = computeBackoffDelay(attempt, retry);
+      this.recordRetry(method, delayMs);
+      if (delayMs > 0) await sleep(delayMs);
+    }
+
+    this.recordOutcome(method, false);
+    return lastResult;
   }
 
   getTimeoutConfig(): Record<string, number> {
