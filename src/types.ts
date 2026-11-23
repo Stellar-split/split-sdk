@@ -37,6 +37,33 @@ export interface ArbiterVote {
 /** Lifecycle status of an invoice. */
 export type InvoiceStatus = "Pending" | "Released" | "Refunded" | "Cancelled";
 
+/** All valid invoice statuses, in lifecycle order. */
+export const INVOICE_STATUSES = ["Pending", "Released", "Refunded", "Cancelled"] as const satisfies readonly InvoiceStatus[];
+
+/** Type guard: true when `value` is a valid {@link InvoiceStatus}. */
+export function isInvoiceStatus(value: unknown): value is InvoiceStatus {
+  return typeof value === "string" && (INVOICE_STATUSES as readonly string[]).includes(value);
+}
+
+/** Statuses from which an invoice can no longer transition. */
+export type TerminalInvoiceStatus = Exclude<InvoiceStatus, "Pending">;
+
+/** Type guard: true when `status` is a terminal (non-Pending) status. */
+export function isTerminalInvoiceStatus(status: InvoiceStatus): status is TerminalInvoiceStatus {
+  return status !== "Pending";
+}
+
+/**
+ * Type guard that narrows an invoice to a specific status, so `invoice.status`
+ * is inferred as that literal type in the guarded branch.
+ */
+export function isInvoiceInStatus<M, S extends InvoiceStatus>(
+  invoice: Invoice<M, InvoiceStatus>,
+  status: S,
+): invoice is Invoice<M, S> {
+  return invoice.status === status;
+}
+
 /** One recorded status change in an invoice's lifecycle. */
 export interface TransitionRecord {
   from: InvoiceStatus;
