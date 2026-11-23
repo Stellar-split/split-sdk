@@ -684,6 +684,7 @@ export type {
 } from "./ledgerCloseEstimator.js";
 
 export { StellarSplitTxBuilder } from "./txBuilder.js";
+export type { TxBuilderValidator, TxBuilderPlugin, TxBuilderStats } from "./txBuilder.js";
 
 export { SequenceCache, isSequenceTooOld } from "./sequenceCache.js";
 export type { SequenceCacheConfig } from "./sequenceCache.js";
