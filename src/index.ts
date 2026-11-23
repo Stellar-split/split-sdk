@@ -1373,3 +1373,12 @@ export type {
   StellarAssetValidationOptions,
   StellarAssetValidationResult,
 } from "./stellarAssetValidation.js";
+
+// Payment Flow Retry and Fallback (#1373)
+export { PaymentFlowRetry, PaymentFlowExhaustedError } from "./paymentFlowRetry.js";
+export type {
+  PaymentProvider,
+  PaymentFlowRetryOptions,
+  PaymentAttemptRecord,
+  PaymentFlowResult,
+} from "./paymentFlowRetry.js";
