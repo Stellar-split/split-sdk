@@ -1340,3 +1340,23 @@ export * from './apiDocGenerator.js';
 
 // SDK Cookbook (#1198)
 export * from './cookbook.js';
+
+// SDK Encryption Utilities (#1320)
+export {
+  EncryptionKeyManager,
+  SdkEncryptor,
+  deriveEncryptionKey,
+  generateSalt,
+  EncryptionUtilityError,
+  KeyNotFoundError,
+  DecryptionFailedError,
+  ENCRYPTION_ENVELOPE_VERSION,
+  ENCRYPTION_KEY_BYTES,
+  ENCRYPTION_IV_BYTES,
+} from "./encryptionUtils.js";
+export type {
+  EncryptedEnvelope,
+  EncryptionEvent,
+  EncryptionStats,
+  EncryptorOptions,
+} from "./encryptionUtils.js";
