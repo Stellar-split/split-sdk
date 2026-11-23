@@ -26,6 +26,8 @@ export interface SdkPlugin<M extends SdkMethodName = SdkMethodName> {
    * Can be used to add methods, subscribe to events, or initialize state.
    */
   install?(client: StellarSplitClientContext, options?: Record<string, unknown>): void;
+  /** Called when the plugin is removed from the registry. */
+  uninstall?(): void;
   /**
    * Called before a method executes. May return modified args.
    * Applied in registration order.
@@ -73,7 +75,10 @@ export class PluginRegistry {
 
   removePlugin(name: string): void {
     const idx = this._plugins.findIndex((p) => p.name === name);
-    if (idx !== -1) this._plugins.splice(idx, 1);
+    if (idx !== -1) {
+      const [removed] = this._plugins.splice(idx, 1);
+      removed?.uninstall?.();
+    }
   }
 
   getPlugins(): string[] {
@@ -101,6 +106,35 @@ export class PluginRegistry {
       p.onError?.(method, err);
     }
   }
+}
+
+/**
+ * Compose several plugins into one. Hooks run in the given order for
+ * beforeCall and in reverse for afterCall/onError; install/uninstall fan out.
+ */
+export function composePlugins(name: string, plugins: SdkPlugin[]): SdkPlugin {
+  return {
+    name,
+    install(client, options) {
+      plugins.forEach((p) => p.install?.(client, options));
+    },
+    uninstall() {
+      [...plugins].reverse().forEach((p) => p.uninstall?.());
+    },
+    beforeCall(method, args) {
+      let cur = args;
+      for (const p of plugins) if (p.beforeCall) cur = p.beforeCall(method, cur) ?? cur;
+      return cur;
+    },
+    afterCall(method, result) {
+      let cur = result;
+      for (const p of [...plugins].reverse()) if (p.afterCall) cur = p.afterCall(method, cur) ?? cur;
+      return cur;
+    },
+    onError(method, err) {
+      [...plugins].reverse().forEach((p) => p.onError?.(method, err));
+    },
+  };
 }
 
 /** Built-in plugin that logs every call and its duration via console.debug. */
