@@ -1,13 +1,13 @@
 export type RequestPriority = "high" | "normal" | "low";
 
-const PRIORITY_VALUE: Record<RequestPriority, number> = {
+const PRIORITY_VALUE: Record<string, number> = {
   high: 0,
   normal: 1,
   low: 2,
 };
 
 interface HeapItem<T> {
-  priority: RequestPriority;
+  priority: string;
   seq: number;
   execute: () => Promise<T>;
   resolve: (value: T) => void;
@@ -20,10 +20,31 @@ export class PriorityQueue {
   private running = false;
   private closed = false;
   private drainResolvers: Array<() => void> = [];
+  private levels: Record<string, number>;
+  private completed = 0;
+  private failed = 0;
 
-  enqueue<T>(priority: RequestPriority, execute: () => Promise<T>): Promise<T> {
+  /** @param customLevels extra or overriding priority levels (lower number runs first). */
+  constructor(customLevels?: Record<string, number>) {
+    this.levels = { ...PRIORITY_VALUE, ...customLevels };
+  }
+
+  /** Number of queued (not yet started) requests. */
+  get size(): number {
+    return this.heap.length;
+  }
+
+  getStats(): { queued: number; completed: number; failed: number } {
+    return { queued: this.heap.length, completed: this.completed, failed: this.failed };
+  }
+
+  enqueue<T>(priority: RequestPriority | (string & {}), execute: () => Promise<T>): Promise<T> {
     if (this.closed) {
       return Promise.reject(new Error("Queue is shut down"));
+    }
+
+    if (this.levels[priority] === undefined) {
+      return Promise.reject(new Error(`Unknown priority level: ${priority}`));
     }
 
     return new Promise<T>((resolve, reject) => {
@@ -55,8 +76,8 @@ export class PriorityQueue {
   }
 
   private _compare(a: HeapItem<unknown>, b: HeapItem<unknown>): number {
-    const pa = PRIORITY_VALUE[a.priority];
-    const pb = PRIORITY_VALUE[b.priority];
+    const pa = this.levels[a.priority]!;
+    const pb = this.levels[b.priority]!;
     if (pa !== pb) return pa - pb;
     return a.seq - b.seq;
   }
@@ -106,8 +127,10 @@ export class PriorityQueue {
       const item = this._extractMin()!;
       try {
         const result = await item.execute();
+        this.completed++;
         item.resolve(result);
       } catch (e) {
+        this.failed++;
         item.reject(e);
       }
     }

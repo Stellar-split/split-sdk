@@ -69,6 +69,9 @@ export class CircuitBreaker extends EventEmitter {
   private _lastFailureTime: number | null = null;
   private _resetTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private readonly _config: CircuitBreakerConfig;
+  private _totalSuccesses = 0;
+  private _totalFailures = 0;
+  private _totalRejected = 0;
 
   constructor(config?: Partial<CircuitBreakerConfig>) {
     super();
@@ -100,6 +103,7 @@ export class CircuitBreaker extends EventEmitter {
    * In HALF-OPEN state: transitions back to CLOSED (recovery confirmed).
    */
   recordSuccess(): void {
+    this._totalSuccesses += 1;
     const previous = this._state;
     this._failureCount = 0;
     this._lastFailureTime = null;
@@ -118,6 +122,7 @@ export class CircuitBreaker extends EventEmitter {
    * In OPEN state: no-op (circuit is already open).
    */
   recordFailure(): void {
+    this._totalFailures += 1;
     this._failureCount += 1;
     this._lastFailureTime = Date.now();
 
@@ -207,6 +212,35 @@ export class CircuitBreaker extends EventEmitter {
 
     this.emit("health:check", diagnostics);
     return diagnostics;
+  }
+
+  /** Cumulative call statistics (not cleared by reset()). */
+  getStats(): { state: CircuitBreakerState; successes: number; failures: number; rejected: number } {
+    return {
+      state: this._state,
+      successes: this._totalSuccesses,
+      failures: this._totalFailures,
+      rejected: this._totalRejected,
+    };
+  }
+
+  /**
+   * Run `fn` guarded by the breaker. Rejects without calling `fn` when the
+   * circuit is open; records success/failure otherwise.
+   */
+  async execute<T>(fn: () => Promise<T>): Promise<T> {
+    if (!this.canExecute()) {
+      this._totalRejected += 1;
+      throw new Error("Circuit breaker is open");
+    }
+    try {
+      const result = await fn();
+      this.recordSuccess();
+      return result;
+    } catch (err) {
+      this.recordFailure();
+      throw err;
+    }
   }
 
   /**

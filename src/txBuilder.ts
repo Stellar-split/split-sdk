@@ -12,11 +12,32 @@ import {
 } from "@stellar/stellar-sdk";
 import type { StellarSplitClientConfig } from "./client.js";
 import { signTransaction } from "./wallet.js";
-import { SimulationFailedError, TransactionFailedError, TransactionNotConfirmedError } from "./errors.js";
+import { ValidationError, SimulationFailedError, TransactionFailedError, TransactionNotConfirmedError } from "./errors.js";
 import { checkInvoiceExpiry } from "./preflightChecker.js";
 import type { LedgerCloseEstimator } from "./ledgerCloseEstimator.js";
 import { detectFeeSurge, type FeeSurgeConfig } from "./feeSurgeDetector.js";
 import { NonceManager, type NonceManagerConfig } from "./nonceManager.js";
+
+/** Validation hook: return an error message (or throw) to reject the pending operations. */
+export type TxBuilderValidator = (
+  operations: readonly xdr.Operation[],
+) => string | void;
+
+/** Plugin that observes the builder just before a transaction is built. */
+export interface TxBuilderPlugin {
+  name: string;
+  /** Called before validators run; may add operations via the builder. */
+  beforeBuild?(builder: StellarSplitTxBuilder): void;
+}
+
+/** Counters tracked by {@link StellarSplitTxBuilder.getStats}. */
+export interface TxBuilderStats {
+  operations: number;
+  builds: number;
+  submits: number;
+  validationFailures: number;
+  plugins: number;
+}
 
 /** Builder for composing multi-operation StellarSplit transactions. */
 export class StellarSplitTxBuilder {
@@ -28,6 +49,11 @@ export class StellarSplitTxBuilder {
   private _surgeConfig?: FeeSurgeConfig;
   private _ledgerEstimator?: LedgerCloseEstimator;
   private _nonceManager?: NonceManager;
+  private readonly _validators: TxBuilderValidator[] = [];
+  private readonly _plugins: TxBuilderPlugin[] = [];
+  private _builds = 0;
+  private _submits = 0;
+  private _validationFailures = 0;
 
   constructor(config: StellarSplitClientConfig, sourceAddress: string) {
     this.config = config;
@@ -35,6 +61,49 @@ export class StellarSplitTxBuilder {
     const rpcUrl = Array.isArray(config.rpcUrl) ? config.rpcUrl[0]! : config.rpcUrl;
     this.server = new SorobanRpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith("http://") });
     this.contract = new Contract(config.contractId);
+  }
+
+  /**
+   * Register a validation hook run at the start of {@link build} and
+   * {@link submit}. Return a string or throw to reject the build.
+   */
+  addValidator(validator: TxBuilderValidator): this {
+    this._validators.push(validator);
+    return this;
+  }
+
+  /** Register a plugin; its `beforeBuild` hook runs before validation. */
+  use(plugin: TxBuilderPlugin): this {
+    this._plugins.push(plugin);
+    return this;
+  }
+
+  /** Builder usage statistics. */
+  getStats(): TxBuilderStats {
+    return {
+      operations: this.operations.length,
+      builds: this._builds,
+      submits: this._submits,
+      validationFailures: this._validationFailures,
+      plugins: this._plugins.length,
+    };
+  }
+
+  private runPreBuild(): void {
+    for (const plugin of this._plugins) plugin.beforeBuild?.(this);
+    for (const validator of this._validators) {
+      let message: string | void;
+      try {
+        message = validator(this.operations);
+      } catch (err) {
+        this._validationFailures++;
+        throw err;
+      }
+      if (typeof message === "string" && message.length > 0) {
+        this._validationFailures++;
+        throw new ValidationError(`Transaction validation failed: ${message}`);
+      }
+    }
   }
 
   /**
@@ -217,6 +286,9 @@ export class StellarSplitTxBuilder {
     const expiresAt = options?.expiresAt;
     const invoiceId = options?.invoiceId ?? "unknown";
 
+    this.runPreBuild();
+    this._builds++;
+
     // Acquire the next nonce from the manager when available; otherwise fall
     // back to sequence 0 for offline/inspection builds.
     const nonce = this._nonceManager
@@ -269,6 +341,9 @@ export class StellarSplitTxBuilder {
   async submit(options?: { expiresAt?: number; invoiceId?: string }): Promise<{ txHash: string }> {
     const expiresAt = options?.expiresAt;
     const invoiceId = options?.invoiceId ?? "unknown";
+
+    this.runPreBuild();
+    this._submits++;
 
     if (expiresAt !== undefined) {
       // Fail fast before fetching account / building tx

@@ -16,6 +16,7 @@ This directory contains executable, end-to-end TypeScript examples demonstrating
    - [6. OpenTelemetry & Observability (`telemetry-hooks-example.ts`)](#6-opentelemetry--observability)
    - [7. Session Profiling (`profile-session.ts`)](#7-session-profiling)
    - [8. Graceful Shutdown & Drain (`graceful-shutdown-example.ts`)](#8-graceful-shutdown--drain)
+   - [9. Plugins & RPC Interceptors (`plugin-and-interceptors.ts`)](#9-plugins--rpc-interceptors)
 3. [Environment Configuration](#environment-configuration)
 4. [Documentation Testing](#documentation-testing)
 
@@ -147,6 +148,18 @@ Implements container-friendly graceful shutdown:
 
 ```bash
 npx tsx examples/graceful-shutdown-example.ts
+```
+
+### 9. Plugins & RPC Interceptors
+**File**: [`examples/plugin-and-interceptors.ts`](./plugin-and-interceptors.ts)
+
+Small, self-contained tour of the SDK extension points:
+- A `StellarSplitPlugin` with `install`, `onInit` and `onDestroy` hooks.
+- Global RPC request/response interceptors.
+- Handling `PluginAlreadyRegisteredError` on duplicate registration.
+
+```bash
+npx tsx examples/plugin-and-interceptors.ts
 ```
 
 ---

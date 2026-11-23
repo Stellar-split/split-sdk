@@ -124,4 +124,32 @@ describe("StellarSplitTxBuilder", () => {
     const tx = builder.build();
     expect(typeof tx.toXDR).toBe("function");
   });
+
+  it("runs validators, plugins and tracks stats", () => {
+    const sourceAddress = Keypair.random().publicKey();
+    const builder = new StellarSplitTxBuilder(TEST_CONFIG, sourceAddress);
+    const beforeBuild = vi.fn((b: InstanceType<typeof StellarSplitTxBuilder>) => {
+      b.addRelease("9");
+    });
+    builder
+      .use({ name: "auto-release", beforeBuild })
+      .addValidator((ops) => (ops.length > 1 ? "too many operations" : undefined))
+      .addPay("1", 100n);
+
+    expect(() => builder.build()).toThrow(/too many operations/);
+    expect(beforeBuild).toHaveBeenCalledTimes(1);
+    expect(builder.getStats()).toMatchObject({
+      operations: 2,
+      builds: 0,
+      validationFailures: 1,
+      plugins: 1,
+    });
+  });
+
+  it("counts successful builds", () => {
+    const builder = new StellarSplitTxBuilder(TEST_CONFIG, Keypair.random().publicKey());
+    builder.addValidator(() => undefined).addRelease("1");
+    builder.build();
+    expect(builder.getStats()).toMatchObject({ operations: 1, builds: 1, validationFailures: 0 });
+  });
 });

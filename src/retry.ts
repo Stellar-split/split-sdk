@@ -1,10 +1,49 @@
 /**
+ * Tracks cumulative retry time across calls within a rolling window.
+ * Once the budget is exhausted, further retries should fail fast until
+ * the window resets.
+ */
+export class RetryBudget {
+  private consumedMs = 0;
+  private windowStart: number;
+
+  constructor(
+    private readonly maxRetryMs: number,
+    private readonly windowMs: number,
+    private readonly now: () => number = Date.now
+  ) {
+    this.windowStart = this.now();
+  }
+
+  private maybeReset(): void {
+    if (this.now() - this.windowStart >= this.windowMs) {
+      this.consumedMs = 0;
+      this.windowStart = this.now();
+    }
+  }
+
+  /** Records time spent retrying. */
+  consume(retryDurationMs: number): void {
+    this.maybeReset();
+    this.consumedMs += Math.max(0, retryDurationMs);
+  }
+
+  /** Returns true if any budget remains in the current window. */
+  hasRemaining(): boolean {
+    this.maybeReset();
+    return this.consumedMs < this.maxRetryMs;
+  }
+}
+
+/**
  * Retry an asynchronous operation with exponential backoff.
+ * If a RetryBudget is supplied, retries stop once it is exhausted.
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,
   maxAttempts: number,
-  baseDelayMs: number
+  baseDelayMs: number,
+  budget?: RetryBudget
 ): Promise<T> {
   const attempts = Math.max(1, maxAttempts);
   let lastError: unknown;
@@ -17,8 +56,13 @@ export async function withRetry<T>(
       if (attempt === attempts || !isRetryableError(error)) {
         break;
       }
+      if (budget && !budget.hasRemaining()) {
+        break;
+      }
       const delayMs = computeBackoffDelay(attempt, { baseDelayMs });
+      const start = Date.now();
       await sleep(delayMs);
+      budget?.consume(Date.now() - start);
     }
   }
 
