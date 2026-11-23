@@ -1355,3 +1355,21 @@ export type {
   MetricsReport,
   MetricsCollectorOptions,
 } from "./metricsCollection.js";
+
+// Stellar Asset Validation (#1375)
+export {
+  validateStellarAsset,
+  validateAssetCode,
+  validateAssetIssuer,
+  validateCustomToken,
+  validateAssetAmount,
+  parseAmountToStroops,
+  STELLAR_AMOUNT_DECIMALS,
+  MAX_STELLAR_AMOUNT_STROOPS,
+} from "./stellarAssetValidation.js";
+export type {
+  StellarAssetType,
+  StellarAssetInput,
+  StellarAssetValidationOptions,
+  StellarAssetValidationResult,
+} from "./stellarAssetValidation.js";
