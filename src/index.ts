@@ -1343,3 +1343,15 @@ export * from './apiDocGenerator.js';
 
 // SDK Cookbook (#1198)
 export * from './cookbook.js';
+
+// SDK Metrics Collection (#1319)
+export { SdkMetricsCollector, sdkMetrics } from "./metricsCollection.js";
+export type {
+  MetricKind,
+  MetricLabels,
+  MetricSeriesSummary,
+  MetricsAggregate,
+  TrackedMetricEvent,
+  MetricsReport,
+  MetricsCollectorOptions,
+} from "./metricsCollection.js";
