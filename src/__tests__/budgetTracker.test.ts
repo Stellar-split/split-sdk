@@ -82,4 +82,10 @@ describe('BudgetTracker', () => {
     const tracker = new BudgetTracker({ limit: 100 });
     expect(() => tracker.track(-1)).toThrow();
   });
+
+  it('rejects non-finite amounts', () => {
+    const tracker = new BudgetTracker({ limit: 100 });
+    expect(() => tracker.track(NaN)).toThrow();
+    expect(() => tracker.track(Infinity)).toThrow();
+  });
 });

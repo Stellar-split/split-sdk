@@ -21,6 +21,7 @@ import {
   TransactionVerificationError,
   isRetryableErrorCode,
 } from "./errors.js";
+import type { RetryBudget } from "./retryBudget.js";
 
 export interface RetryOptions {
   maxAttempts: number;
@@ -28,6 +29,8 @@ export interface RetryOptions {
   maxDelayMs: number;
   onRetry?: (attempt: number, error: unknown, delayMs: number) => void;
   retryIf?: (error: Error) => boolean;
+  /** Optional shared retry budget checked before each retry attempt. */
+  budget?: RetryBudget;
 }
 
 export type PerMethodRetryOptions = Partial<RetryOptions>;
@@ -132,6 +135,7 @@ export function createRetryExecutor(options: RetryPolicyOptions): RetryExecutor 
       const timeoutMs = methodOverride?.timeoutMs ?? options.timeoutMs;
       const onRetry = methodOverride?.onRetry ?? options.onRetry;
       const retryIf = methodOverride?.retryIf ?? options.retryIf;
+      const budget = methodOverride?.budget ?? options.budget;
 
       stats.totalCalls++;
 
@@ -157,12 +161,14 @@ export function createRetryExecutor(options: RetryPolicyOptions): RetryExecutor 
             attemptsExhausted = true;
             break;
           }
+          if (budget && !budget.hasRemaining()) break;
 
           const jitter = Math.random() * baseDelayMs;
           const delayMs = Math.min(baseDelayMs * 2 ** attempt + jitter, maxDelayMs);
           retries++;
           stats.totalRetries++;
           stats.totalBackoffMs += delayMs;
+          budget?.consume(delayMs);
           onRetry?.(attempt + 1, error, delayMs);
           await sleep(delayMs);
         }
@@ -249,6 +255,7 @@ export async function executeWithRetry<T>(
   const maxDelayMs = methodOverride?.maxDelayMs ?? options.maxDelayMs;
   const onRetry = methodOverride?.onRetry ?? options.onRetry;
   const retryIf = methodOverride?.retryIf ?? options.retryIf;
+  const budget = methodOverride?.budget ?? options.budget;
 
   let lastError: unknown;
   let attemptsExhausted = false;
@@ -266,9 +273,11 @@ export async function executeWithRetry<T>(
         attemptsExhausted = true;
         break;
       }
+      if (budget && !budget.hasRemaining()) break;
 
       const jitter = Math.random() * baseDelayMs;
       const delayMs = Math.min(baseDelayMs * 2 ** attempt + jitter, maxDelayMs);
+      budget?.consume(delayMs);
       onRetry?.(attempt + 1, error, delayMs);
       await sleep(delayMs);
     }
