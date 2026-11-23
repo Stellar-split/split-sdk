@@ -684,6 +684,7 @@ export type {
 } from "./ledgerCloseEstimator.js";
 
 export { StellarSplitTxBuilder } from "./txBuilder.js";
+export type { TxBuilderValidator, TxBuilderPlugin, TxBuilderStats } from "./txBuilder.js";
 
 export { SequenceCache, isSequenceTooOld } from "./sequenceCache.js";
 export type { SequenceCacheConfig } from "./sequenceCache.js";
@@ -771,6 +772,8 @@ export type {
   InvoiceEventType,
 } from "./types.js";
 export { InvalidTransitionError } from "./types.js";
+export { INVOICE_STATUSES, isInvoiceStatus, isTerminalInvoiceStatus, isInvoiceInStatus } from "./types.js";
+export type { TerminalInvoiceStatus } from "./types.js";
 
 // Invoice status transition validation (state machine)
 export { InvoiceStateMachine } from "./state/InvoiceStateMachine.js";
@@ -1341,12 +1344,14 @@ export * from './apiDocGenerator.js';
 // SDK Cookbook (#1198)
 export * from './cookbook.js';
 
-// SDK Token Refresh Strategy (#1321)
-export { TokenRefreshManager, TokenRefreshError, decodeTokenExpiry } from "./tokenRefresh.js";
+// SDK Metrics Collection (#1319)
+export { SdkMetricsCollector, sdkMetrics } from "./metricsCollection.js";
 export type {
-  TokenRefreshConfig,
-  TokenRefreshResponse,
-  TokenRefreshEvent,
-  TokenRefreshFailureEvent,
-  TokenRefreshStats,
-} from "./tokenRefresh.js";
+  MetricKind,
+  MetricLabels,
+  MetricSeriesSummary,
+  MetricsAggregate,
+  TrackedMetricEvent,
+  MetricsReport,
+  MetricsCollectorOptions,
+} from "./metricsCollection.js";
