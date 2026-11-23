@@ -1340,3 +1340,13 @@ export * from './apiDocGenerator.js';
 
 // SDK Cookbook (#1198)
 export * from './cookbook.js';
+
+// SDK Token Refresh Strategy (#1321)
+export { TokenRefreshManager, TokenRefreshError, decodeTokenExpiry } from "./tokenRefresh.js";
+export type {
+  TokenRefreshConfig,
+  TokenRefreshResponse,
+  TokenRefreshEvent,
+  TokenRefreshFailureEvent,
+  TokenRefreshStats,
+} from "./tokenRefresh.js";
