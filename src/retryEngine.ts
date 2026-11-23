@@ -1,6 +1,7 @@
 import { TelemetryCollector } from "./telemetryCollector.js";
 import { CircuitOpenError } from "./errors.js";
 import { classifyHorizonError } from "./horizonErrorClassifier.js";
+import { RetryBudget } from "./retryBudget.js";
 
 export interface RetryStrategy {
   maxAttempts: number;
@@ -17,6 +18,11 @@ export interface RetryEngineOptions {
    * @default 0.2
    */
   jitterFactor?: number;
+  /**
+   * Optional shared retry budget. When exhausted, retries are skipped and
+   * the call fails fast until the budget window resets.
+   */
+  retryBudget?: RetryBudget;
 }
 
 export interface RetryConfig {
@@ -92,6 +98,7 @@ export class RetryEngine {
   private _circuitOpenedAt: number | null = null;
   private readonly _jitterFactor: number;
   private readonly _policy: RetryPolicy;
+  private readonly _retryBudget?: RetryBudget;
   private readonly _stats: RetryStats = {
     attempts: 0,
     retries: 0,
@@ -110,6 +117,7 @@ export class RetryEngine {
       throw new Error(`jitterFactor must be in [0, 1], got ${jf}`);
     }
     this._jitterFactor = jf;
+    this._retryBudget = options.retryBudget;
 
     const base = config.policy;
     this._policy = {
@@ -223,9 +231,15 @@ export class RetryEngine {
           break;
         }
 
+        // Shared budget exhausted: fail fast without further retries.
+        if (this._retryBudget && !this._retryBudget.hasRemaining()) {
+          break;
+        }
+
         const delay = this._computeDelay(strategy, attempt);
         this._stats.retries += 1;
         this._stats.totalBackoffMs += delay;
+        this._retryBudget?.consume(delay);
 
         await sleep(delay);
       }
