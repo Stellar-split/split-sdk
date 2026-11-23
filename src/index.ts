@@ -1340,3 +1340,14 @@ export * from './apiDocGenerator.js';
 
 // SDK Cookbook (#1198)
 export * from './cookbook.js';
+
+// SDK CORS Handling (#1322)
+export { CorsHandler } from "./cors.js";
+export type {
+  CorsOriginRule,
+  CorsRequest,
+  CorsDecision,
+  CorsEvent,
+  CorsStats,
+  CorsOptions,
+} from "./cors.js";
