@@ -13,9 +13,9 @@ This guide details best practices, patterns, and architectural principles for wr
 
 ## 2. Directory & File Naming Conventions
 
-All test suites live in the top-level `test/` directory:
-- Integration tests: `test/<feature>.test.ts` or `test/<feature>.integration.test.ts`
-- File naming follows camelCase or PascalCase matching the underlying module.
+- Mocked unit/integration tests live in `test/` as `test/<feature>.test.ts` (camelCase or PascalCase matching the module).
+- Live-network (testnet) integration tests live in `tests/integration/` with helpers in `tests/integration/utils/` (`friendbot.ts`, `deploy.ts`, `stellarDebug.ts`).
+- Vitest picks up `test/**/*.test.ts` and `tests/**/*.test.ts` (see `vitest.config.ts`).
 
 ---
 
@@ -80,7 +80,8 @@ export class MockWalletAdapter implements WalletAdapter {
 
 ```typescript
 import { describe, it, expect } from 'vitest';
-import { MockWalletAdapter } from './fixtures/mockWallet.js';
+// Define MockWalletAdapter inline (see section 3) or in a local helper file.
+import { MockWalletAdapter } from './helpers/mockWallet.js';
 
 describe('Payment Orchestration Flow', () => {
   it('signs and verifies an invoice payment batch', async () => {
@@ -97,14 +98,62 @@ describe('Payment Orchestration Flow', () => {
 
 ---
 
-## 5. Running Integration Tests
+## 5. Testnet Setup
 
-Run the full suite:
+Live tests in `tests/integration/` skip themselves unless configured:
+
 ```bash
-npm test
+export STELLAR_NETWORK=testnet
+export STELLAR_SPLIT_CONTRACT_ID=<deployed contract id>
 ```
 
-Target a specific integration test:
+- Accounts are funded through Friendbot via `fundAccount` from `tests/integration/utils/friendbot.ts`.
+- `deployFreshContract` from `tests/integration/utils/deploy.ts` deploys an isolated contract per suite so tests do not share state.
+- Use a fresh `Keypair.random()` per test and never reuse mainnet keys.
+
+## 6. Running Integration Tests
+
+`npm test` only runs a small core subset (`client`, `retryPolicy`, `network-environment`). Use the dedicated scripts:
+
 ```bash
-npm test -- test/batchOperations.test.ts
+npm run test:integration        # live testnet tests in tests/integration
+npm run test:all                # everything in test/ and tests/
+npx vitest run test/batchOperations.test.ts   # one file
+npx vitest run -t "pay"         # tests whose name matches
+```
+
+## 7. Debugging Tips
+
+- Run one file with `npx vitest run <file>` and use `it.only` while iterating; remove it before committing.
+- For testnet failures, use `getTxDebug` from `tests/integration/utils/stellarDebug.ts` to inspect the failed transaction's result.
+- Enable SDK debug logging (see [DEBUG_LOGGING.md](../DEBUG_LOGGING.md)) to trace RPC calls.
+- Testnet is rate limited and occasionally resets; if a suite fails only on testnet, re-fund the account and redeploy the contract before suspecting the SDK.
+- Fake timers (`vi.useFakeTimers()`) must be restored with `vi.useRealTimers()` in `afterEach`, or later tests hang.
+
+## 8. Test Template
+
+```typescript
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { Keypair } from '@stellar/stellar-sdk';
+import { StellarSplitClient } from '../src/client.js';
+
+describe('<Feature> integration', () => {
+  let source: string;
+
+  beforeEach(() => {
+    source = Keypair.random().publicKey();
+    // arrange: create mocks / fixtures
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('does <expected behaviour> when <condition>', async () => {
+    // act
+    // assert
+    expect(source).toMatch(/^G[A-Z2-7]{55}$/);
+  });
+});
 ```

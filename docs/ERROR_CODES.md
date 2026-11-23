@@ -16,6 +16,7 @@ This document is the comprehensive reference guide for all error codes, causes, 
 8. [Milestones, Rounds & Referrals Errors](#8-milestones-rounds--referrals-errors)
 9. [Validation & Batch Errors](#9-validation--batch-errors)
 10. [Recommended Error Handling Patterns](#10-recommended-error-handling-patterns)
+11. [Additional Error Codes (Lookup)](#11-additional-error-codes-lookup)
 
 ---
 
@@ -339,3 +340,126 @@ async function executePaymentWithRecovery(client: StellarSplitClient, invoiceId:
   }
 }
 ```
+
+---
+
+## 11. Additional Error Codes (Lookup)
+
+Less common errors, grouped in one alphabetical lookup table. All extend `StellarSplitError`, so `err.code` and `err.context` are always available. Search this page for the code or class name to jump to it.
+
+Recovery by category:
+
+- **Config / initialization errors** (`*_NOT_REGISTERED`, `*_NOT_INITIALIZED`, `*_CONFIG_ERROR`, `UNKNOWN_*`): programmer errors. Fix the setup; do not retry.
+- **Network / timeout errors** (`*_TIMEOUT`, `*_FETCH_*`, `FRIENDBOT_FAILED`, `CHANNEL_EXHAUSTED`, `RATE_LIMIT_EXCEEDED`): usually transient. Retry with backoff (`isRetryable(err)`), honoring `retryAfterMs` where present.
+- **Validation / integrity errors** (`*_VALIDATION*`, `INVALID_*`, `CID_MISMATCH`, `INVOICE_INTEGRITY`): correct the input; retrying with the same input will fail again.
+- **Shutdown errors** (`SHUTDOWN_IN_PROGRESS`, `GRACEFUL_SHUTDOWN_TIMEOUT`): stop issuing writes and re-create the client after restart.
+
+```typescript
+import { StellarSplitError, RateLimitExceededError } from "@stellar-split/sdk";
+
+try {
+  await client.pay(invoiceId, amount);
+} catch (err) {
+  if (err instanceof RateLimitExceededError) {
+    await sleep(err.retryAfterMs); // back off, then retry
+  } else if (err instanceof StellarSplitError && err.code === "CID_MISMATCH") {
+    // content was tampered with or the CID is wrong: do not retry
+  }
+}
+```
+
+| Error Code | Error Class | Cause |
+| :--- | :--- | :--- |
+| `ACCOUNT_FROZEN` | `AccountFrozenError` | An account's trustline has been frozen by the asset issuer |
+| `ACCOUNT_LOCKED` | `AccountLockedError` | An account is permanently locked out of authorization (auth_immutable without auth) |
+| `APPROVAL_TIMEOUT` | `ApprovalTimeoutError` | An approval workflow exceeds its configured timeout |
+| `BLINDING_FACTOR_DECRYPTION_ERROR` | `BlindingFactorDecryptionError` | Blinding factor decryption fails |
+| `BLINDING_FACTOR_NOT_FOUND` | `BlindingFactorNotFoundError` | Blinding factor is not found for an invoice |
+| `BLINDING_FACTOR_STORAGE_ERROR` | `BlindingFactorStorageError` | Blinding factor storage operation fails |
+| `CERTIFICATE_PINNING_ERROR` | `CertificatePinningError` | A TLS certificate fingerprint for an anchor HTTPS endpoint does not match the configured pinned fingerprint |
+| `CHAIN_TOO_DEEP` | `ChainTooDeepError` | A prerequisite chain exceeds the maximum traversal depth |
+| `CHANNEL_EXHAUSTED` | `ChannelExhaustedError` | All channel accounts in the pool are busy and the acquire timeout elapses |
+| `CHANNEL_RECONCILIATION_FAILED` | `ChannelReconciliationError` | Channel reconciliation fails |
+| `CID_MISMATCH` | `CIDMismatchError` | CID verification detects tampered or mismatched content |
+| `CIRCULAR_FORWARD_CHAIN` | `CircularForwardChainError` | A forward chain contains a cycle |
+| `CIRCULAR_PREREQUISITE` | `CircularPrerequisiteError` | A prerequisite chain contains a cycle |
+| `CLAIMABLE_BALANCE_LIFECYCLE_ERROR` | `ClaimableBalanceLifecycleError` | Claimable balance lifecycle operations fail |
+| `CLASSIFIED_HORIZON_ERROR` | `ClassifiedHorizonError` | Wraps a classified Horizon error with the structured classification |
+| `COMMITMENT_GENERATION_ERROR` | `CommitmentGenerationError` | Pedersen commitment generation fails |
+| `CONNECTION_POOL_CONFIG_ERROR` | `ConnectionPoolConfigError` | Connection pool is improperly configured |
+| `CONNECTION_POOL_DISPOSED` | `ConnectionPoolDisposedError` | Connection pool is already disposed |
+| `CONTRACT_ERROR` | `ContractError` | A simulation or transaction fails due to contract error |
+| `CONTRACT_RETRY_EXHAUSTED` | `ContractRetryExhaustedError` | A queued contract invocation exhausts its retry attempts |
+| `CSRF_VALIDATION_FAILED` | `CsrfValidationError` | A CSRF token is missing, malformed, expired or does not match |
+| `DATA_ENTRY_VALIDATION_ERROR` | `DataEntryValidationError` | See class JSDoc in `src/errors.ts` |
+| `DEPLOY_SEQUENCE_ERROR` | `DeploySequenceError` | Thrown by `DeployPipeline` when a WASM upload or contract instantiation step keeps failing with `tx_bad_seq` after retrying with a freshly-fetched sequence number |
+| `DEX_QUOTE_FAILED` | `DexQuoteFailedError` | A DEX quote operation fails |
+| `DISCOVERY_FETCH_FAILED` | `DiscoveryFetchError` | Discovery fetch fails |
+| `DRY_RUN_FAILED` | `DryRunFailedError` | `.submit()` is called but the prior `.dryRun()` simulation returned an error field from the RPC |
+| `DUPLICATE_RECIPIENT` | `DuplicateRecipientError` | Duplicate recipient account IDs are detected in `reject` mode |
+| `ENVELOPE_LIMIT` | `EnvelopeLimitError` | An operation envelope exceeds the maximum number of operations (100) or the maximum base fee (10_000_000 stroops) |
+| `FINALITY_TIMEOUT` | `FinalityTimeoutError` | A transaction is not confirmed within the finality wait budget |
+| `FLOW_FETCHER_NOT_REGISTERED` | `InvoiceFlowFetcherNotRegisteredError` | Invoice flow fetcher is not registered |
+| `FORWARD_CHAIN_TOO_DEEP` | `ForwardChainTooDeepError` | Resolving a forward chain exceeds the maximum depth limit |
+| `FRIENDBOT_FAILED` | `FriendbotFailedError` | Friendbot request fails |
+| `GRACEFUL_SHUTDOWN_TIMEOUT` | `GracefulShutdownTimeoutError` | Graceful shutdown times out while requests are still pending |
+| `INSUFFICIENT_SPONSOR_RESERVE` | `InsufficientSponsorReserveError` | A sponsor account lacks the reserve to cover new ledger entries |
+| `INVALID_ATTESTATION` | `InvalidAttestationError` | Attestation parameters are invalid |
+| `INVALID_BATCH_SIZE` | `InvalidBatchSizeError` | Batch size validation fails |
+| `INVALID_CONTRACT_ADDRESS` | `InvalidContractAddressError` | A string is not a well-formed Soroban contract address (`C...`, 56 base32 characters, valid CRC16 checksum) |
+| `INVALID_KEYPAIR` | `InvalidKeypairError` | A KeypairSigner is constructed with an invalid secret key or keypair |
+| `INVALID_PATH_QUERY` | `InvalidPathQueryError` | See class JSDoc in `src/errors.ts` |
+| `INVALID_TRANSACTION_TYPE` | `InvalidTransactionTypeError` | A fee-bump inner transaction is not a v1 transaction |
+| `INVOICE_FETCHER_NOT_REGISTERED` | `InvoiceFetcherNotRegisteredError` | Invoice fetcher is not registered |
+| `INVOICE_INTEGRITY` | `InvoiceIntegrityError` | An invoice's content hash diverges from its declared hash |
+| `IPFS_CONFIG_ERROR` | `IPFSConfigError` | IPFS configuration is invalid or missing |
+| `IPFS_FETCH_ERROR` | `IPFSFetchError` | IPFS content fetch fails |
+| `IPFS_PIN_ERROR` | `IPFSPinError` | IPFS pinning operation fails |
+| `KEY_ACCESS_DENIED` | `KeyAccessDeniedError` | Access to a stored key is denied by the access-control policy |
+| `KEY_ENCRYPTION_ERROR` | `KeyEncryptionError` | Encryption or decryption of a stored key fails |
+| `MERGE_CONFLICT` | `MergeConflictError` | Thrown by `mergeInvoices` when both local and remote branches have modified the same field relative to the common base, producing a conflict that cannot be resolved automatically |
+| `METADATA_VALIDATION` | `MetadataValidationError` | Invoice metadata fails validation (ajv-style error list) |
+| `NO_RETURN_VALUE` | `NoReturnValueError` | No return value is received from a contract call |
+| `NO_SIGNER_PROVIDED` | `NoSignerProvidedError` | At least one signer is required |
+| `OFFER_TRACKING_ERROR` | `OfferTrackingError` | Offer tracking or cancellation fails |
+| `ORACLE_PRICE_ERROR` | `OraclePriceError` | Oracle price fetch fails |
+| `PATH_NOT_FOUND` | `PathNotFoundError` | No DEX path could be found between two assets |
+| `PATH_ROUTER_ERROR` | `PathRouterError` | The path router encounters an unexpected error |
+| `PAYER_ADDRESS_REQUIRED` | `PayerAddressRequiredError` | Payer address is required but not provided |
+| `PAYMENT_ESCALATION_ABORT` | `PaymentEscalationAbortError` | The `abort` escalation step fires, cancelling the payment |
+| `PLUGIN_ALREADY_REGISTERED` | `PluginAlreadyRegisteredError` | A plugin with the same name is already registered |
+| `PREFLIGHT_ERROR` | `PreflightError` | A preflight check fails before the SDK attempts contract calls |
+| `QUEUE_FAILED` | `QueueFailedError` | Queue has failed |
+| `RATE_LIMIT_EXCEEDED` | `RateLimitExceededError` | A request exceeds its configured rate limit |
+| `RECIPIENT_PRE_CHECK_FAILED` | `RecipientPreCheckFailedError` | One or more recipients fail a pre-payment balance pre-check |
+| `REFUND_GRACE_ERROR` | `RefundGraceError` | Refund grace period error occurs |
+| `RELATIONSHIP_TRACKER_NOT_INITIALIZED` | `RelationshipTrackerNotInitializedError` | Relationship tracker is not initialized |
+| `SANITIZATION_ERROR` | `SanitizationError` | An input fails sanitization and cannot be safely coerced into an acceptable value (e.g. it contains a disallowed pattern or is not on the configured whitelist) |
+| `SDK_ERROR` | `AddressValidationError` | Address validation fails |
+| `SDK_ERROR` | `AmountValidationError` | Amount validation fails |
+| `SDK_ERROR` | `DeadlineValidationError` | Deadline validation fails |
+| `SDK_ERROR` | `SdkError` | Generic SDK error carrying a typed `SdkErrorCode` and optional details |
+| `SDK_ERROR` | `Sep41AdapterError` | Sep41 adapter unexpected return type |
+| `SDK_ERROR` | `SignatureValidationError` | Signature validation fails |
+| `SDK_ERROR` | `WhitelistViolationError` | An input value is not present in the configured whitelist |
+| `SEARCH_FAILED` | `SearchFailedError` | Search operation fails |
+| `SEQUENCE_CACHE_ERROR` | `SequenceCacheError` | The sequence cache fails to fetch an account from Horizon |
+| `SEQUENCE_NUMBER_TOO_OLD` | `SequenceNumberTooOldError` | A SEQUENCE_NUMBER_TOO_OLD error is detected at submission time |
+| `SHUTDOWN_IN_PROGRESS` | `ShutdownInProgressError` | A new write request is attempted during graceful shutdown |
+| `SIGNER_FAILED` | `SignerFailedError` | A signer fails to sign a transaction |
+| `STELLAR_TOML_FETCH_ERROR` | `StellarTomlFetchError` | A stellar.toml file cannot be fetched or is unreachable |
+| `TEST_HARNESS_NOT_INITIALIZED` | `TestHarnessNotInitializedError` | Test harness is not initialized |
+| `TOO_MANY_SUBSCRIPTIONS` | `TooManySubscriptionsError` | Too many concurrent invoice subscriptions are created |
+| `TRANCHE_PROGRESS_ERROR` | `TrancheProgressError` | Tranche status check fails |
+| `TRANSACTION_NOT_SUCCESSFUL` | `TransactionNotSuccessfulError` | Transaction status is not successful |
+| `TTL_EXTENSION_FAILED` | `TtlExtensionFailedError` | TTL extension operation fails |
+| `UNKNOWN_ENDPOINT` | `UnknownEndpointError` | LoadBalancer endpoint is not found |
+| `UNKNOWN_EXPORT_FORMAT` | `UnknownExportFormatError` | Export format is unknown |
+| `UNKNOWN_NETWORK` | `UnknownNetworkError` | An unknown network is specified |
+| `UNKNOWN_SPLIT` | `UnknownSplitError` | See class JSDoc in `src/errors.ts` |
+| `UNKNOWN_TEST_WALLET` | `UnknownTestWalletError` | An unknown test wallet address is provided |
+| `UNSUPPORTED_LINE_ITEM_ASSET` | `UnsupportedLineItemAssetError` | A line item's asset has no oracle price available for normalisation |
+| `UNSUPPORTED_TOML_VERSION` | `UnsupportedTomlVersionError` | A `stellar.toml` file carries a VERSION that is not listed in `SUPPORTED_TOML_VERSIONS` |
+| `VERIFICATION_FAILED` | `TransactionVerificationError` | Thrown by transaction verification when one or more checks fail |
+| `WALLET_CONNECTION_TIMEOUT` | `WalletConnectionTimeoutError` | A wallet deep-link or extension connection times out |
+| `WEBHOOK_EXHAUSTED` | `WebhookExhaustedError` | Thrown by `WebhookAgent` when a webhook delivery has exhausted its configured retry budget without a successful response |

@@ -652,80 +652,9 @@ const NETWORKS: Record<string, NetworkConfig> = {
   },
 };
 
-/** Shared countdown computation used by client method and standalone function. */
-function _computeCountdown(target: number): ScheduledReleaseCountdown {
-  const now = Math.floor(Date.now() / 1000);
-  const diff = target - now;
-  if (diff <= 0) {
-    return {
-      total_seconds: 0,
-      days: 0,
-      hours: 0,
-      minutes: 0,
-      seconds: 0,
-      overdue: true,
-    };
-  }
-  return {
-    total_seconds: diff,
-    days: Math.floor(diff / 86400),
-    hours: Math.floor((diff % 86400) / 3600),
-    minutes: Math.floor((diff % 3600) / 60),
-    seconds: diff % 60,
-    overdue: false,
-  };
-}
+export { getScheduledReleaseCountdown, verifyCompletionProof } from "./client/helpers.js";
+import { _computeCountdown, getScheduledReleaseCountdown, verifyCompletionProof, toBigInt } from "./client/helpers.js";
 
-/**
- * Standalone pure function — computes time remaining until a scheduled release.
- * Returns null when the invoice has no scheduled_release_at field.
- *
- * @param invoice - Invoice object from the contract.
- * @returns ScheduledReleaseCountdown or null.
- */
-export function getScheduledReleaseCountdown(
-  invoice: Invoice,
-): ScheduledReleaseCountdown | null {
-  const ts =
-    (invoice as { scheduled_release_at?: number }).scheduled_release_at ??
-    invoice.scheduledReleaseDate;
-  if (ts === undefined) return null;
-  return _computeCountdown(ts);
-}
-
-/**
- * Standalone pure function — verifies a CompletionProof from the contract.
- * Recomputes cert_hash from proof fields and compares against stored value.
- *
- * @param proof - CompletionProof from the contract's get_completion_proof call.
- * @returns { valid: boolean, reason?: string }
- */
-export function verifyCompletionProof(proof: CompletionProof): {
-  valid: boolean;
-  reason?: string;
-} {
-  if (
-    !proof.invoiceId ||
-    !proof.releasedBy ||
-    !proof.releasedAt ||
-    !proof.cert_hash
-  ) {
-    return { valid: false, reason: "Missing required proof fields" };
-  }
-  const data = `${proof.invoiceId}${proof.releasedBy}${proof.releasedAt}${proof.totalAmount.toString()}`;
-  const encoder = new TextEncoder();
-  const buffer = encoder.encode(data);
-  let hash = 0;
-  for (let i = 0; i < buffer.length; i++) {
-    hash = (hash << 5) - hash + (buffer[i] ?? 0);
-    hash = hash & hash;
-  }
-  const computed = Math.abs(hash).toString(16).padStart(64, "0").slice(0, 64);
-  if (computed !== proof.cert_hash) {
-    return { valid: false, reason: "cert_hash mismatch" };
-  }
-  return { valid: true };
-}
 export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
   private _mainServer!: SorobanRpc.Server;
   private _standby: WarmStandby | null = null;
@@ -926,6 +855,11 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
     }
   }
 
+  /**
+   * Creates a client. No network calls are made until the first operation.
+   *
+   * @param config - RPC URL(s), network passphrase, contract ID and optional plugins, logging and retry settings.
+   */
   constructor(config: StellarSplitClientConfig) {
     super();
 
@@ -1286,11 +1220,33 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
     if (this._offlineQueue) this._offlineQueue.clear();
   }
 
+  /**
+   * Replays queued offline operations against the network.
+   *
+   * @param conflictStrategy - Optional strategy for resolving conflicts between queued and on-chain state.
+   * @returns The sync report, or `null` if the offline queue is not enabled.
+   *
+   * @example
+   * ```typescript
+   * const report = await client.syncOfflineQueue();
+   * ```
+   */
   async syncOfflineQueue(conflictStrategy?: import("./types.js").ConflictStrategy) {
     if (!this._offlineQueue) return null;
     return this._offlineQueue.sync(conflictStrategy);
   }
 
+  /**
+   * Switches this client to another Stellar network, updating RPC endpoint and passphrase.
+   *
+   * @param network - Target network: `"mainnet"`, `"testnet"` or `"futurenet"`.
+   * @returns Promise that resolves once the client points at the new network.
+   *
+   * @example
+   * ```typescript
+   * await client.switchTo("testnet");
+   * ```
+   */
   async switchTo(network: "mainnet" | "testnet" | "futurenet"): Promise<void> {
     const { NetworkSwitcher } = await import("./network/NetworkSwitcher.js");
     return NetworkSwitcher.switchTo(network, this);
@@ -4779,12 +4735,17 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
   /**
    * Aggregates multiple related invoices into an invoice group for coordinated settlement.
    *
-   * @param params - Group creation configuration.
-   * @returns Promise resolving to created group identifier.
+   * Two call forms are supported: `createGroup(creator, invoiceIds)` groups existing
+   * invoices; `createGroup(creator, name, description)` creates a named group.
+   *
+   * @param creator - Address of the group creator.
+   * @param second - Invoice IDs to group, or the group name.
+   * @param third - Group description (name form only).
+   * @returns Promise resolving to the created group ID and transaction hash.
    *
    * @example
    * ```typescript
-   * const groupId = await client.createGroup({ name: 'Project Milestone 1', invoiceIds: ['1', '2'] });
+   * const { groupId } = await client.createGroup(creator, ['1', '2']);
    * ```
    */
   async createGroup(
@@ -10327,14 +10288,6 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
       throw parseSorobanError(err instanceof Error ? err.message : String(err));
     }
   }
-}
-
-/** Coerce a native-decoded scalar (bigint | number | string) into a bigint, defaulting to 0n. */
-function toBigInt(value: unknown): bigint {
-  if (typeof value === "bigint") return value;
-  if (typeof value === "number") return BigInt(Math.trunc(value));
-  if (typeof value === "string" && value !== "") return BigInt(value);
-  return 0n;
 }
 
 // ---------------------------------------------------------------------------

@@ -222,3 +222,35 @@ describe("Cache – TTL-based expiry", () => {
     expect(cache.size).toBe(1);
   });
 });
+
+describe("SimpleCache hit rate, per-entry TTL and pattern invalidation", () => {
+  it("reports hitRate in stats", () => {
+    const cache = new SimpleCache<string>({ ttlMs: 10000 });
+    expect(cache.getStats().hitRate).toBe(0);
+    cache.set("a", "1");
+    cache.get("a");
+    cache.get("missing");
+    expect(cache.getStats().hitRate).toBe(0.5);
+  });
+
+  it("honours a per-entry ttl override", () => {
+    vi.useFakeTimers();
+    const cache = new SimpleCache<string>({ ttlMs: 10000 });
+    cache.set("short", "1", 100);
+    cache.set("long", "2");
+    vi.advanceTimersByTime(500);
+    expect(cache.get("short")).toBeUndefined();
+    expect(cache.get("long")).toBe("2");
+    vi.useRealTimers();
+  });
+
+  it("invalidateWhere removes matching keys and returns the count", () => {
+    const cache = new SimpleCache<string>({ ttlMs: 10000 });
+    cache.set("getInvoice:1", "a");
+    cache.set("getInvoice:2", "b");
+    cache.set("getBalance:1", "c");
+    expect(cache.invalidateWhere(/^getInvoice:/)).toBe(2);
+    expect(cache.invalidateWhere((k) => k.endsWith(":1"))).toBe(1);
+    expect(cache.getStats().size).toBe(0);
+  });
+});

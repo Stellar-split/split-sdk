@@ -19,6 +19,9 @@ Thank you for your interest in contributing to **StellarSplit SDK** — the open
 11. [Architecture Overview](#architecture-overview)
 12. [Security Guidelines](#security-guidelines)
 13. [Contributor Checklist](#contributor-checklist)
+14. [Templates](#templates)
+15. [Worked Example](#worked-example)
+16. [FAQ](#faq)
 
 ---
 
@@ -565,6 +568,68 @@ Use this checklist before every pull request submission:
 - [ ] My PR title follows Conventional Commits format
 - [ ] My PR description references the closed issue (`Closes #NNN`)
 - [ ] I have not included unrelated changes
+
+---
+
+## Templates
+
+Ready-to-use templates live in `.github/`:
+
+| Template | Location | Use for |
+|----------|----------|---------|
+| Pull request | `.github/PULL_REQUEST_TEMPLATE.md` | Applied automatically when you open a PR |
+| Bug report | `.github/ISSUE_TEMPLATE/bug_report.md` | Reporting broken behavior |
+| Feature request | `.github/ISSUE_TEMPLATE/feature_request.md` | Proposing new SDK capabilities |
+| Trivial / medium / high task | `.github/ISSUE_TEMPLATE/{trivial,medium,high}.md` | Maintainer-scoped work items |
+
+---
+
+## Worked Example
+
+A typical contribution, end to end (replace `1130` and names with your own):
+
+```bash
+# 1. After being assigned to issue #1130, sync and branch
+git fetch upstream && git checkout -b feat/freighter-adapter upstream/main
+
+# 2. Implement, with tests next to the existing ones
+#    src/freighterAdapter.ts, test/freighterAdapter.test.ts
+
+# 3. Verify locally
+npm run lint
+npx vitest run test/freighterAdapter.test.ts
+
+# 4. Commit using Conventional Commits and push to your fork
+git commit -am "feat(wallet): add FreighterAdapter"
+git push origin feat/freighter-adapter
+```
+
+Then open a PR against `main` with `Closes #1130` in the description.
+
+---
+
+## FAQ
+
+**Can I start working on an issue without being assigned?**
+No. Comment on the issue and wait for a maintainer to assign you, otherwise the PR may be closed.
+
+**Which command runs the tests?**
+`npm test` runs the core suite. Use `npx vitest run <file>` for a single file and `npm run test:all` for everything.
+
+**How do I type-check?**
+`npm run lint` runs `tsc --noEmit`.
+
+**Why do imports end in `.js`?**
+The project is ESM; TypeScript source imports must use the `.js` extension.
+
+**My PR is out of date with `main`. What do I do?**
+Rebase on `upstream/main` (see "Keep your fork in sync") and push. Do not force-push unless a reviewer asks.
+
+**Do I need to update the changelog?**
+Yes, for user-visible changes add an entry under `Unreleased` in `CHANGELOG.md`.
+
+**How do I report a security issue?**
+Do not open a public issue. Follow [Security Guidelines](#security-guidelines).
 
 ---
 
