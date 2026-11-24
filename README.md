@@ -410,3 +410,6 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full guide.
 
 <!-- handsoff-issue-1169 -->
 - #1169: Implement query optimization with indexes
+
+<!-- handsoff-issue-1330 -->
+- #1330: Add SDK pagination support
