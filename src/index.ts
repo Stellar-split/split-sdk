@@ -1355,3 +1355,33 @@ export type {
   MetricsReport,
   MetricsCollectorOptions,
 } from "./metricsCollection.js";
+
+// SSL Certificate Pinning (#1323)
+export {
+  SslPinningManager,
+  SslPinningValidationError,
+  PinManagementError,
+  SSL_PIN_FORMAT_VERSION,
+  PIN_HASH_BYTES,
+  sha256Base64,
+  normalizePinHostname,
+  isValidPinHash,
+} from "./sslPinning.js";
+export type {
+  CertificatePin,
+  CertificatePinInput,
+  PinKind,
+  PinStatus,
+  PinFailureReason,
+  PinValidationInput,
+  PinValidationResult,
+  PinEvent,
+  PinBundle,
+  PeerCertificateInput,
+  SslPinningOptions,
+  SslPinningStats,
+  RotateOptions,
+  RotationResult,
+  RemovePinOptions,
+  RetirePinOptions,
+} from "./sslPinning.js";
