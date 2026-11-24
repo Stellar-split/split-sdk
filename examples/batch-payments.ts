@@ -52,6 +52,8 @@ interface BatchProcessorOptions {
   batchSize: number;
   maxRetries: number;
   retryDelayMs: number;
+  /** Maximum number of batches executed in parallel (bounded to avoid deadlocks). */
+  concurrency?: number;
 }
 
 /**
@@ -98,43 +100,70 @@ function validateBatch<T>(
 
 /**
  * Executes a batch with per-operation retry and graceful error handling.
+ * Operations within a batch run in parallel since they are independent.
  */
 async function executeBatch<T>(
   batch: BatchOperation<T>[],
   execute: (op: BatchOperation<T>) => Promise<T>,
   options: BatchProcessorOptions,
 ): Promise<BatchResult<T>[]> {
-  const results: BatchResult<T>[] = [];
-  for (const op of batch) {
-    let attempts = 0;
-    let lastError: unknown;
-    let succeeded = false;
-    let value: T | undefined;
-    while (attempts <= options.maxRetries && !succeeded) {
-      attempts += 1;
-      try {
-        value = await execute(op);
-        succeeded = true;
-      } catch (err) {
-        lastError = err;
-        if (attempts <= options.maxRetries) {
-          await new Promise((resolve) => setTimeout(resolve, options.retryDelayMs));
+  return Promise.all(
+    batch.map(async (op): Promise<BatchResult<T>> => {
+      let attempts = 0;
+      let lastError: unknown;
+      let succeeded = false;
+      let value: T | undefined;
+      while (attempts <= options.maxRetries && !succeeded) {
+        attempts += 1;
+        try {
+          value = await execute(op);
+          succeeded = true;
+        } catch (err) {
+          lastError = err;
+          if (attempts <= options.maxRetries) {
+            await new Promise((resolve) => setTimeout(resolve, options.retryDelayMs));
+          }
         }
       }
+      return {
+        id: op.id,
+        success: succeeded,
+        value,
+        error: succeeded ? undefined : lastError instanceof Error ? lastError.message : String(lastError),
+        attempts,
+      };
+    }),
+  );
+}
+
+/**
+ * Runs tasks with a bounded concurrency limit, preserving input order.
+ * Bounding concurrency prevents unbounded fan-out and deadlocks.
+ */
+async function runWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.max(1, Math.min(limit, items.length));
+  const runners = Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const current = nextIndex++;
+      if (current >= items.length) {
+        return;
+      }
+      results[current] = await worker(items[current], current);
     }
-    results.push({
-      id: op.id,
-      success: succeeded,
-      value,
-      error: succeeded ? undefined : lastError instanceof Error ? lastError.message : String(lastError),
-      attempts,
-    });
-  }
+  });
+  await Promise.all(runners);
   return results;
 }
 
 /**
  * Processes all operations in batches, collecting analytics across the run.
+ * Batches are validated up front, then executed with bounded parallelism.
  */
 async function processBatches<T>(
   operations: BatchOperation<T>[],
@@ -144,13 +173,17 @@ async function processBatches<T>(
 ): Promise<{ results: BatchResult<T>[]; analytics: BatchAnalytics }> {
   const startedAt = Date.now();
   const batches = chunkOperations(operations, options.batchSize);
-  const results: BatchResult<T>[] = [];
 
+  // Validate all batches before executing any, so invalid input fails fast.
   for (const batch of batches) {
     validateBatch(batch, validate);
-    const batchResults = await executeBatch(batch, execute, options);
-    results.push(...batchResults);
   }
+
+  const concurrency = options.concurrency ?? 4;
+  const batchResults = await runWithConcurrency(batches, concurrency, (batch) =>
+    executeBatch(batch, execute, options),
+  );
+  const results: BatchResult<T>[] = batchResults.flat();
 
   const analytics: BatchAnalytics = {
     totalOperations: operations.length,
@@ -230,6 +263,7 @@ async function main() {
     batchSize: 10,
     maxRetries: 2,
     retryDelayMs: 100,
+    concurrency: 4,
   };
 
   const { results, analytics } = await processBatches(
@@ -249,31 +283,28 @@ async function main() {
   console.log("   Submitting atomic batch payment transaction...");
   for (const res of results) {
     if (res.success && res.value) {
-      console.log(`   ✓ Payment to ${res.value.invoiceId} confirmed: ${res.value.txHash} (${formatAmount(res.value.amount)} USDC)`);
+      console.log(`   ✓ Payment to ${res.value.invoiceId} confirmed: ${formatAmount(res.value.amount)} USDC (attempts: ${res.attempts})`);
     } else {
       console.log(`   ✗ Payment to ${res.id} failed after ${res.attempts} attempt(s): ${res.error}`);
     }
   }
   console.log();
 
-  // Step 4: Verification and Reconciliation
-  console.log("4. Verifying Batch Integrity:");
-  const allSucceeded = results.every((r) => r.success);
-  console.log(`   Batch status: ${allSucceeded ? "ALL PAYMENTS CONFIRMED" : "PARTIAL FAILURE DETECTED"}`);
+  console.log("4. Batch Analytics:");
+  console.log(`   Total operations : ${analytics.totalOperations}`);
+  console.log(`   Total batches    : ${analytics.totalBatches}`);
+  console.log(`   Succeeded        : ${analytics.succeeded}`);
+  console.log(`   Failed           : ${analytics.failed}`);
+  console.log(`   Retried          : ${analytics.retried}`);
+  console.log(`   Duration         : ${analytics.durationMs}ms`);
+  console.log();
 
-  const totalDisbursed = results.reduce((sum, r) => sum + (r.value?.amount ?? 0n), 0n);
-  console.log(`   Total Disbursed: ${formatAmount(totalDisbursed)} USDC`);
-
-  console.log("5. Batch Analytics:");
-  console.log(`   Batches: ${analytics.totalBatches} | Operations: ${analytics.totalOperations}`);
-  console.log(`   Succeeded: ${analytics.succeeded} | Failed: ${analytics.failed} | Retried: ${analytics.retried}`);
-  console.log(`   Duration: ${analytics.durationMs}ms`);
   console.log("==================================================================");
-  console.log(" ✓ Batch Payment application completed successfully.");
+  console.log(" Batch processing complete.");
   console.log("==================================================================");
 }
 
 main().catch((err) => {
-  console.error("Batch payment failed:", err);
+  console.error("Batch payments example failed:", err);
   process.exit(1);
 });
