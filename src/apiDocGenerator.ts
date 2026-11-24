@@ -92,6 +92,9 @@ export interface DocManifest {
   index: string[];
 }
 
+/** Supported API reference output formats. */
+export type DocOutputFormat = 'markdown' | 'html' | 'json';
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -158,13 +161,14 @@ function extractJsDocBlocks(source: string): Array<{ comment: string; afterText:
 
 /** Guess the entry kind from the token immediately following the comment. */
 function guessKind(afterText: string): DocEntryKind {
-  const first = afterText.split(/[\s({]/)[0] ?? '';
-  if (first === 'class') return 'class';
-  if (first === 'interface') return 'interface';
-  if (first === 'type') return 'type';
-  if (first === 'function' || first === 'async') return 'function';
-  if (first === 'export' || first === 'const' || first === 'let' || first === 'var') {
-    if (/=\s*(async\s+)?function|=\s*\(|=>\s*{/.test(afterText)) return 'function';
+  const declaration = /^(?:(?:export|default|declare|abstract|async)\s+)*(class|interface|type|function|const|let|var)\b/.exec(afterText);
+  const kind = declaration?.[1];
+  if (kind === 'class') return 'class';
+  if (kind === 'interface') return 'interface';
+  if (kind === 'type') return 'type';
+  if (kind === 'function') return 'function';
+  if (kind === 'const' || kind === 'let' || kind === 'var') {
+    if (/=\s*(?:async\s+)?function\b|=\s*(?:async\s*)?\([^)]*\)\s*=>|=\s*[A-Za-z_$][\w$]*\s*=>/.test(afterText)) return 'function';
     return 'variable';
   }
   return 'function';
@@ -283,6 +287,10 @@ export interface ApiDocGeneratorOptions {
    * Modules without an entry are grouped under "General".
    */
   categories?: Record<string, string>;
+  /** Heading used by complete-document exporters. Defaults to "API Reference". */
+  title?: string;
+  /** Whether deprecated entries are included in generated output. Defaults to true. */
+  includeDeprecated?: boolean;
 }
 
 /**
@@ -301,12 +309,16 @@ export class ApiDocGenerator {
   private readonly version: string;
   private readonly sources: Record<string, string>;
   private readonly categories: Record<string, string>;
+  private readonly title: string;
+  private readonly includeDeprecated: boolean;
   private entries: Map<string, DocEntry> = new Map();
 
   constructor(options: ApiDocGeneratorOptions) {
     this.version = options.version;
     this.sources = options.sources;
     this.categories = options.categories ?? {};
+    this.title = options.title ?? 'API Reference';
+    this.includeDeprecated = options.includeDeprecated ?? true;
   }
 
   // -------------------------------------------------------------------------
@@ -332,6 +344,7 @@ export class ApiDocGenerator {
       const name = extractName(afterText);
       if (!name) continue;
       const parsed = parseJsDoc(comment);
+      if (parsed.deprecated && !this.includeDeprecated) continue;
       const id = `${moduleName}/${name}`;
       const entry: DocEntry = {
         id,
@@ -529,7 +542,7 @@ export class ApiDocGenerator {
 
     const moduleNames = [...new Set(Array.from(this.entries.values()).map((e) => e.module))].sort();
     const lines: string[] = [
-      `# API Reference — v${this.version}`,
+      `# ${this.title} — v${this.version}`,
       '',
       `> Generated at ${new Date().toISOString()}`,
       '',
@@ -549,6 +562,164 @@ export class ApiDocGenerator {
     }
 
     return lines.join('\n');
+  }
+
+  /**
+   * Generate the complete API reference as a single Markdown document.
+   */
+  generateMarkdown(): string {
+    if (this.entries.size === 0) this.parse();
+
+    const lines = [
+      `# ${this.title}`,
+      '',
+      `Version: \`${this.version}\``,
+      '',
+      this.generateIndex().replace(/^#[^\n]*\n\n/, ''),
+      '---',
+      '',
+    ];
+    const navigation = this.buildNavigation();
+
+    for (const category of navigation.children) {
+      lines.push(`## ${category.label}`, '');
+      for (const module of category.children) {
+        lines.push(`### ${module.label}`, '');
+        for (const id of module.entryIds) {
+          const entry = this.entries.get(id);
+          if (!entry) continue;
+          lines.push(`#### ${entry.name}`, '');
+          if (entry.deprecated) {
+            lines.push(`> **Deprecated** ${entry.deprecationMessage ?? ''}`, '');
+          }
+          if (entry.since) lines.push(`*Since: ${entry.since}*`, '');
+          if (entry.description) lines.push(entry.description, '');
+          if (entry.params.length > 0) {
+            lines.push('##### Parameters', '', '| Name | Type | Optional | Description |', '|------|------|----------|-------------|');
+            for (const param of entry.params) {
+              const description = param.description.replace(/\|/g, '\\|').replace(/\n/g, ' ');
+              lines.push(`| \`${param.name}\` | ${param.type ? `\`${param.type}\`` : '—'} | ${param.optional ? 'Yes' : 'No'} | ${description} |`);
+            }
+            lines.push('');
+          }
+          if (entry.returns) lines.push('##### Returns', '', entry.returns, '');
+          if (entry.examples.length > 0) {
+            lines.push('##### Examples', '');
+            for (const example of entry.examples) lines.push('```ts', example, '```', '');
+          }
+          if (entry.tags.length > 0) {
+            lines.push('##### Additional documentation', '');
+            for (const tag of entry.tags) {
+              const description = tag.description.replace(/\n/g, ' ');
+              lines.push(`- **@${tag.tag}**${tag.name ? ` \`${tag.name}\`` : ''}${description ? ` — ${description}` : ''}`);
+            }
+            lines.push('');
+          }
+          lines.push('---', '');
+        }
+      }
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Generate a self-contained HTML API reference.
+   */
+  generateHtml(): string {
+    if (this.entries.size === 0) this.parse();
+
+    const escapeHtml = (value: string): string =>
+      value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    const navigation = this.buildNavigation();
+    const html: string[] = [
+      '<!doctype html>',
+      '<html lang="en">',
+      '<head>',
+      '<meta charset="utf-8">',
+      '<meta name="viewport" content="width=device-width, initial-scale=1">',
+      `<title>${escapeHtml(this.title)}</title>`,
+      '</head>',
+      '<body>',
+      `<main><h1>${escapeHtml(this.title)}</h1>`,
+      `<p>Version: <code>${escapeHtml(this.version)}</code></p>`,
+      '<nav aria-label="API navigation"><ul>',
+    ];
+
+    for (const category of navigation.children) {
+      html.push(`<li><a href="#${escapeHtml(category.key)}">${escapeHtml(category.label)}</a><ul>`);
+      for (const module of category.children) {
+        html.push(`<li><a href="#module-${escapeHtml(module.key)}">${escapeHtml(module.label)}</a><ul>`);
+        for (const id of module.entryIds) {
+          const entry = this.entries.get(id);
+          if (!entry) continue;
+          html.push(`<li><a href="#${escapeHtml(id)}">${escapeHtml(entry.name)}</a></li>`);
+        }
+        html.push('</ul></li>');
+      }
+      html.push('</ul></li>');
+    }
+
+    html.push('</ul></nav>');
+    for (const category of navigation.children) {
+      html.push(`<section id="${escapeHtml(category.key)}"><h2>${escapeHtml(category.label)}</h2>`);
+      for (const module of category.children) {
+        html.push(`<section id="module-${escapeHtml(module.key)}"><h3>${escapeHtml(module.label)}</h3>`);
+        for (const id of module.entryIds) {
+          const entry = this.entries.get(id);
+          if (!entry) continue;
+          html.push(`<article id="${escapeHtml(id)}"><h4>${escapeHtml(entry.name)}</h4>`);
+          if (entry.deprecated) html.push(`<p><strong>Deprecated</strong> ${escapeHtml(entry.deprecationMessage ?? '')}</p>`);
+          if (entry.since) html.push(`<p><em>Since: ${escapeHtml(entry.since)}</em></p>`);
+          if (entry.description) html.push(`<p>${escapeHtml(entry.description).replace(/\n/g, '<br>')}</p>`);
+          if (entry.params.length > 0) {
+            html.push('<h5>Parameters</h5><table><thead><tr><th>Name</th><th>Type</th><th>Optional</th><th>Description</th></tr></thead><tbody>');
+            for (const param of entry.params) {
+              html.push(`<tr><td><code>${escapeHtml(param.name)}</code></td><td>${escapeHtml(param.type ?? '')}</td><td>${param.optional ? 'Yes' : 'No'}</td><td>${escapeHtml(param.description)}</td></tr>`);
+            }
+            html.push('</tbody></table>');
+          }
+          if (entry.returns) html.push(`<h5>Returns</h5><p>${escapeHtml(entry.returns)}</p>`);
+          for (const example of entry.examples) html.push(`<pre><code>${escapeHtml(example)}</code></pre>`);
+          if (entry.tags.length > 0) {
+            html.push('<h5>Additional documentation</h5><ul>');
+            for (const tag of entry.tags) {
+              const name = tag.name ? ` <code>${escapeHtml(tag.name)}</code>` : '';
+              const description = tag.description ? ` — ${escapeHtml(tag.description)}` : '';
+              html.push(`<li><strong>@${escapeHtml(tag.tag)}</strong>${name}${description}</li>`);
+            }
+            html.push('</ul>');
+          }
+          html.push('</article>');
+        }
+        html.push('</section>');
+      }
+      html.push('</section>');
+    }
+
+    html.push('</main>', '</body>', '</html>');
+    return html.join('\n');
+  }
+
+  /** Serialize the versioned documentation manifest as JSON. */
+  generateJson(): string {
+    return JSON.stringify(this.generateManifest(), null, 2);
+  }
+
+  /** Generate the complete reference in the requested output format. */
+  generate(format: DocOutputFormat): string {
+    switch (format) {
+      case 'markdown':
+        return this.generateMarkdown();
+      case 'html':
+        return this.generateHtml();
+      case 'json':
+        return this.generateJson();
+      default: {
+        const exhaustiveCheck: never = format;
+        throw new Error(`Unsupported API reference format: ${String(exhaustiveCheck)}`);
+      }
+    }
   }
 
   // -------------------------------------------------------------------------
