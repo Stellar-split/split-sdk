@@ -80,7 +80,8 @@
     "docs": "typedoc",
     "size-audit": "tsx scripts/bundle-size-audit.ts",
     "bundle:check": "tsx scripts/bundle-size-guard.ts",
-    "bundle:update-baseline": "BUNDLE_BASELINE_UPDATE=true tsx scripts/bundle-size-guard.ts"
+    "bundle:update-baseline": "BUNDLE_BASELINE_UPDATE=true tsx scripts/bundle-size-guard.ts",
+    "cli": "tsx src/cli/index.ts"
   },
   "bin": {
     "stellar-split-sdk-migrate": "./dist/cli/migrate.js",
