@@ -175,6 +175,76 @@ if (process.env.KMS_KEY_ID) {
 }
 ```
 
+## Request Signing (Issue #1334)
+
+Transaction signing (above) proves *who authorized a transaction*. **Request
+signing** is a separate, complementary layer that proves *who sent an HTTP
+request* to the SDK's RPC/API surface — enabling authenticity and replay
+protection for outgoing SDK calls.
+
+### Canonical request representation
+
+Every request is reduced to a deterministic canonical string before signing so
+that signer and verifier agree byte-for-byte:
+
+```
+METHOD\n
+PATH\n
+CANONICAL_QUERY\n
+TIMESTAMP\n
+NONCE\n
+SHA256(BODY)
+```
+
+- `METHOD` — upper-cased HTTP verb (`GET`, `POST`, …).
+- `PATH` — request path, no query string.
+- `CANONICAL_QUERY` — query params sorted by key, `key=value` joined with `&`.
+- `TIMESTAMP` — Unix epoch seconds (integer).
+- `NONCE` — random hex string, unique per request.
+- `SHA256(BODY)` — hex SHA-256 of the raw request body (`""` for empty).
+
+### Signature payload
+
+The canonical string is hashed and signed with the configured algorithm. The
+resulting signature is attached to the request as headers:
+
+| Header | Value |
+|--------|-------|
+| `X-Split-Algorithm` | Signing algorithm identifier (e.g. `ed25519`) |
+| `X-Split-Timestamp` | Unix epoch seconds |
+| `X-Split-Nonce` | Per-request nonce |
+| `X-Split-Signature` | Base64-encoded signature over the canonical string |
+
+### Supported algorithms
+
+| Algorithm | Notes |
+|-----------|-------|
+| `ed25519` | Default; matches Stellar keypairs |
+| `hmac-sha256` | Shared-secret signing for server-to-server calls |
+
+Algorithms are selected via the `signingAlgorithm` client option and must be
+supported by the configured signer.
+
+### Verification
+
+`verifyRequestSignature(request, publicKeyOrSecret, options)` recomputes the
+canonical string from the received request, checks the timestamp is within the
+allowed clock skew window, rejects replayed nonces, and verifies the signature
+against the supplied key. It returns a structured result:
+
+```typescript
+interface VerificationResult {
+  valid: boolean;
+  reason?: "bad-signature" | "expired" | "replayed" | "unsupported-algorithm";
+}
+```
+
+### Signature tracking
+
+Each signed request is recorded in an in-memory signature tracker keyed by
+`nonce`, storing `{ nonce, timestamp, algorithm, signature }`. The tracker is
+used by verification to detect replays and can be inspected for auditing.
+
 ## Security Notes
 
 - The AES key for `EncryptedFileSigner` must never be stored next to the
@@ -183,10 +253,13 @@ if (process.env.KMS_KEY_ID) {
   reclaimed by GC when nothing else references it, minimizing the window in
   which plaintext key material is resident.
 - For cloud KMS, the raw key material never enters the SDK process at all.
+- Request signatures include a timestamp and nonce; verifiers must enforce a
+  bounded clock-skew window and reject reused nonces to prevent replay.
 
 ## Related Issues
 
 - [#589: Pluggable Signing Key Vault Adapter](https://github.com/Stellar-split/split-sdk/issues/589)
+- [#1334: Add SDK request signing](https://github.com/Stellar-split/split-sdk/issues/1334)
 
 ## License
 
