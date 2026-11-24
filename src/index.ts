@@ -1355,3 +1355,34 @@ export type {
   MetricsReport,
   MetricsCollectorOptions,
 } from "./metricsCollection.js";
+
+// SDK Data Serialization (#1350)
+export {
+  SerializationRegistry,
+  SerializationError,
+  getDefaultSerializationRegistry,
+  resetDefaultSerializationRegistry,
+  serialize,
+  deserialize,
+} from "./serialization.js";
+export type {
+  SerializationFormat,
+  SerializationRecord,
+  VersionedEnvelope,
+  FormatCodec,
+} from "./serialization.js";
+
+// Optimized Transaction Signing with Batch Support (#1374)
+export {
+  SigningKeyManager,
+  OptimizedTransactionSigner,
+  KeyNotFoundError,
+  KeyStoreFullError,
+} from "./transactionSigningOptimization.js";
+export type {
+  KeyRecord,
+  BatchSignRequest,
+  BatchSignResult,
+  SigningMetrics,
+  KeyManagementOptions,
+} from "./transactionSigningOptimization.js";
