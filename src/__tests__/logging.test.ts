@@ -14,6 +14,12 @@ import {
   createAuditLogger,
   type AuditRecord,
 } from '../audit';
+import {
+  sanitizeHtml,
+  encodeHtml,
+  sanitizeValue,
+  XssProtectionTracker,
+} from '../xss';
 
 describe('logging system', () => {
   let aggregator: LogAggregator;
@@ -181,5 +187,41 @@ describe('audit logging', () => {
     store.clear();
     expect(store.query()).toHaveLength(0);
     expect(store.size()).toBe(0);
+  });
+});
+
+describe('xss protection', () => {
+  it('encodes all HTML special characters', () => {
+    expect(encodeHtml('&<>"\'/`=')).toBe(
+      '&amp;&lt;&gt;&quot;&#39;&#47;&#96;&#61;',
+    );
+  });
+
+  it('sanitizes script and event handler payloads', () => {
+    expect(sanitizeHtml('<script>alert(1)</script>')).not.toContain('<script>');
+    expect(sanitizeHtml('<img src=x onerror=alert(1)>')).not.toContain('onerror');
+    expect(sanitizeHtml('<a href="javascript:alert(1)">x</a>')).not.toContain('javascript:');
+  });
+
+  it('sanitizes nested objects and arrays', () => {
+    const input = {
+      name: '<b>bold</b>',
+      nested: { html: '<script>x</script>', list: ['<i>a</i>', { deep: '<u>b</u>' }] },
+    };
+    const output = sanitizeValue(input) as typeof input;
+    expect(output.name).not.toContain('<b>');
+    expect(output.nested.html).not.toContain('<script>');
+    expect(output.nested.list[0]).not.toContain('<i>');
+    expect((output.nested.list[1] as { deep: string }).deep).not.toContain('<u>');
+  });
+
+  it('tracks applied protections', () => {
+    const tracker = new XssProtectionTracker();
+    tracker.record('sanitize', '<script>');
+    tracker.record('encode', '&');
+    expect(tracker.count()).toBe(2);
+    expect(tracker.getEvents()).toHaveLength(2);
+    tracker.clear();
+    expect(tracker.count()).toBe(0);
   });
 });
