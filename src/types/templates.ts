@@ -141,6 +141,3 @@ export interface ResolvedTemplate {
   /** Parameter values that were applied. */
   appliedParameters?: Record<string, unknown>;
 }
-</｜｜DSML｜｜ parameter>
-</｜｜DSML｜｜ invoke>
-</｜｜DSML｜｜ calls>

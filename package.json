@@ -118,7 +118,7 @@
     "ts-node": "^10.9.2",
     "tsup": "^8.5.1",
     "tsx": "^4.23.1",
-    "typedoc": "^0.26.0",
+    "typedoc": "^0.28.20",
     "typedoc-plugin-markdown": "^4.0.0",
     "typescript": "^5.9.3",
     "vitest": "^1.6.1"

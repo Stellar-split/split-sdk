@@ -555,6 +555,12 @@ export interface CompressionLayer {
  * request and no recycling, health checking, or failover occurs.
  */
 export interface ConnectionPoolConfig {
-  /** Whether connection p
-
-/* … truncated 4185 chars — edit only what you need near the top … */
+  /** Minimum number of connections maintained in the pool. */
+  minConnections?: number;
+  /** Maximum number of concurrent connections. */
+  maxConnections?: number;
+  /** Time in milliseconds before an idle connection is removed. */
+  idleTimeoutMs?: number;
+  /** Interval in milliseconds between connection health checks. */
+  healthCheckIntervalMs?: number;
+}
