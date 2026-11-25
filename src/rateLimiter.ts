@@ -24,6 +24,8 @@
  * Issue #1058
  */
 
+import { computeBackoffDelay } from "./retry.js";
+
 /** Configuration for {@link RateLimiter}. */
 export interface RateLimiterConfig {
   /** Requests allowed per window, globally. Must be a positive finite number. */
@@ -57,6 +59,33 @@ export interface RateLimiterConfig {
    * Receives a {@link RateLimitEvent}. Used for logging/metrics.
    */
   onEvent?: (event: RateLimitEvent) => void;
+  /**
+   * Backoff applied by {@link RateLimiter.executeWithBackoff} when a request
+   * is rejected (issue #1349).
+   */
+  backoff?: RateLimitBackoffConfig;
+}
+
+/** Backoff configuration for rejected requests (issue #1349). */
+export interface RateLimitBackoffConfig {
+  /** Delay before the first retry in milliseconds. Defaults to 100. */
+  baseDelayMs?: number;
+  /** Upper bound for a single delay in milliseconds. Defaults to 5000. */
+  maxDelayMs?: number;
+  /** Retries after the first rejection before giving up. Defaults to 3. */
+  maxRetries?: number;
+}
+
+/** Cumulative rate-limit decision counters (issue #1349). */
+export interface RateLimitStats {
+  /** Requests admitted. */
+  allowed: number;
+  /** Requests rejected. */
+  denied: number;
+  /** Rejections broken down by the limit that produced them. */
+  deniedByScope: Record<RateLimitEvent["scope"], number>;
+  /** Backoff waits performed by {@link RateLimiter.executeWithBackoff}. */
+  backoffRetries: number;
 }
 
 /** A rate-limit decision event (issue #1252). */
@@ -254,6 +283,8 @@ export class RateLimiter {
   private _lastRefillTime: number;
   private _queue: PendingAcquire[] = [];
   private _processing = false;
+  private readonly _backoff: Required<RateLimitBackoffConfig>;
+  private _stats: RateLimitStats = RateLimiter._emptyStats();
 
   constructor(config: RateLimiterConfig) {
     if (!config || typeof config !== "object") {
@@ -268,6 +299,7 @@ export class RateLimiter {
       perUserLimit,
       resolveUser,
       onEvent,
+      backoff,
     } = config;
     if (
       typeof maxRequestsPerSecond !== "number" ||
@@ -301,6 +333,17 @@ export class RateLimiter {
     if (onEvent !== undefined && typeof onEvent !== "function") {
       throw new RangeError("onEvent must be a function");
     }
+    if (backoff !== undefined) {
+      if (typeof backoff !== "object" || backoff === null) {
+        throw new RangeError("backoff must be an object");
+      }
+      for (const field of ["baseDelayMs", "maxDelayMs", "maxRetries"] as const) {
+        const value = backoff[field];
+        if (value !== undefined && (!Number.isFinite(value) || value < 0)) {
+          throw new RangeError(`backoff.${field} must be a non-negative finite number`);
+        }
+      }
+    }
 
     this._maxTokens = maxRequestsPerSecond;
     this._perKeyLimit = perKeyLimit;
@@ -314,6 +357,11 @@ export class RateLimiter {
     this._perUserLimit = perUserLimit;
     this._resolveUser = resolveUser;
     this._onEvent = onEvent;
+    this._backoff = {
+      baseDelayMs: backoff?.baseDelayMs ?? 100,
+      maxDelayMs: backoff?.maxDelayMs ?? 5_000,
+      maxRetries: Math.floor(backoff?.maxRetries ?? 3),
+    };
   }
 
   /** Effective window length in milliseconds. */
@@ -378,6 +426,69 @@ export class RateLimiter {
     };
   }
 
+  /**
+   * Run `fn` once the rate limit admits the request, backing off
+   * exponentially when it is rejected (issue #1349).
+   *
+   * Each wait is the larger of the limiter's `retryAfterMs` hint and the
+   * exponential backoff delay for the attempt, capped by `backoff.maxDelayMs`.
+   *
+   * @param method - The method name used for per-method limits and events.
+   * @param fn - The function to run once admitted.
+   * @param key - Optional per-key scope.
+   * @throws {RateLimitExceededError} When still rejected after `backoff.maxRetries` retries.
+   */
+  async executeWithBackoff<R>(method: string, fn: () => R | Promise<R>, key?: string): Promise<R> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        this.enforce(method, [], key);
+        break;
+      } catch (err) {
+        if (!(err instanceof RateLimitExceededError) || attempt > this._backoff.maxRetries) {
+          throw err;
+        }
+        const delayMs = Math.max(
+          err.retryAfterMs,
+          computeBackoffDelay(attempt, {
+            baseDelayMs: this._backoff.baseDelayMs,
+            maxDelayMs: this._backoff.maxDelayMs,
+          }),
+        );
+        this._stats.backoffRetries++;
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+    return fn();
+  }
+
+  /** Snapshot of cumulative rate-limit decisions (issue #1349). */
+  getStats(): RateLimitStats {
+    return { ...this._stats, deniedByScope: { ...this._stats.deniedByScope } };
+  }
+
+  /** Reset the decision counters returned by {@link getStats}. */
+  resetStats(): void {
+    this._stats = RateLimiter._emptyStats();
+  }
+
+  private static _emptyStats(): RateLimitStats {
+    return {
+      allowed: 0,
+      denied: 0,
+      deniedByScope: { global: 0, method: 0, user: 0, key: 0 },
+      backoffRetries: 0,
+    };
+  }
+
+  private _track(allowed: boolean, scope: RateLimitEvent["scope"]): void {
+    if (allowed) {
+      this._stats.allowed++;
+    } else {
+      this._stats.denied++;
+      this._stats.deniedByScope[scope]++;
+    }
+  }
+
   private _evaluateScoped(
     method: string,
     args: unknown[],
@@ -390,6 +501,7 @@ export class RateLimiter {
     const user = this._resolveUser ? this._resolveUser(method, args) : undefined;
 
     const deny = (scope: RateLimitEvent["scope"], retryAfterMs: number): RateLimitCheck & { user?: string } => {
+      if (consume) this._track(false, scope);
       this._emit({ method, user, allowed: false, remaining: 0, retryAfterMs, scope, timestamp: now });
       return { allowed: false, remaining: 0, retryAfterMs, user };
     };
@@ -430,6 +542,7 @@ export class RateLimiter {
       this._tokens--;
     }
     const remaining = Math.floor(this._tokens);
+    if (consume) this._track(true, "global");
     this._emit({ method, user, allowed: true, remaining, retryAfterMs: 0, scope: "global", timestamp: now });
     return { allowed: true, remaining, retryAfterMs: 0, user };
   }
@@ -496,11 +609,12 @@ export class RateLimiter {
     return Math.max(0, this._windowMs - (now - this._lastRefillTime));
   }
 
-  private _evaluate(key: string | undefined, consume: boolean): RateLimitCheck {
+  private _evaluate(key: string | undefined, consume: boolean, track: boolean = consume): RateLimitCheck {
     const now = Date.now();
     this._refill(now);
 
     if (this._tokens <= 0) {
+      if (track) this._track(false, "global");
       return { allowed: false, remaining: 0, retryAfterMs: this._msUntilRefill(now) };
     }
 
@@ -509,11 +623,13 @@ export class RateLimiter {
         ? this._store.consume(key, this._perKeyLimit, this._windowMs, now)
         : this._store.peek(key, this._perKeyLimit, this._windowMs, now);
       if (!keyResult.allowed) {
+        if (track) this._track(false, "key");
         return { allowed: false, remaining: 0, retryAfterMs: keyResult.retryAfterMs };
       }
       if (consume) {
         this._tokens--;
       }
+      if (track) this._track(true, "global");
       return {
         allowed: true,
         remaining: Math.min(Math.floor(this._tokens), keyResult.remaining),
@@ -524,6 +640,7 @@ export class RateLimiter {
     if (consume) {
       this._tokens--;
     }
+    if (track) this._track(true, "global");
     return { allowed: true, remaining: Math.floor(this._tokens), retryAfterMs: 0 };
   }
 
@@ -540,7 +657,9 @@ export class RateLimiter {
           index++;
           continue;
         }
-        if (this._evaluate(next.key, true).allowed) {
+        // Queued callers were already counted as denied; only count the grant.
+        if (this._evaluate(next.key, true, false).allowed) {
+          this._track(true, "global");
           this._queue.splice(index, 1);
           next.resolve();
           continue;
