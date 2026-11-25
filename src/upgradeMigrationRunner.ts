@@ -96,7 +96,6 @@ export function validateMigrationChain(
     );
   }
 }
-=======
 
 /**
  * Register a migration function to run when an upgrade from `fromVersion` to

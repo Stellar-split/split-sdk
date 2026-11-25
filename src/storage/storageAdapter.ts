@@ -10,6 +10,7 @@ export interface StorageAdapter {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
   removeItem(key: string): void;
+  keys?(): string[];
 }
 
 export type StorageKind = "localStorage" | "sessionStorage" | "memory";
@@ -28,6 +29,10 @@ export class MemoryStorageAdapter implements StorageAdapter {
   removeItem(key: string): void {
     this.store.delete(key);
   }
+
+  keys(): string[] {
+    return Array.from(this.store.keys());
+  }
 }
 
 function resolveWebStorage(kind: "localStorage" | "sessionStorage"): StorageAdapter | null {
@@ -41,7 +46,14 @@ function resolveWebStorage(kind: "localStorage" | "sessionStorage"): StorageAdap
     const probeKey = "__stellar_split_storage_probe__";
     candidate.setItem(probeKey, "1");
     candidate.removeItem(probeKey);
-    return candidate;
+    return {
+      getItem: (key) => candidate.getItem(key),
+      setItem: (key, value) => candidate.setItem(key, value),
+      removeItem: (key) => candidate.removeItem(key),
+      keys: () => Array.from({ length: candidate.length }, (_, index) => candidate.key(index)).filter(
+        (key): key is string => key !== null,
+      ),
+    };
   } catch {
     return null;
   }

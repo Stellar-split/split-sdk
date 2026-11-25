@@ -14,4 +14,5 @@ export type {
   DocTagName,
   NavNode,
   ApiDocGeneratorOptions,
+  DocOutputFormat,
 } from '../apiDocGenerator.js';
