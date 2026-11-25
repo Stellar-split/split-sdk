@@ -1,49 +1,58 @@
-# Performance Tuning Guide
+# Performance Tuning
 
-This guide details optimization strategies, configuration techniques, operational tradeoffs, and empirical benchmark measurements for high-throughput, low-latency deployments using the StellarSplit SDK.
+This guide covers tuning knobs that affect SDK throughput and latency.
 
----
+## Resource Pooling
 
-## Table of Contents
+The SDK reuses expensive resources (connections, buffers, clients) through a
+pool subsystem. Pooling maximizes reuse by handing out idle resources before
+creating new ones, and by returning resources to the pool on release.
 
-1. [Overview & Architecture Considerations](#1-overview--architecture-considerations)
-2. [Technique 1: RPC Connection Pooling](#technique-1-rpc-connection-pooling)
-3. [Technique 2: RPC Request Multiplexing & Batching](#technique-2-rpc-request-multiplexing--batching)
-4. [Technique 3: Multi-Tier Caching & Optimistic Reads](#technique-3-multi-tier-caching--optimistic-reads)
-5. [Technique 4: Circuit Breaking & Adaptive Throttling](#technique-4-circuit-breaking--adaptive-throttling)
-6. [Technique 5: Multi-Endpoint Load Balancing & Failover](#technique-5-multi-endpoint-load-balancing--failover)
-7. [Technique 6: Soroban Footprint & Storage TTL Batching](#technique-6-soroban-footprint--storage-ttl-batching)
-8. [Technique 7: Real-Time Event Streaming vs. Polling](#technique-7-real-time-event-streaming-vs-polling)
-9. [Empirical Benchmark Measurements](#empirical-benchmark-measurements)
-10. [Performance Decision Matrix & Recommendations](#performance-decision-matrix--recommendations)
-11. [Profiling Guide](#profiling-guide)
-12. [Optimization Checklist](#optimization-checklist)
+### Pool lifecycle
 
----
+Each pooled resource moves through a well-defined lifecycle:
 
-## 1. Overview & Architecture Considerations
+1. **Create** — the pool calls the configured factory to build a new resource
+   when no idle resource is available and the pool is below its maximum size.
+2. **Validate** — before an idle resource is reused, the optional validator is
+   invoked. Resources that fail validation are destroyed and replaced.
+3. **Acquire / Release** — callers acquire a resource, use it, then release it
+   back to the pool. Released resources become idle and eligible for reuse.
+4. **Destroy** — resources are destroyed when they fail validation, exceed the
+   idle timeout, or when the pool is drained.
+5. **Drain / Close** — draining stops new acquisitions and destroys all idle
+   resources; closing additionally waits for in-use resources to be released.
 
-In Stellar-based decentralized invoice applications, performance bottlenecks typically arise from four distinct layers:
+### Sizing
 
-1. **Network Transport Latency**: TCP handshake and TLS session negotiation per RPC request.
-2. **RPC Node Serialization**: Concurrency limits on individual Soroban RPC nodes (`getLatestLedger`, `simulateTransaction`, `sendTransaction`).
-3. **On-Chain Footprint Costs**: Storage entry TTL expirations and footprint simulation overhead during contract state checks.
-4. **Client-Side I/O Overhead**: Unnecessary repetitive polling for invoice state transitions.
+Pool size is configurable per pool:
 
-The StellarSplit SDK includes built-in subsystems to mitigate each bottleneck. The sections below describe how to tune these features.
+| Option            | Description                                                        |
+| ----------------- | ------------------------------------------------------------------ |
+| `min`             | Minimum number of resources kept warm in the pool.                 |
+| `max`             | Maximum number of resources (idle + in-use) the pool will create.  |
+| `idleTimeout`     | How long an idle resource may sit before it is destroyed.          |
+| `acquireTimeout`  | How long an acquire call waits for a resource before failing.      |
 
----
+Guidance:
 
-## Technique 1: RPC Connection Pooling
+- Set `min` to the steady-state concurrency you expect so common requests are
+  served from warm resources without a create/validate round trip.
+- Set `max` to a value your downstream dependency can tolerate; the pool will
+  never exceed it, and acquires beyond it wait up to `acquireTimeout`.
+- Keep `idleTimeout` short enough to shed resources during quiet periods, but
+  long enough to avoid churn during bursty traffic.
+- Tune `acquireTimeout` so callers fail fast instead of queueing indefinitely
+  when the pool is saturated.
 
-### Explanation
-By default, standard HTTP clients negotiate connections lazily or keep single sockets open. Under high concurrency (e.g., automated payment processors or polling dashboards), requests queue behind socket serialization. 
+### Tracking
 
-The SDK provides an integrated connection pool (`ConnectionPool`) that maintains a warm pool of keep-alive sockets for Soroban RPC calls.
+Pools expose counters for observability: total created, currently idle,
+currently in-use, waiting acquirers, and destroyed. Use these to confirm reuse
+is high (few creates relative to acquires) and to spot saturation (growing
+waiting count) before it becomes a latency problem.
 
-### Code Example
-```typescript
-import { StellarSplitClient } from "@stellar-split/sdk";
+### Tuning checklist
 
 const client = new StellarSplitClient({
   rpcUrl: "https://soroban-rpc.mainnet.stellar.org",

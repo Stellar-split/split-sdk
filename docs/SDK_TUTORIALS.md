@@ -10,7 +10,8 @@ This guide provides step-by-step tutorials for integrating with the StellarSplit
 4. [Webhook Integration](#webhook-integration)
 5. [Multi-Signature Wallets](#multi-signature-wallets)
 6. [Error Handling](#error-handling)
-7. [Production Checklist](#production-checklist)
+7. [CLI Tools](#cli-tools)
+8. [Production Checklist](#production-checklist)
 
 ---
 
@@ -206,6 +207,83 @@ try {
 | `INVOICE_EXPIRED` | Invoice deadline has passed |
 | `INVALID_AMOUNT` | Amount is zero or negative |
 | `INVALID_ADDRESS` | Invalid Stellar address format |
+
+---
+
+## CLI Tools
+
+The SDK ships a `stellarsplit` command-line tool for scripting and automation.
+
+### Global Help
+
+```bash
+stellarsplit --help
+stellarsplit <command> --help
+```
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `invoice create` | Create a new invoice |
+| `invoice get <id>` | Fetch an invoice by ID |
+| `pay` | Pay toward an invoice |
+| `config` | Show or set CLI configuration |
+
+### Configuration
+
+```bash
+stellarsplit config set rpcUrl https://soroban-testnet.stellar.org
+stellarsplit config set contractId YOUR_DEPLOYED_CONTRACT_ID
+stellarsplit config show
+```
+
+### Create an Invoice
+
+```bash
+stellarsplit invoice create \
+  --creator GABC...CREATOR \
+  --recipient GABC...RECIPIENT1:60 \
+  --recipient GDEF...RECIPIENT2:40 \
+  --token USDC_CONTRACT_ADDRESS \
+  --deadline-days 7
+```
+
+### Fetch an Invoice
+
+```bash
+stellarsplit invoice get 42
+```
+
+### Pay Toward an Invoice
+
+```bash
+stellarsplit pay --payer GABC...PAYER --invoice 42 --amount 25
+```
+
+### Scripting Support
+
+All commands are non-interactive and support machine-readable output:
+
+```bash
+# Emit JSON for parsing in scripts
+stellarsplit invoice get 42 --json
+
+# Suppress non-essential output
+stellarsplit pay --payer GABC... --invoice 42 --amount 25 --quiet
+
+# Capture the transaction hash
+TX_HASH=$(stellarsplit pay --payer GABC... --invoice 42 --amount 25 --json | jq -r '.txHash')
+```
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `1` | General error |
+| `2` | Invalid usage / bad arguments |
+| `3` | SDK operation failed (e.g. invoice not found) |
 
 ---
 
