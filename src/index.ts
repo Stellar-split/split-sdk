@@ -1356,33 +1356,29 @@ export type {
   MetricsCollectorOptions,
 } from "./metricsCollection.js";
 
-// SDK Data Serialization (#1350)
+// Stellar Asset Validation (#1375)
 export {
-  SerializationRegistry,
-  SerializationError,
-  getDefaultSerializationRegistry,
-  resetDefaultSerializationRegistry,
-  serialize,
-  deserialize,
-} from "./serialization.js";
+  validateStellarAsset,
+  validateAssetCode,
+  validateAssetIssuer,
+  validateCustomToken,
+  validateAssetAmount,
+  parseAmountToStroops,
+  STELLAR_AMOUNT_DECIMALS,
+  MAX_STELLAR_AMOUNT_STROOPS,
+} from "./stellarAssetValidation.js";
 export type {
-  SerializationFormat,
-  SerializationRecord,
-  VersionedEnvelope,
-  FormatCodec,
-} from "./serialization.js";
+  StellarAssetType,
+  StellarAssetInput,
+  StellarAssetValidationOptions,
+  StellarAssetValidationResult,
+} from "./stellarAssetValidation.js";
 
-// Optimized Transaction Signing with Batch Support (#1374)
-export {
-  SigningKeyManager,
-  OptimizedTransactionSigner,
-  KeyNotFoundError,
-  KeyStoreFullError,
-} from "./transactionSigningOptimization.js";
+// Payment Flow Retry and Fallback (#1373)
+export { PaymentFlowRetry, PaymentFlowExhaustedError } from "./paymentFlowRetry.js";
 export type {
-  KeyRecord,
-  BatchSignRequest,
-  BatchSignResult,
-  SigningMetrics,
-  KeyManagementOptions,
-} from "./transactionSigningOptimization.js";
+  PaymentProvider,
+  PaymentFlowRetryOptions,
+  PaymentAttemptRecord,
+  PaymentFlowResult,
+} from "./paymentFlowRetry.js";
