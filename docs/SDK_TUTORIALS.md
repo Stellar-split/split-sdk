@@ -10,9 +10,8 @@ This guide provides step-by-step tutorials for integrating with the StellarSplit
 4. [Webhook Integration](#webhook-integration)
 5. [Multi-Signature Wallets](#multi-signature-wallets)
 6. [Error Handling](#error-handling)
-7. [Performance Profiling](#performance-profiling)
-8. [Lazy Evaluation](#lazy-evaluation)
-9. [Production Checklist](#production-checklist)
+7. [CLI Tools](#cli-tools)
+8. [Production Checklist](#production-checklist)
 
 ---
 
@@ -211,99 +210,84 @@ try {
 
 ---
 
-## Performance Profiling
+## CLI Tools
 
-This section explains how to measure, benchmark, and optimize the performance of your StellarSplit SDK integration. Profiling helps you find slow RPC calls, redundant network requests, and expensive transaction-building work before they reach production.
+The SDK ships a `stellarsplit` command-line tool for scripting and automation.
 
-### Profiling Tools
-
-| Tool | Purpose | When to use |
-|------|---------|-------------|
-| `performance.now()` | High-resolution timing of individual SDK calls | Quick, dependency-free measurements |
-| Node.js `perf_hooks` | Programmatic timing and histograms | Server-side scripts and CI benchmarks |
-| Node.js `--cpu-prof` | CPU profile of a running process | Finding hot functions in long-running services |
-| Chrome DevTools (Performance tab) | Flame charts and network waterfall | Browser-based wallet flows |
-| `console.time` / `console.timeEnd` | Simple labeled timers | Ad-hoc debugging |
-| `@stellar-split/sdk` debug logging | SDK-level request/response tracing | Diagnosing RPC latency |
-
-Enable SDK debug logging to trace RPC calls:
-
-```typescript
-const client = new StellarSplitClient({
-  rpcUrl: "https://soroban-testnet.stellar.org",
-  networkPassphrase: "Test SDF Network ; September 2015",
-  contractId: "YOUR_DEPLOYED_CONTRACT_ID",
-  debug: true, // logs RPC requests, retries, and timings
-});
-```
-
-### Profiling Examples
-
-#### Timing a single SDK call
-
-```typescript
-import { performance } from "node:perf_hooks";
-
-const start = performance.now();
-const invoice = await client.getInvoice({ invoiceId });
-const elapsed = performance.now() - start;
-
-console.log(`getInvoice took ${elapsed.toFixed(2)}ms`);
-```
-
-#### Wrapping the client with a timing proxy
-
-```typescript
-function withTiming<T extends object>(target: T): T {
-  return new Proxy(target, {
-    get(obj, prop, receiver) {
-      const value = Reflect.get(obj, prop, receiver);
-      if (typeof value !== "function") return value;
-      return async (...args: unknown[]) => {
-        const start = performance.now();
-        try {
-          return await value.apply(obj, args);
-        } finally {
-          console.log(`${String(prop)} took ${(performance.now() - start).toFixed(2)}ms`);
-        }
-      };
-    },
-  });
-}
-
-const profiledClient = withTiming(client);
-await profiledClient.pay({ payer, invoiceId, amount: parseAmount("25") });
-```
-
-#### Capturing a CPU profile
+### Global Help
 
 ```bash
-node --cpu-prof --cpu-prof-dir=./profiles ./scripts/benchmark.js
+stellarsplit --help
+stellarsplit <command> --help
 ```
 
-Open the generated `.cpuprofile` in Chrome DevTools (Performance → Load profile) to inspect the flame chart.
+### Commands
 
-### Benchmarking Guide
+| Command | Description |
+|---------|-------------|
+| `invoice create` | Create a new invoice |
+| `invoice get <id>` | Fetch an invoice by ID |
+| `pay` | Pay toward an invoice |
+| `config` | Show or set CLI configuration |
 
-Benchmarks should be repeatable and run against a stable environment (testnet, warm connection).
+### Configuration
 
-```typescript
-import { performance } from "node:perf_hooks";
+```bash
+stellarsplit config set rpcUrl https://soroban-testnet.stellar.org
+stellarsplit config set contractId YOUR_DEPLOYED_CONTRACT_ID
+stellarsplit config show
+```
 
-async function benchmark(label: string, fn: () => Promise<unknown>, iterations = 20) {
-  // Warm-up run to avoid cold-start skew
-  await fn();
+### Create an Invoice
 
-  const samples: number[] = [];
-  for (let i = 0; i < iterations; i++) {
-    const start = performance.now();
-    await fn();
-    samples.push(performance.now() - start);
-  }
+```bash
+stellarsplit invoice create \
+  --creator GABC...CREATOR \
+  --recipient GABC...RECIPIENT1:60 \
+  --recipient GDEF...RECIPIENT2:40 \
+  --token USDC_CONTRACT_ADDRESS \
+  --deadline-days 7
+```
 
-  samples.sort((a, b) => a - b);
-  const avg = samples.reduce((s, v) => s + v, 0) / samples.length;
-  const p95 = samples[Math.floor(samples.length * 0.95)];
+### Fetch an Invoice
+
+```bash
+stellarsplit invoice get 42
+```
+
+### Pay Toward an Invoice
+
+```bash
+stellarsplit pay --payer GABC...PAYER --invoice 42 --amount 25
+```
+
+### Scripting Support
+
+All commands are non-interactive and support machine-readable output:
+
+```bash
+# Emit JSON for parsing in scripts
+stellarsplit invoice get 42 --json
+
+# Suppress non-essential output
+stellarsplit pay --payer GABC... --invoice 42 --amount 25 --quiet
+
+# Capture the transaction hash
+TX_HASH=$(stellarsplit pay --payer GABC... --invoice 42 --amount 25 --json | jq -r '.txHash')
+```
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `1` | General error |
+| `2` | Invalid usage / bad arguments |
+| `3` | SDK operation failed (e.g. invoice not found) |
+
+---
+
+## Production Checklist
 
   console.log(`${label}: avg=${avg.toFixed(2)}ms p95=${p95.toFixed(2)}ms`);
 }

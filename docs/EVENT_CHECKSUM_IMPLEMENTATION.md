@@ -156,3 +156,12 @@ if (!isValid) {
 - Initial hash must be stored securely (outside this module)
 - Only detects tampering; doesn't prevent it
 - Suitable for audit trails and integrity verification, not cryptographic signing
+
+## Relationship to SDK Request Signing (#1334)
+
+This checksum chain provides **integrity** (detecting tampering of event streams) but not **authenticity** (proving who produced a request). The SDK request signing feature (#1334) complements this module:
+
+- **Event checksum chain** - Detects tampering/reordering of consumed on-chain events (integrity).
+- **Request signing** - Signs outgoing SDK requests with a key and verifies signatures on receipt (authenticity).
+
+Both use SHA-256 as the underlying hash primitive, but request signing additionally requires a secret key and a canonical request representation (method, path, body, timestamp, nonce) so that signatures are reproducible and verifiable across parties. See the SDK request signing documentation for the canonicalization rules, supported algorithms, and signature tracking details.

@@ -121,7 +121,6 @@ export function getDeadlineValidationStats(): DeadlineValidationStats {
 export function resetDeadlineValidationStats(): void {
   validationHistory.length = 0;
 }
-=======
 
 /** Options for configuring deadline validation behavior. */
 export interface DeadlineValidationOptions {
