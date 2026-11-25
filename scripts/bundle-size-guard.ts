@@ -14,7 +14,7 @@
  * var.
  */
 
-import { build } from "esbuild";
+import { build, type Metafile } from "esbuild";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -44,6 +44,12 @@ export interface BundleSizeVerdict {
   deltaPercent: number;
   /** Human-readable reasons when the check fails. */
   reasons: string[];
+}
+
+/** A single bundled module's contribution to the output, largest first. */
+export interface BundleContributor {
+  path: string;
+  bytes: number;
 }
 
 const CONFIG_DIR = dirname(fileURLToPath(import.meta.url));
@@ -113,10 +119,27 @@ export function evaluateBundle(
   };
 }
 
+/**
+ * Ranks bundled modules by their contribution to the output, largest first.
+ * Pure helper over an esbuild metafile, exported for unit tests.
+ */
+export function rankContributors(
+  metafile: Metafile,
+  limit = 10,
+): BundleContributor[] {
+  const contributors: BundleContributor[] = [];
+  for (const output of Object.values(metafile.outputs)) {
+    for (const [path, info] of Object.entries(output.inputs)) {
+      contributors.push({ path, bytes: info.bytesInOutput });
+    }
+  }
+  return contributors.sort((a, b) => b.bytes - a.bytes).slice(0, limit);
+}
+
 /** Bundles the entry point with esbuild and measures minified + gzipped sizes. */
 export async function measureBundle(
   entryPoint: string,
-): Promise<BundleMeasurement> {
+): Promise<{ measurement: BundleMeasurement; contributors: BundleContributor[] }> {
   const result = await build({
     entryPoints: [entryPoint],
     bundle: true,
@@ -128,11 +151,13 @@ export async function measureBundle(
     target: "es2020",
     minify: true,
     write: false,
+    metafile: true,
     logLevel: "error",
   });
   const minifiedBytes = result.outputFiles[0]!.contents.byteLength;
   const gzipBytes = gzipSync(result.outputFiles[0]!.contents).byteLength;
-  return { minifiedBytes, gzipBytes };
+  const contributors = rankContributors(result.metafile);
+  return { measurement: { minifiedBytes, gzipBytes }, contributors };
 }
 
 function loadBaseline(): BundleMeasurement | null {
@@ -155,7 +180,10 @@ function formatBytes(bytes: number): string {
   return `${bytes.toLocaleString("en-US")} B`;
 }
 
-function printReport(verdict: BundleSizeVerdict): void {
+function printReport(
+  verdict: BundleSizeVerdict,
+  contributors: BundleContributor[],
+): void {
   console.log("📦 SDK Bundle Size Guard\n");
   console.log(`  minified : ${formatBytes(verdict.measured.minifiedBytes)}`);
   console.log(`  gzipped  : ${formatBytes(verdict.measured.gzipBytes)}`);
@@ -171,9 +199,16 @@ function printReport(verdict: BundleSizeVerdict): void {
     console.log("  baseline : <none>");
   }
 
+  if (contributors.length > 0) {
+    console.log("\n  top contributors (minified bytes):");
+    for (const contributor of contributors) {
+      console.log(`    ${formatBytes(contributor.bytes).padStart(12)}  ${contributor.path}`);
+    }
+  }
+
   writeFileSync(
     REPORT_PATH,
-    `${JSON.stringify(verdict, null, 2)}\n`,
+    `${JSON.stringify({ ...verdict, contributors }, null, 2)}\n`,
   );
   console.log(`\n  report   : ${REPORT_PATH}`);
 
@@ -193,19 +228,21 @@ async function main(): Promise<void> {
   // the `bundle:update-baseline` npm script).
   const updateBaseline = process.env.BUNDLE_BASELINE_UPDATE === "true";
 
-  const measured = await measureBundle(bundleSizeConfig.entryPoint);
+  const { measurement, contributors } = await measureBundle(
+    bundleSizeConfig.entryPoint,
+  );
 
   if (updateBaseline) {
-    writeBaseline(measured);
+    writeBaseline(measurement);
     process.exit(0);
   }
 
   const verdict = evaluateBundle(
-    measured,
+    measurement,
     loadBaseline(),
     bundleSizeConfig,
   );
-  printReport(verdict);
+  printReport(verdict, contributors);
   process.exit(verdict.pass ? 0 : 1);
 }
 
