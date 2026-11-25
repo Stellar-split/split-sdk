@@ -197,6 +197,10 @@ export function createRetryExecutor(options: RetryPolicyOptions): RetryExecutor 
 }
 
 export function isRetryable(error: unknown): boolean {
+  if (error instanceof RpcError) {
+    return error.statusCode === 429 || error.statusCode === 502 || error.statusCode === 503 || error.statusCode === 504;
+  }
+
   // Prefer the centralized error-code taxonomy when the error carries a code.
   if (error instanceof Error) {
     const code = (error as { code?: unknown }).code;
@@ -225,10 +229,6 @@ export function isRetryable(error: unknown): boolean {
   if (error instanceof DelegateLimitReachedError) return false;
   if (error instanceof InvalidContractAddressError) return false;
   if (error instanceof TransactionVerificationError) return false;
-
-  if (error instanceof RpcError) {
-    return error.statusCode === 429 || error.statusCode === 502 || error.statusCode === 503 || error.statusCode === 504;
-  }
 
   if (!(error instanceof Error)) return false;
 

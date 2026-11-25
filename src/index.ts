@@ -1356,32 +1356,29 @@ export type {
   MetricsCollectorOptions,
 } from "./metricsCollection.js";
 
-// SSL Certificate Pinning (#1323)
+// Stellar Asset Validation (#1375)
 export {
-  SslPinningManager,
-  SslPinningValidationError,
-  PinManagementError,
-  SSL_PIN_FORMAT_VERSION,
-  PIN_HASH_BYTES,
-  sha256Base64,
-  normalizePinHostname,
-  isValidPinHash,
-} from "./sslPinning.js";
+  validateStellarAsset,
+  validateAssetCode,
+  validateAssetIssuer,
+  validateCustomToken,
+  validateAssetAmount,
+  parseAmountToStroops,
+  STELLAR_AMOUNT_DECIMALS,
+  MAX_STELLAR_AMOUNT_STROOPS,
+} from "./stellarAssetValidation.js";
 export type {
-  CertificatePin,
-  CertificatePinInput,
-  PinKind,
-  PinStatus,
-  PinFailureReason,
-  PinValidationInput,
-  PinValidationResult,
-  PinEvent,
-  PinBundle,
-  PeerCertificateInput,
-  SslPinningOptions,
-  SslPinningStats,
-  RotateOptions,
-  RotationResult,
-  RemovePinOptions,
-  RetirePinOptions,
-} from "./sslPinning.js";
+  StellarAssetType,
+  StellarAssetInput,
+  StellarAssetValidationOptions,
+  StellarAssetValidationResult,
+} from "./stellarAssetValidation.js";
+
+// Payment Flow Retry and Fallback (#1373)
+export { PaymentFlowRetry, PaymentFlowExhaustedError } from "./paymentFlowRetry.js";
+export type {
+  PaymentProvider,
+  PaymentFlowRetryOptions,
+  PaymentAttemptRecord,
+  PaymentFlowResult,
+} from "./paymentFlowRetry.js";

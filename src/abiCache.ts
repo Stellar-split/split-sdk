@@ -400,27 +400,70 @@ export class MemoryAbiStorage implements AbiStorage {
 export class AdapterAbiStorage implements AbiStorage {
   private readonly adapter: StorageAdapter;
   private readonly prefix: string;
+  private readonly knownKeys: Set<string>;
 
   constructor(adapter: StorageAdapter = new MemoryStorageAdapter(), prefix = "stellar_abi_cache:") {
     this.adapter = adapter;
     this.prefix = prefix;
+    this.knownKeys = new Set(
+      adapter.keys?.().filter((key) => key.startsWith(prefix)).map((key) => key.slice(prefix.length)) ?? [],
+    );
   }
 
   get(key: string): CachedAbiEntry | null {
     const raw = this.adapter.getItem(this.prefix + key);
     if (!raw) return null;
+    let entry: CachedAbiEntry;
     try {
-      const entry = JSON.parse(raw) as CachedAbiEntry;
-      entry.lastAccessedAt = Date.now();
-      entry.accessCount = (entry.accessCount || 0) + 1;
-      return entry;
+      entry = JSON.parse(raw) as CachedAbiEntry;
     } catch {
       return null;
     }
+    this.knownKeys.add(key);
+    entry.lastAccessedAt = Date.now();
+    entry.accessCount = (entry.accessCount || 0) + 1;
+    this.adapter.setItem(this.prefix + key, JSON.stringify(entry));
+    return entry;
   }
 
   set(key: string, entry: CachedAbiEntry): void {
-    const raw = JSON.stringify(entry);
-    ent
+    this.adapter.setItem(this.prefix + key, JSON.stringify(entry));
+    this.knownKeys.add(key);
+  }
 
-/* … truncated 1354 chars — edit only what you need near the top … */
+  delete(key: string): boolean {
+    const storageKey = this.prefix + key;
+    if (this.adapter.getItem(storageKey) === null) return false;
+    this.adapter.removeItem(storageKey);
+    this.knownKeys.delete(key);
+    return true;
+  }
+
+  clear(): void {
+    for (const key of this.keys()) this.adapter.removeItem(this.prefix + key);
+    this.knownKeys.clear();
+  }
+
+  keys(): string[] {
+    if (this.adapter.keys) {
+      const currentKeys = this.adapter.keys()
+        .filter((key) => key.startsWith(this.prefix))
+        .map((key) => key.slice(this.prefix.length));
+      this.knownKeys.clear();
+      for (const key of currentKeys) this.knownKeys.add(key);
+    }
+    return Array.from(this.knownKeys);
+  }
+
+  size(): number {
+    return this.keys().length;
+  }
+
+  getStorageBytes(): number {
+    return this.keys().reduce((total, key) => {
+      const storageKey = this.prefix + key;
+      const value = this.adapter.getItem(storageKey);
+      return total + new TextEncoder().encode(storageKey + (value ?? '')).length;
+    }, 0);
+  }
+}

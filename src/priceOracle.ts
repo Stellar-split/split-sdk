@@ -386,6 +386,17 @@ export class ContractPriceOracle implements PriceOracle {
       fee: BASE_FEE,
       networkPassphrase: this.networkPassphrase,
     })
-   
+      .addOperation(operation)
+      .setTimeout(30)
+      .build();
 
-/* … truncated 613 chars — edit only what you need near the top … */
+    const result = await this.server.simulateTransaction(tx);
+    if (SorobanRpc.Api.isSimulationError(result)) {
+      throw new OraclePriceError(`Oracle simulation failed: ${result.error}`);
+    }
+
+    const returnValue = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
+    if (!returnValue) throw new NoReturnValueError("oracle get_price");
+    return BigInt(scValToNative(returnValue));
+  }
+}

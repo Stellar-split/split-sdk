@@ -1,49 +1,58 @@
-# Performance Tuning Guide
+# Performance Tuning
 
-This guide details optimization strategies, configuration techniques, operational tradeoffs, and empirical benchmark measurements for high-throughput, low-latency deployments using the StellarSplit SDK.
+This guide covers tuning knobs that affect SDK throughput and latency.
 
----
+## Resource Pooling
 
-## Table of Contents
+The SDK reuses expensive resources (connections, buffers, clients) through a
+pool subsystem. Pooling maximizes reuse by handing out idle resources before
+creating new ones, and by returning resources to the pool on release.
 
-1. [Overview & Architecture Considerations](#1-overview--architecture-considerations)
-2. [Technique 1: RPC Connection Pooling](#technique-1-rpc-connection-pooling)
-3. [Technique 2: RPC Request Multiplexing & Batching](#technique-2-rpc-request-multiplexing--batching)
-4. [Technique 3: Multi-Tier Caching & Optimistic Reads](#technique-3-multi-tier-caching--optimistic-reads)
-5. [Technique 4: Circuit Breaking & Adaptive Throttling](#technique-4-circuit-breaking--adaptive-throttling)
-6. [Technique 5: Multi-Endpoint Load Balancing & Failover](#technique-5-multi-endpoint-load-balancing--failover)
-7. [Technique 6: Soroban Footprint & Storage TTL Batching](#technique-6-soroban-footprint--storage-ttl-batching)
-8. [Technique 7: Real-Time Event Streaming vs. Polling](#technique-7-real-time-event-streaming-vs-polling)
-9. [Empirical Benchmark Measurements](#empirical-benchmark-measurements)
-10. [Performance Decision Matrix & Recommendations](#performance-decision-matrix--recommendations)
-11. [Profiling Guide](#profiling-guide)
-12. [Optimization Checklist](#optimization-checklist)
+### Pool lifecycle
 
----
+Each pooled resource moves through a well-defined lifecycle:
 
-## 1. Overview & Architecture Considerations
+1. **Create** — the pool calls the configured factory to build a new resource
+   when no idle resource is available and the pool is below its maximum size.
+2. **Validate** — before an idle resource is reused, the optional validator is
+   invoked. Resources that fail validation are destroyed and replaced.
+3. **Acquire / Release** — callers acquire a resource, use it, then release it
+   back to the pool. Released resources become idle and eligible for reuse.
+4. **Destroy** — resources are destroyed when they fail validation, exceed the
+   idle timeout, or when the pool is drained.
+5. **Drain / Close** — draining stops new acquisitions and destroys all idle
+   resources; closing additionally waits for in-use resources to be released.
 
-In Stellar-based decentralized invoice applications, performance bottlenecks typically arise from four distinct layers:
+### Sizing
 
-1. **Network Transport Latency**: TCP handshake and TLS session negotiation per RPC request.
-2. **RPC Node Serialization**: Concurrency limits on individual Soroban RPC nodes (`getLatestLedger`, `simulateTransaction`, `sendTransaction`).
-3. **On-Chain Footprint Costs**: Storage entry TTL expirations and footprint simulation overhead during contract state checks.
-4. **Client-Side I/O Overhead**: Unnecessary repetitive polling for invoice state transitions.
+Pool size is configurable per pool:
 
-The StellarSplit SDK includes built-in subsystems to mitigate each bottleneck. The sections below describe how to tune these features.
+| Option            | Description                                                        |
+| ----------------- | ------------------------------------------------------------------ |
+| `min`             | Minimum number of resources kept warm in the pool.                 |
+| `max`             | Maximum number of resources (idle + in-use) the pool will create.  |
+| `idleTimeout`     | How long an idle resource may sit before it is destroyed.          |
+| `acquireTimeout`  | How long an acquire call waits for a resource before failing.      |
 
----
+Guidance:
 
-## Technique 1: RPC Connection Pooling
+- Set `min` to the steady-state concurrency you expect so common requests are
+  served from warm resources without a create/validate round trip.
+- Set `max` to a value your downstream dependency can tolerate; the pool will
+  never exceed it, and acquires beyond it wait up to `acquireTimeout`.
+- Keep `idleTimeout` short enough to shed resources during quiet periods, but
+  long enough to avoid churn during bursty traffic.
+- Tune `acquireTimeout` so callers fail fast instead of queueing indefinitely
+  when the pool is saturated.
 
-### Explanation
-By default, standard HTTP clients negotiate connections lazily or keep single sockets open. Under high concurrency (e.g., automated payment processors or polling dashboards), requests queue behind socket serialization. 
+### Tracking
 
-The SDK provides an integrated connection pool (`ConnectionPool`) that maintains a warm pool of keep-alive sockets for Soroban RPC calls.
+Pools expose counters for observability: total created, currently idle,
+currently in-use, waiting acquirers, and destroyed. Use these to confirm reuse
+is high (few creates relative to acquires) and to spot saturation (growing
+waiting count) before it becomes a latency problem.
 
-### Code Example
-```typescript
-import { StellarSplitClient } from "@stellar-split/sdk";
+### Tuning checklist
 
 const client = new StellarSplitClient({
   rpcUrl: "https://soroban-rpc.mainnet.stellar.org",
@@ -181,133 +190,6 @@ const client = new StellarSplitClient({
 ## Technique 5: Multi-Endpoint Load Balancing & Failover
 
 ### Explanation
-Single-node deployments present a single point of failure. `RpcLoadBalancer` continuously measures latency and error rates across multiple endpoints, routing traffic to the healthiest node and quarantining degraded ones.
+Single-node
 
-### Code Example
-```typescript
-const client = new StellarSplitClient({
-  rpcUrl: "https://primary-rpc.example.com",
-  rpcEndpoints: [
-    "https://primary-rpc.example.com",
-    "https://secondary-rpc.example.com",
-    "https://fallback-rpc.example.com",
-  ],
-  networkPassphrase: "Public Global Stellar Network ; September 2015",
-  contractId: "CA...",
-});
-```
-
-### Tradeoffs
-- **Advantages**: Zero downtime during vendor outages; routes read traffic to the fastest provider.
-- **Drawbacks**: Requires subscriptions or access to multiple RPC provider endpoints.
-
-### Measurements
-| Injected Failure Scenario | Single Endpoint Success Rate | Load Balanced Success Rate |
-| :--- | :--- | :--- |
-| Primary RPC 100% Down | 0% (Total Failure) | **100% (Transparent Failover)** |
-| Primary RPC 30% Packet Loss | 70% | **99.4% (Adaptive rerouting)** |
-
----
-
-## Technique 6: Soroban Footprint & Storage TTL Batching
-
-### Explanation
-Soroban contract instances and storage entries have Time-To-Live (TTL) values measured in ledgers. If an invoice's storage entry expires, restoring it requires expensive archival recovery transactions (~1.5 XLM per entry).
-
-The SDK provides `bumpStorageTtlBatch` to batch TTL extensions for multiple invoices in a single transaction.
-
-### Code Example
-```typescript
-const invoiceIds = ["inv-001", "inv-002", "inv-003", "inv-004"];
-
-// Extend storage TTL by 500,000 ledgers (~30 days) in a single batch transaction
-const result = await client.bumpStorageTtlBatch(invoiceIds, 500_000);
-console.log(`Extended TTL across ${invoiceIds.length} invoices. Tx: ${result.txHash}`);
-```
-
-### Tradeoffs
-- **Advantages**: 60%+ reduction in transaction fee costs compared to individual TTL bumps; prevents catastrophic storage expiration.
-- **Drawbacks**: Consumes minor fee resources upfront. Best scheduled as a recurring background cron job.
-
-### Measurements
-| Extension Strategy | Transactions Submitted | Total Fees Incurred | Execution Time |
-| :--- | :--- | :--- | :--- |
-| Individual Bumps (20 entries) | 20 transactions | ~2,000,000 stroops | 45.2 s |
-| Batch Bump (`bumpStorageTtlBatch`) | 1 transaction | ~760,000 stroops | 2.8 s |
-| Resource Savings | **95% fewer txs** | **62% lower fees** | **93.8% faster** |
-
----
-
-## Technique 7: Real-Time Event Streaming vs. Polling
-
-### Explanation
-Polling Horizon or Soroban RPC endpoints every few seconds creates unnecessary server load and introduces notification lag for end users.
-
-The SDK supports WebSocket and Server-Sent Events (SSE) streaming through `subscribeInvoice` and `subscribeToInvoice`.
-
-### Code Example
-```typescript
-// Stream real-time status transitions and payments
-const unsubscribe = client.subscribeInvoice("inv-123", (event) => {
-  console.log(`Event ${event.type} detected on invoice ${event.invoiceId}`);
-});
-
-// Clean up when leaving page
-// unsubscribe();
-```
-
-### Tradeoffs
-- **Advantages**: Immediate notification (sub-100ms lag); zero continuous RPC polling load.
-- **Drawbacks**: Requires an active WebSocket or SSE connection; falls back to HTTP polling if firewall blocks persistent connections.
-
-### Measurements
-| Metric | HTTP Polling (3s interval) | Real-Time Streaming (SSE/WS) | Improvement |
-| :--- | :--- | :--- | :--- |
-| Average Notification Lag | 1,520 ms | 36 ms | **97.6% faster** |
-| RPC Calls per Client / Hour | 1,200 requests | 1 initial connect | **99.9% fewer calls** |
-
----
-
-## Performance Decision Matrix & Recommendations
-
-| Workload Profile | Recommended Configuration | Primary Benefit |
-| :--- | :--- | :--- |
-| **High-Volume Payment Gateway** | `rpcPoolSize: 12`, `circuitBreaker: enabled`, `rpcEndpoints: [multi]` | 99.99% uptime, zero socket starvation |
-| **User Dashboard / Explorer** | `cache: { ttlMs: 30000 }`, `batching: true`, `subscribeInvoice` | Instant UI response, minimal RPC bills |
-| **Batch Settlement Bot** | `bumpStorageTtlBatch`, `verifyBatchPay`, `batchPay` | 60%+ gas savings, verified atomic payments |
-| **Resource-Constrained Edge / CLI** | `SplitClient` (lazy init), single connection | Instant boot time (< 5ms), zero idle memory |
-
----
-
-## Profiling Guide
-
-Measure before tuning. Change one setting at a time and compare against a baseline.
-
-1. **Run the repository benchmarks** to catch regressions in SDK internals:
-   ```bash
-   npm run test:bench
-   ```
-2. **Compare against the load-test baselines** in `load-tests/baseline.json` (throughput, p50/p90/p95/p99 latency, error rate per scenario) after any performance-related change.
-3. **Profile a Node.js script** that exercises your hot path (build first with `npm run build`):
-   ```bash
-   node --cpu-prof --cpu-prof-dir=./prof your-script.js   # open the .cpuprofile in Chrome DevTools
-   node --inspect-brk your-script.js                      # heap snapshots / live debugging
-   ```
-4. **Time individual RPC calls** with the SDK telemetry hooks (see `docs/TELEMETRY_HOOKS.md`) instead of ad-hoc timers, so latency is attributed per method.
-5. **Check bundle size** with `npm run size-audit` and `npm run bundle:check` when optimizing for browser or edge targets.
-
-Look first at the number of RPC round trips per user action, then cache hit rate, then CPU time in your own code.
-
----
-
-## Optimization Checklist
-
-- [ ] Baseline captured (latency percentiles, throughput, RPC calls per operation)
-- [ ] Connection pooling enabled for high-concurrency workloads (`rpcPoolSize`)
-- [ ] Read-heavy paths use caching with a TTL suited to how fast the data changes
-- [ ] Independent reads are batched or issued concurrently rather than sequentially
-- [ ] Circuit breaker configured so a failing node does not stall all requests
-- [ ] Multiple RPC endpoints configured for failover where uptime matters
-- [ ] Storage TTL bumps batched instead of issued per invoice
-- [ ] Event subscriptions used instead of tight polling loops
-- [ ] Changes re-measured against the baseline and `npm run test:bench` shows no regression
+/* … truncated 6137 chars — edit only what you need near the top … */
