@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { Keypair, StrKey } from "@stellar/stellar-sdk";
-import { RateLimiter, RateLimitStore } from "../src/rateLimiter.js";
+import { RateLimiter, RateLimitExceededError, RateLimitStore } from "../src/rateLimiter.js";
 import type { RateLimiterConfig } from "../src/rateLimiter.js";
 import { StellarSplitClient } from "../src/client.js";
 
@@ -228,4 +228,75 @@ describe("StellarSplitClient rateLimit configuration", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Backoff and tracking (#1349)
+// ---------------------------------------------------------------------------
 
+describe("RateLimiter — backoff and tracking", () => {
+  it("tracks allowed and denied decisions by scope", () => {
+    vi.useFakeTimers();
+    try {
+      const limiter = new RateLimiter({ maxRequestsPerSecond: 3, perKeyLimit: 1 });
+      limiter.tryAcquire("alice");
+      limiter.tryAcquire("alice");
+      limiter.tryAcquire("bob");
+      limiter.tryAcquire();
+      limiter.tryAcquire();
+      limiter.check();
+
+      expect(limiter.getStats()).toEqual({
+        allowed: 3,
+        denied: 2,
+        deniedByScope: { global: 1, method: 0, user: 0, key: 1 },
+        backoffRetries: 0,
+      });
+
+      limiter.resetStats();
+      expect(limiter.getStats().allowed).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("executeWithBackoff waits for capacity before running the function", async () => {
+    vi.useFakeTimers();
+    try {
+      const limiter = new RateLimiter({ maxRequestsPerSecond: 1, backoff: { baseDelayMs: 100 } });
+      const fn = vi.fn(() => "done");
+
+      await expect(limiter.executeWithBackoff("pay", fn)).resolves.toBe("done");
+
+      const pending = limiter.executeWithBackoff("pay", fn);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(fn).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(pending).resolves.toBe("done");
+      expect(fn).toHaveBeenCalledTimes(2);
+      expect(limiter.getStats().backoffRetries).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("executeWithBackoff gives up after maxRetries", async () => {
+    vi.useFakeTimers();
+    try {
+      const limiter = new RateLimiter({ maxRequestsPerSecond: 1, backoff: { maxRetries: 0 } });
+      await limiter.executeWithBackoff("pay", () => undefined);
+      const fn = vi.fn();
+
+      await expect(limiter.executeWithBackoff("pay", fn)).rejects.toBeInstanceOf(RateLimitExceededError);
+      expect(fn).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects invalid backoff configuration", () => {
+    expect(() => new RateLimiter({ maxRequestsPerSecond: 1, backoff: { baseDelayMs: -1 } })).toThrow(RangeError);
+    expect(() => new RateLimiter({ maxRequestsPerSecond: 1, backoff: { maxRetries: Number.NaN } })).toThrow(
+      RangeError,
+    );
+  });
+});
