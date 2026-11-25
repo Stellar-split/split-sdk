@@ -11,7 +11,8 @@ This guide provides step-by-step tutorials for integrating with the StellarSplit
 5. [Multi-Signature Wallets](#multi-signature-wallets)
 6. [Error Handling](#error-handling)
 7. [Performance Profiling](#performance-profiling)
-8. [Production Checklist](#production-checklist)
+8. [Lazy Evaluation](#lazy-evaluation)
+9. [Production Checklist](#production-checklist)
 
 ---
 
@@ -308,68 +309,95 @@ async function benchmark(label: string, fn: () => Promise<unknown>, iterations =
 }
 
 await benchmark("getInvoice", () => client.getInvoice({ invoiceId }));
-await benchmark("createInvoice", () =>
-  client.createInvoice({
-    creator: publicKey,
-    recipients: [{ address: "GABC...RECIPIENT1", amount: parseAmount("100") }],
-    token: "USDC_CONTRACT_ADDRESS",
-    deadline: deadlineFromDays(7),
-  })
-);
 ```
-
-Benchmarking tips:
-
-- Always run a warm-up iteration before recording samples.
-- Report **p95** alongside the average — averages hide slow outliers.
-- Keep the network and RPC endpoint constant across runs.
-- Run benchmarks in CI on a fixed runner to detect regressions over time.
 
 ### Optimization Tips
 
-- **Reuse the client.** Create one `StellarSplitClient` per process and share it; constructing a client per request adds overhead.
-- **Batch reads.** Fetch multiple invoices in parallel with `Promise.all` instead of sequentially.
-- **Cache immutable data.** Contract metadata and token decimals rarely change — cache them.
-- **Avoid redundant RPC calls.** Deduplicate identical in-flight requests so concurrent callers share one network round-trip.
-- **Build transactions once.** Reuse prepared transaction envelopes when retrying rather than rebuilding from scratch.
-- **Tune retries.** Use bounded exponential backoff; unbounded retries amplify load during RPC incidents.
-- **Profile before optimizing.** Measure first, then target the slowest call — premature optimization adds complexity without benefit.
+- **Batch reads** — fetch multiple invoices in one RPC round-trip where the SDK supports it.
+- **Cache immutable data** — invoice metadata that cannot change (creator, token) can be cached client-side.
+- **Reuse the client** — construct `StellarSplitClient` once and share it; connection setup is expensive.
+- **Defer expensive work** — use [lazy evaluation](#lazy-evaluation) to avoid computing values you never read.
+- **Avoid redundant requests** — deduplicate concurrent identical calls (see below).
 
-### Performance Checklist
+---
 
-Before shipping a performance-sensitive integration:
+## Lazy Evaluation
 
-- [ ] Profiled the slowest SDK calls with `performance.now()` or `perf_hooks`
-- [ ] Captured a CPU profile for long-running services (`--cpu-prof`)
-- [ ] Benchmarked critical paths and recorded p95 latencies
-- [ ] Reused a single SDK client instance across requests
-- [ ] Parallelized independent reads with `Promise.all`
-- [ ] Cached immutable contract/token metadata
-- [ ] Deduplicated identical concurrent RPC requests
-- [ ] Configured bounded retry/backoff for RPC failures
-- [ ] Added a CI benchmark to catch performance regressions
-- [ ] Verified debug logging is disabled in production
+The SDK ships a small lazy-value primitive for deferring expensive computation until a result is actually needed. A lazy value wraps a thunk (a zero-argument function) and only runs it when you call `.force()`. The result is memoized, so repeated `.force()` calls return the cached value without recomputing.
+
+### Creating a lazy value
+
+```typescript
+import { lazy } from "@stellar-split/sdk";
+
+// Nothing runs yet — the thunk is deferred.
+const total = lazy(() => {
+  console.log("computing total");
+  return recipients.reduce((sum, r) => sum + r.amount, 0n);
+});
+
+// Computation happens here, on first force.
+const value = total.force(); // logs "computing total"
+
+// Subsequent forces return the cached result — no recomputation.
+const again = total.force(); // no log
+console.log(value === again); // true
+```
+
+### Composition
+
+Lazy values compose with `map` (transform the result) and `flatMap` (chain into another lazy value). Composition stays deferred: nothing is evaluated until the final `.force()`.
+
+```typescript
+import { lazy } from "@stellar-split/sdk";
+
+const invoice = lazy(() => client.getInvoice({ invoiceId }));
+
+// map: derive a value from the (eventually) computed invoice.
+const remaining = invoice.map((inv) => inv.total - inv.paid);
+
+// flatMap: chain into another lazy computation.
+const summary = invoice.flatMap((inv) =>
+  lazy(() => `${inv.id}: ${inv.paid}/${inv.total}`)
+);
+
+// Nothing above has run yet. Force once to evaluate the whole chain.
+console.log(summary.force());
+```
+
+### Tracking lazy operations
+
+Each lazy value records whether it has been evaluated, so you can inspect and debug deferred work:
+
+```typescript
+const deferred = lazy(() => expensiveComputation());
+
+deferred.isEvaluated(); // false — not yet forced
+deferred.force();
+deferred.isEvaluated(); // true — result is cached
+```
+
+### When to use lazy values
+
+- Deferring expensive pure computations (aggregations, formatting) until a value is read.
+- Building pipelines of derived values that may never be consumed.
+- Avoiding duplicate work by relying on memoization across repeated reads.
+
+Lazy values are for **synchronous, pure** computations. For asynchronous work such as RPC calls, wrap the promise in a lazy value and `await` the forced result:
+
+```typescript
+const invoiceLazy = lazy(() => client.getInvoice({ invoiceId }));
+const invoice = await invoiceLazy.force();
+```
 
 ---
 
 ## Production Checklist
 
-Before deploying to production:
-
-- [ ] Use mainnet RPC URL instead of testnet
-- [ ] Verify contract ID is correct for mainnet
-- [ ] Set `WEBHOOK_SECRET` environment variable
-- [ ] Use HTTPS for webhook endpoints
-- [ ] Implement proper error handling and retry logic
-- [ ] Monitor webhook delivery failures
-- [ ] Test with small amounts before large transactions
-- [ ] Set up rate limiting for your webhook endpoint
-- [ ] Audit multi-sig signer configurations
-- [ ] Implement invoice expiration cleanup
-
----
-
-## Support
-
-- [GitHub Issues](https://github.com/Stellar-split/split-sdk/issues)
-- [Discord](https://github.com/Stellar-split/split-sdk)
+- [ ] Use mainnet RPC URL and correct network passphrase
+- [ ] Store webhook secrets in environment variables, never in code
+- [ ] Handle all documented error codes
+- [ ] Profile critical paths before launch (see [Performance Profiling](#performance-profiling))
+- [ ] Defer expensive work with [lazy evaluation](#lazy-evaluation) where appropriate
+- [ ] Monitor RPC latency and error rates in production
+- [ ] Test multi-sig flows end-to-end on testnet first
