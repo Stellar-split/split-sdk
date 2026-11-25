@@ -10,7 +10,8 @@ This guide provides step-by-step tutorials for integrating with the StellarSplit
 4. [Webhook Integration](#webhook-integration)
 5. [Multi-Signature Wallets](#multi-signature-wallets)
 6. [Error Handling](#error-handling)
-7. [Production Checklist](#production-checklist)
+7. [Performance Profiling](#performance-profiling)
+8. [Production Checklist](#production-checklist)
 
 ---
 
@@ -209,6 +210,148 @@ try {
 
 ---
 
+## Performance Profiling
+
+This section explains how to measure, benchmark, and optimize the performance of your StellarSplit SDK integration. Profiling helps you find slow RPC calls, redundant network requests, and expensive transaction-building work before they reach production.
+
+### Profiling Tools
+
+| Tool | Purpose | When to use |
+|------|---------|-------------|
+| `performance.now()` | High-resolution timing of individual SDK calls | Quick, dependency-free measurements |
+| Node.js `perf_hooks` | Programmatic timing and histograms | Server-side scripts and CI benchmarks |
+| Node.js `--cpu-prof` | CPU profile of a running process | Finding hot functions in long-running services |
+| Chrome DevTools (Performance tab) | Flame charts and network waterfall | Browser-based wallet flows |
+| `console.time` / `console.timeEnd` | Simple labeled timers | Ad-hoc debugging |
+| `@stellar-split/sdk` debug logging | SDK-level request/response tracing | Diagnosing RPC latency |
+
+Enable SDK debug logging to trace RPC calls:
+
+```typescript
+const client = new StellarSplitClient({
+  rpcUrl: "https://soroban-testnet.stellar.org",
+  networkPassphrase: "Test SDF Network ; September 2015",
+  contractId: "YOUR_DEPLOYED_CONTRACT_ID",
+  debug: true, // logs RPC requests, retries, and timings
+});
+```
+
+### Profiling Examples
+
+#### Timing a single SDK call
+
+```typescript
+import { performance } from "node:perf_hooks";
+
+const start = performance.now();
+const invoice = await client.getInvoice({ invoiceId });
+const elapsed = performance.now() - start;
+
+console.log(`getInvoice took ${elapsed.toFixed(2)}ms`);
+```
+
+#### Wrapping the client with a timing proxy
+
+```typescript
+function withTiming<T extends object>(target: T): T {
+  return new Proxy(target, {
+    get(obj, prop, receiver) {
+      const value = Reflect.get(obj, prop, receiver);
+      if (typeof value !== "function") return value;
+      return async (...args: unknown[]) => {
+        const start = performance.now();
+        try {
+          return await value.apply(obj, args);
+        } finally {
+          console.log(`${String(prop)} took ${(performance.now() - start).toFixed(2)}ms`);
+        }
+      };
+    },
+  });
+}
+
+const profiledClient = withTiming(client);
+await profiledClient.pay({ payer, invoiceId, amount: parseAmount("25") });
+```
+
+#### Capturing a CPU profile
+
+```bash
+node --cpu-prof --cpu-prof-dir=./profiles ./scripts/benchmark.js
+```
+
+Open the generated `.cpuprofile` in Chrome DevTools (Performance → Load profile) to inspect the flame chart.
+
+### Benchmarking Guide
+
+Benchmarks should be repeatable and run against a stable environment (testnet, warm connection).
+
+```typescript
+import { performance } from "node:perf_hooks";
+
+async function benchmark(label: string, fn: () => Promise<unknown>, iterations = 20) {
+  // Warm-up run to avoid cold-start skew
+  await fn();
+
+  const samples: number[] = [];
+  for (let i = 0; i < iterations; i++) {
+    const start = performance.now();
+    await fn();
+    samples.push(performance.now() - start);
+  }
+
+  samples.sort((a, b) => a - b);
+  const avg = samples.reduce((s, v) => s + v, 0) / samples.length;
+  const p95 = samples[Math.floor(samples.length * 0.95)];
+
+  console.log(`${label}: avg=${avg.toFixed(2)}ms p95=${p95.toFixed(2)}ms`);
+}
+
+await benchmark("getInvoice", () => client.getInvoice({ invoiceId }));
+await benchmark("createInvoice", () =>
+  client.createInvoice({
+    creator: publicKey,
+    recipients: [{ address: "GABC...RECIPIENT1", amount: parseAmount("100") }],
+    token: "USDC_CONTRACT_ADDRESS",
+    deadline: deadlineFromDays(7),
+  })
+);
+```
+
+Benchmarking tips:
+
+- Always run a warm-up iteration before recording samples.
+- Report **p95** alongside the average — averages hide slow outliers.
+- Keep the network and RPC endpoint constant across runs.
+- Run benchmarks in CI on a fixed runner to detect regressions over time.
+
+### Optimization Tips
+
+- **Reuse the client.** Create one `StellarSplitClient` per process and share it; constructing a client per request adds overhead.
+- **Batch reads.** Fetch multiple invoices in parallel with `Promise.all` instead of sequentially.
+- **Cache immutable data.** Contract metadata and token decimals rarely change — cache them.
+- **Avoid redundant RPC calls.** Deduplicate identical in-flight requests so concurrent callers share one network round-trip.
+- **Build transactions once.** Reuse prepared transaction envelopes when retrying rather than rebuilding from scratch.
+- **Tune retries.** Use bounded exponential backoff; unbounded retries amplify load during RPC incidents.
+- **Profile before optimizing.** Measure first, then target the slowest call — premature optimization adds complexity without benefit.
+
+### Performance Checklist
+
+Before shipping a performance-sensitive integration:
+
+- [ ] Profiled the slowest SDK calls with `performance.now()` or `perf_hooks`
+- [ ] Captured a CPU profile for long-running services (`--cpu-prof`)
+- [ ] Benchmarked critical paths and recorded p95 latencies
+- [ ] Reused a single SDK client instance across requests
+- [ ] Parallelized independent reads with `Promise.all`
+- [ ] Cached immutable contract/token metadata
+- [ ] Deduplicated identical concurrent RPC requests
+- [ ] Configured bounded retry/backoff for RPC failures
+- [ ] Added a CI benchmark to catch performance regressions
+- [ ] Verified debug logging is disabled in production
+
+---
+
 ## Production Checklist
 
 Before deploying to production:
@@ -229,4 +372,4 @@ Before deploying to production:
 ## Support
 
 - [GitHub Issues](https://github.com/Stellar-split/split-sdk/issues)
-- [Discord](https://discord.gg/stellarsplit)
+- [Discord](https://github.com/Stellar-split/split-sdk)

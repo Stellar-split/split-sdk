@@ -3,6 +3,14 @@
  *
  * Demonstrates ProfilerSession against a mock StellarSplitClient.
  *
+ * This file doubles as the runnable companion to the SDK performance
+ * profiling guide (docs/performance-profiling.md). It shows how to:
+ *   - wrap SDK calls in a ProfilerSession
+ *   - read the legacy per-session summary
+ *   - build a speedscope flame-graph report
+ *   - export the report for offline analysis
+ *   - run a simple micro-benchmark of a hot path
+ *
  * Run with:
  *   npx vite-node examples/profile-session.ts
  * or after building:
@@ -82,6 +90,48 @@ StellarSplitClient.prototype.getPayments = async (
 };
 
 // ---------------------------------------------------------------------------
+// Micro-benchmark helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Run `fn` `iterations` times and return basic latency statistics.
+ *
+ * This is intentionally dependency-free so the example can be copied into
+ * any project. For statistically rigorous benchmarks prefer a dedicated
+ * harness (see docs/performance-profiling.md → Benchmarking).
+ */
+async function benchmark(
+  label: string,
+  iterations: number,
+  fn: () => Promise<unknown>
+): Promise<void> {
+  // Warm-up pass so JIT compilation does not skew the first samples.
+  for (let i = 0; i < Math.min(iterations, 5); i++) {
+    await fn();
+  }
+
+  const samples: number[] = [];
+  for (let i = 0; i < iterations; i++) {
+    const start = performance.now();
+    await fn();
+    samples.push(performance.now() - start);
+  }
+
+  samples.sort((a, b) => a - b);
+  const sum = samples.reduce((acc, v) => acc + v, 0);
+  const mean = sum / samples.length;
+  const p50 = samples[Math.floor(samples.length * 0.5)]!;
+  const p95 = samples[Math.floor(samples.length * 0.95)]!;
+  const max = samples[samples.length - 1]!;
+
+  console.log(
+    `  ${label.padEnd(24)} n=${String(iterations).padStart(4)}  ` +
+      `mean=${mean.toFixed(2)}ms  p50=${p50.toFixed(2)}ms  ` +
+      `p95=${p95.toFixed(2)}ms  max=${max.toFixed(2)}ms`
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Run the profiling session
 // ---------------------------------------------------------------------------
 
@@ -157,6 +207,12 @@ async function main(): Promise<void> {
   profiler.exportJSON(outputPath);
   console.log(`Speedscope JSON written to: ${outputPath}`);
   console.log("Open it at https://www.speedscope.app/ for a flame graph!\n");
+
+  // 8. Micro-benchmark a hot path (see docs/performance-profiling.md)
+  console.log("── Micro-benchmark ───────────────────────────────────────");
+  await benchmark("getInvoice", 50, () => client.getInvoice(invoiceId));
+  await benchmark("getPayments", 50, () => client.getPayments(invoiceId));
+  console.log();
 }
 
 main().catch((err: unknown) => {
