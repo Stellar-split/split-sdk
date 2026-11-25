@@ -289,22 +289,99 @@ TX_HASH=$(stellarsplit pay --payer GABC... --invoice 42 --amount 25 --json | jq 
 
 ## Production Checklist
 
-Before deploying to production:
+  console.log(`${label}: avg=${avg.toFixed(2)}ms p95=${p95.toFixed(2)}ms`);
+}
 
-- [ ] Use mainnet RPC URL instead of testnet
-- [ ] Verify contract ID is correct for mainnet
-- [ ] Set `WEBHOOK_SECRET` environment variable
-- [ ] Use HTTPS for webhook endpoints
-- [ ] Implement proper error handling and retry logic
-- [ ] Monitor webhook delivery failures
-- [ ] Test with small amounts before large transactions
-- [ ] Set up rate limiting for your webhook endpoint
-- [ ] Audit multi-sig signer configurations
-- [ ] Implement invoice expiration cleanup
+await benchmark("getInvoice", () => client.getInvoice({ invoiceId }));
+```
+
+### Optimization Tips
+
+- **Batch reads** — fetch multiple invoices in one RPC round-trip where the SDK supports it.
+- **Cache immutable data** — invoice metadata that cannot change (creator, token) can be cached client-side.
+- **Reuse the client** — construct `StellarSplitClient` once and share it; connection setup is expensive.
+- **Defer expensive work** — use [lazy evaluation](#lazy-evaluation) to avoid computing values you never read.
+- **Avoid redundant requests** — deduplicate concurrent identical calls (see below).
 
 ---
 
-## Support
+## Lazy Evaluation
 
-- [GitHub Issues](https://github.com/Stellar-split/split-sdk/issues)
-- [Discord](https://discord.gg/stellarsplit)
+The SDK ships a small lazy-value primitive for deferring expensive computation until a result is actually needed. A lazy value wraps a thunk (a zero-argument function) and only runs it when you call `.force()`. The result is memoized, so repeated `.force()` calls return the cached value without recomputing.
+
+### Creating a lazy value
+
+```typescript
+import { lazy } from "@stellar-split/sdk";
+
+// Nothing runs yet — the thunk is deferred.
+const total = lazy(() => {
+  console.log("computing total");
+  return recipients.reduce((sum, r) => sum + r.amount, 0n);
+});
+
+// Computation happens here, on first force.
+const value = total.force(); // logs "computing total"
+
+// Subsequent forces return the cached result — no recomputation.
+const again = total.force(); // no log
+console.log(value === again); // true
+```
+
+### Composition
+
+Lazy values compose with `map` (transform the result) and `flatMap` (chain into another lazy value). Composition stays deferred: nothing is evaluated until the final `.force()`.
+
+```typescript
+import { lazy } from "@stellar-split/sdk";
+
+const invoice = lazy(() => client.getInvoice({ invoiceId }));
+
+// map: derive a value from the (eventually) computed invoice.
+const remaining = invoice.map((inv) => inv.total - inv.paid);
+
+// flatMap: chain into another lazy computation.
+const summary = invoice.flatMap((inv) =>
+  lazy(() => `${inv.id}: ${inv.paid}/${inv.total}`)
+);
+
+// Nothing above has run yet. Force once to evaluate the whole chain.
+console.log(summary.force());
+```
+
+### Tracking lazy operations
+
+Each lazy value records whether it has been evaluated, so you can inspect and debug deferred work:
+
+```typescript
+const deferred = lazy(() => expensiveComputation());
+
+deferred.isEvaluated(); // false — not yet forced
+deferred.force();
+deferred.isEvaluated(); // true — result is cached
+```
+
+### When to use lazy values
+
+- Deferring expensive pure computations (aggregations, formatting) until a value is read.
+- Building pipelines of derived values that may never be consumed.
+- Avoiding duplicate work by relying on memoization across repeated reads.
+
+Lazy values are for **synchronous, pure** computations. For asynchronous work such as RPC calls, wrap the promise in a lazy value and `await` the forced result:
+
+```typescript
+const invoiceLazy = lazy(() => client.getInvoice({ invoiceId }));
+const invoice = await invoiceLazy.force();
+```
+
+---
+
+## Production Checklist
+
+- [ ] Use mainnet RPC URL and correct network passphrase
+- [ ] Store webhook secrets in environment variables, never in code
+- [ ] Handle all documented error codes
+- [ ] Profile critical paths before launch (see [Performance Profiling](#performance-profiling))
+- [ ] Defer expensive work with [lazy evaluation](#lazy-evaluation) where appropriate
+- [ ] Monitor RPC latency and error rates in production
+- [ ] Test multi-sig flows end-to-end on testnet first

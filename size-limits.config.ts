@@ -1,40 +1,42 @@
 /**
- * Bundle size limits configuration for tree-shaking audit.
- * 
- * Each entry defines the maximum allowed gzipped size in bytes for a named export.
- * Budgets are derived from current baseline measurements.
+ * Bundle size budgets for the SDK.
+ *
+ * Each entry maps a build artifact to its maximum allowed size in bytes.
+ * The `baseline` value records the size measured before optimization so
+ * regressions and improvements can be tracked over time.
  */
+export interface SizeLimit {
+  /** Maximum allowed size in bytes. */
+  limit: number;
+  /** Size in bytes recorded before bundle optimization. */
+  baseline: number;
+}
 
-export const sizeLimits = {
-  /** Main client class - core SDK functionality */
-  StellarSplitClient: {
-    maxBytes: 50000, // 50KB gzipped
-  },
-  
-  /** Utility function for formatting amounts */
-  formatAmount: {
-    maxBytes: 1000, // 1KB gzipped
-  },
-  
-  /** Utility function for parsing amounts */
-  parseAmount: {
-    maxBytes: 1000, // 1KB gzipped
-  },
-  
-  /** Telemetry collection utilities */
-  TelemetryCollector: {
-    maxBytes: 5000, // 5KB gzipped
-  },
-  
-  /** Retry policy implementation */
-  RetryPolicy: {
-    maxBytes: 3000, // 3KB gzipped
-  },
-  
-  /** Health check utilities */
-  checkRPCHealth: {
-    maxBytes: 2000, // 2KB gzipped
-  },
+export const sizeLimits: Record<string, SizeLimit> = {
+  'dist/index.js': { limit: 120 * 1024, baseline: 148 * 1024 },
+  'dist/index.min.js': { limit: 48 * 1024, baseline: 61 * 1024 },
+  'dist/index.min.js.gz': { limit: 16 * 1024, baseline: 21 * 1024 },
 };
 
-export default sizeLimits;
+/**
+ * Returns the percentage reduction achieved against the recorded baseline.
+ * Positive values indicate the artifact is smaller than the baseline.
+ */
+export function reductionPercent(artifact: string, currentSize: number): number {
+  const entry = sizeLimits[artifact];
+  if (!entry || entry.baseline === 0) {
+    return 0;
+  }
+  return ((entry.baseline - currentSize) / entry.baseline) * 100;
+}
+
+/**
+ * Returns true when the artifact is within its configured size limit.
+ */
+export function withinLimit(artifact: string, currentSize: number): boolean {
+  const entry = sizeLimits[artifact];
+  if (!entry) {
+    return true;
+  }
+  return currentSize <= entry.limit;
+}

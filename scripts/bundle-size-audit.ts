@@ -39,6 +39,11 @@ interface BenchmarkReport {
   iterations: number;
 }
 
+interface SizeBaseline {
+  totalBytes: number;
+  recordedAt: string;
+}
+
 /**
  * Emits lifecycle events for the SDK performance benchmark suite.
  * Events: "start", "iteration", "sample", "complete", "error".
@@ -127,6 +132,39 @@ function loadSizeLimits(): SizeLimits {
 }
 
 /**
+ * Path to the persisted size baseline used to track bundle size over time.
+ */
+function baselinePath(): string {
+  return path.resolve(process.cwd(), "bundle-size-baseline.json");
+}
+
+/**
+ * Load the previously recorded baseline, if any.
+ */
+function loadBaseline(): SizeBaseline | null {
+  const file = baselinePath();
+  if (!fs.existsSync(file)) {
+    return null;
+  }
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf-8")) as SizeBaseline;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persist the current size as the new baseline for future runs.
+ */
+function saveBaseline(totalBytes: number): void {
+  const baseline: SizeBaseline = {
+    totalBytes,
+    recordedAt: new Date().toISOString(),
+  };
+  fs.writeFileSync(baselinePath(), JSON.stringify(baseline, null, 2) + "\n", "utf-8");
+}
+
+/**
  * Measure the gzipped size of the entire dist bundle.
  * This is a simplified check since we can't easily split individual exports without rollup.
  */
@@ -173,6 +211,18 @@ async function runAudit(): Promise<void> {
     const totalBytes = measureDistSize();
     console.log(`${totalBytes} bytes gzipped\n`);
 
+    // Track size against the recorded baseline
+    const baseline = loadBaseline();
+    if (baseline) {
+      const delta = totalBytes - baseline.totalBytes;
+      const sign = delta > 0 ? "+" : "";
+      console.log(
+        `Baseline: ${baseline.totalBytes}B (${baseline.recordedAt}) → Δ ${sign}${delta}B\n`
+      );
+    } else {
+      console.log("No baseline recorded yet — this run will establish one.\n");
+    }
+
     // Check each export budget (simplified - we assume proportional distribution)
     for (const exportName of exportNames) {
       const budget = sizeLimits[exportName]!.maxBytes;
@@ -218,7 +268,10 @@ async function runAudit(): Promise<void> {
       console.log("Note: This is an estimated check. Consider adding rollup for precise per-export measurement.");
       process.exit(1);
     } else {
+      // Record the current size as the new baseline for future tracking
+      saveBaseline(totalBytes);
       console.log("\n✅ Bundle size audit PASSED - all exports estimated within budget");
+      console.log(`📌 Baseline updated to ${totalBytes}B`);
       process.exit(0);
     }
   } catch (err: any) {

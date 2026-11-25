@@ -25,6 +25,23 @@ export interface BundleSizeConfig {
    * spurious CI failures on trivial edits. Default per issue: 1 KB.
    */
   noiseFloorBytes: number;
+  /**
+   * Emit a per-module size breakdown (issue #1327) so unused/dead code and
+   * oversized assets can be identified before they ship.
+   */
+  analyze: boolean;
+  /**
+   * Compress emitted assets with gzip/brotli during the size report
+   * (issue #1327).
+   */
+  compressAssets: boolean;
+  /**
+   * Persist the measured size to a tracked baseline file so regressions are
+   * visible over time (issue #1327).
+   */
+  trackSize: boolean;
+  /** Path to the tracked size baseline used for growth comparisons. */
+  baselinePath: string;
 }
 
 export const bundleSizeConfig: BundleSizeConfig = {
@@ -32,4 +49,8 @@ export const bundleSizeConfig: BundleSizeConfig = {
   maxGzipBytes: 450_000,
   maxGrowthPercent: 5,
   noiseFloorBytes: 1_024,
+  analyze: true,
+  compressAssets: true,
+  trackSize: true,
+  baselinePath: "scripts/bundle-size-baseline.json",
 };
