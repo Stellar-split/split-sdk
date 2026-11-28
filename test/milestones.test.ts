@@ -4,6 +4,17 @@
 import { describe, it, expect, vi } from "vitest";
 import { Keypair, StrKey, nativeToScVal } from "@stellar/stellar-sdk";
 import { StellarSplitClient } from "../src/client.js";
+
+// `rpc.assembleTransaction` is a non-configurable getter on the real SDK
+// namespace, so it can't be `vi.spyOn`-ed directly; override it via a
+// partial module mock, then mutate the mocked fn per-test as needed.
+vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@stellar/stellar-sdk")>();
+  return { ...actual, rpc: { ...actual.rpc, assembleTransaction: vi.fn() } };
+});
+
+/** Valid Stellar G-address used as the fake source account in tests. */
+const FAKE_ACCOUNT_ID = Keypair.random().publicKey();
 import {
   WrongMilestoneError,
   InvoiceNotFoundError,
@@ -25,7 +36,7 @@ describe("completeMilestone (#879)", () => {
 
     vi.spyOn(client as any, "server", "get").mockReturnValue({
       getAccount: vi.fn().mockResolvedValue({
-        accountId: () => "GABC",
+        accountId: () => FAKE_ACCOUNT_ID,
         sequenceNumber: () => "1",
         incrementSequenceNumber: vi.fn(),
       }),
@@ -45,7 +56,7 @@ describe("completeMilestone (#879)", () => {
     });
 
     const { rpc: SorobanRpc } = await import("@stellar/stellar-sdk");
-    vi.spyOn(SorobanRpc, "assembleTransaction" as keyof typeof SorobanRpc).mockReturnValue({
+    (SorobanRpc.assembleTransaction as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
       build: () => ({ toXDR: () => "signed-xdr" }),
     } as any);
 
@@ -66,7 +77,7 @@ describe("completeMilestone (#879)", () => {
 
     vi.spyOn(client as any, "server", "get").mockReturnValue({
       getAccount: vi.fn().mockResolvedValue({
-        accountId: () => "GABC",
+        accountId: () => FAKE_ACCOUNT_ID,
         sequenceNumber: () => "1",
         incrementSequenceNumber: vi.fn(),
       }),
@@ -83,7 +94,7 @@ describe("completeMilestone (#879)", () => {
 
     vi.spyOn(client as any, "server", "get").mockReturnValue({
       getAccount: vi.fn().mockResolvedValue({
-        accountId: () => "GABC",
+        accountId: () => FAKE_ACCOUNT_ID,
         sequenceNumber: () => "1",
         incrementSequenceNumber: vi.fn(),
       }),
@@ -100,7 +111,7 @@ describe("completeMilestone (#879)", () => {
 
     vi.spyOn(client as any, "server", "get").mockReturnValue({
       getAccount: vi.fn().mockResolvedValue({
-        accountId: () => "GABC",
+        accountId: () => FAKE_ACCOUNT_ID,
         sequenceNumber: () => "1",
         incrementSequenceNumber: vi.fn(),
       }),
@@ -119,7 +130,7 @@ describe("completeMilestone (#879)", () => {
 
     vi.spyOn(client as any, "server", "get").mockReturnValue({
       getAccount: vi.fn().mockResolvedValue({
-        accountId: () => "GABC",
+        accountId: () => FAKE_ACCOUNT_ID,
         sequenceNumber: () => "1",
         incrementSequenceNumber: vi.fn(),
       }),
@@ -138,7 +149,7 @@ describe("completeMilestone (#879)", () => {
 
     vi.spyOn(client as any, "server", "get").mockReturnValue({
       getAccount: vi.fn().mockResolvedValue({
-        accountId: () => "GABC",
+        accountId: () => FAKE_ACCOUNT_ID,
         sequenceNumber: () => "1",
         incrementSequenceNumber: vi.fn(),
       }),
@@ -164,7 +175,7 @@ describe("getActiveMilestone (#879)", () => {
 
     vi.spyOn(client as any, "server", "get").mockReturnValue({
       getAccount: vi.fn().mockResolvedValue({
-        accountId: () => "GABC",
+        accountId: () => FAKE_ACCOUNT_ID,
         sequenceNumber: () => "1",
         incrementSequenceNumber: vi.fn(),
       }),
@@ -184,7 +195,7 @@ describe("getActiveMilestone (#879)", () => {
 
     vi.spyOn(client as any, "server", "get").mockReturnValue({
       getAccount: vi.fn().mockResolvedValue({
-        accountId: () => "GABC",
+        accountId: () => FAKE_ACCOUNT_ID,
         sequenceNumber: () => "1",
         incrementSequenceNumber: vi.fn(),
       }),
@@ -205,7 +216,7 @@ describe("getMilestones (#879)", () => {
 
     vi.spyOn(client as any, "server", "get").mockReturnValue({
       getAccount: vi.fn().mockResolvedValue({
-        accountId: () => "GABC",
+        accountId: () => FAKE_ACCOUNT_ID,
         sequenceNumber: () => "1",
         incrementSequenceNumber: vi.fn(),
       }),
@@ -225,7 +236,7 @@ describe("getMilestones (#879)", () => {
 
     vi.spyOn(client as any, "server", "get").mockReturnValue({
       getAccount: vi.fn().mockResolvedValue({
-        accountId: () => "GABC",
+        accountId: () => FAKE_ACCOUNT_ID,
         sequenceNumber: () => "1",
         incrementSequenceNumber: vi.fn(),
       }),

@@ -77,7 +77,7 @@ function classifyError(error: unknown): ErrorClass {
   const msg = error.message;
 
   // Use horizonErrorClassifier when result codes are available on the error
-  const errorObj = error as Record<string, unknown>;
+  const errorObj = error as unknown as Record<string, unknown>;
   if (errorObj.resultCodes) {
     const classification = classifyHorizonError(errorObj.resultCodes as string | string[]);
     if (classification.isRetryable) return "transient";
@@ -112,7 +112,7 @@ export class RetryEngine {
     private readonly telemetry: TelemetryCollector,
     options: RetryEngineOptions = {}
   ) {
-    const jf = options.jitterFactor ?? config.policy?.jitterFactor ?? 0.2;
+    const jf = options.jitterFactor ?? config.policy?.jitterFactor ?? 0;
     if (jf < 0 || jf > 1) {
       throw new Error(`jitterFactor must be in [0, 1], got ${jf}`);
     }
@@ -146,9 +146,9 @@ export class RetryEngine {
   private _strategyFor(errorClass: ErrorClass): RetryStrategy {
     const base = this.config[errorClass];
     return {
-      maxAttempts: this._policy.maxAttempts,
-      initialDelayMs: this._policy.baseDelayMs,
-      backoffMultiplier: this._policy.backoffMultiplier,
+      maxAttempts: base.maxAttempts,
+      initialDelayMs: base.initialDelayMs,
+      backoffMultiplier: base.backoffMultiplier,
       jitterMs: base.jitterMs,
     };
   }

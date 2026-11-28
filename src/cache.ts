@@ -483,6 +483,8 @@ interface CacheEntry<V> {
   value: V;
   /** Unix ms timestamp recorded at write time. */
   writtenAt: number;
+  /** Per-entry TTL override, in ms. Falls back to the cache's default `ttlMs` when unset. */
+  ttlMs?: number;
 }
 
 export class Cache<V> {
@@ -529,9 +531,10 @@ export class Cache<V> {
 
   /**
    * Store `value` under `key`, recording the current wall-clock time.
+   * @param ttlMs - Optional per-entry TTL override; falls back to the cache's default when omitted.
    */
-  set(key: string, value: V): void {
-    this.store.set(key, { value, writtenAt: Date.now() });
+  set(key: string, value: V, ttlMs?: number): void {
+    this.store.set(key, { value, writtenAt: Date.now(), ttlMs });
     this.emit("set", key);
   }
 
@@ -611,8 +614,9 @@ export class Cache<V> {
   // ── private helpers ──────────────────────────────────────────────────────
 
   private isExpired(entry: CacheEntry<V>): boolean {
-    if (this.ttlMs === undefined) return false;
-    return Date.now() - entry.writtenAt > this.ttlMs;
+    const ttl = entry.ttlMs ?? this.ttlMs;
+    if (ttl === undefined) return false;
+    return Date.now() - entry.writtenAt > ttl;
   }
 }
 

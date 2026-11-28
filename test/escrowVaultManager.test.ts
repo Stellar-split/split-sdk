@@ -39,12 +39,16 @@ function mockHorizonServer(overrides: {
     incrementSequenceNumber: vi.fn(),
   };
 
+  const claimableBalanceCall =
+    overrides.claimableBalance ?? vi.fn().mockResolvedValue({});
+
   return {
     loadAccount: overrides.loadAccount ?? vi.fn().mockResolvedValue(fakeAccount),
     submitTransaction: overrides.submitTransaction ??
       vi.fn().mockResolvedValue({ hash: FAKE_TX_HASH }),
-    claimableBalance: overrides.claimableBalance ??
-      vi.fn().mockReturnValue({ call: vi.fn().mockResolvedValue({}) }),
+    claimableBalances: vi.fn().mockReturnValue({
+      claimableBalance: vi.fn().mockReturnValue({ call: claimableBalanceCall }),
+    }),
     operations: overrides.operations ??
       vi.fn().mockReturnValue({
         forTransaction: vi.fn().mockReturnThis(),
@@ -153,8 +157,10 @@ describe("EscrowVaultManager", () => {
       // Balance still exists on-chain (not claimed) → expired
       const fakeServer = {
         ...mockHorizonServer(),
-        claimableBalance: vi.fn().mockReturnValue({
-          call: vi.fn().mockResolvedValue({}), // balance exists
+        claimableBalances: vi.fn().mockReturnValue({
+          claimableBalance: vi.fn().mockReturnValue({
+            call: vi.fn().mockResolvedValue({}), // balance exists
+          }),
         }),
       };
       vi.spyOn(manager as any, "_getServer").mockReturnValue(fakeServer);
@@ -276,8 +282,10 @@ describe("EscrowVaultManager", () => {
       // claimableBalance call returns success (balance still exists → expired, not claimed)
       const fakeServer = {
         ...mockHorizonServer(),
-        claimableBalance: vi.fn().mockReturnValue({
-          call: vi.fn().mockResolvedValue({}),
+        claimableBalances: vi.fn().mockReturnValue({
+          claimableBalance: vi.fn().mockReturnValue({
+            call: vi.fn().mockResolvedValue({}),
+          }),
         }),
       };
       vi.spyOn(manager as any, "_getServer").mockReturnValue(fakeServer);

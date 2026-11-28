@@ -233,7 +233,7 @@ export function object<S extends Shape>(shape: S): Validator<InferShape<S>> {
       }
 
       for (const key of keys) {
-        const result = shape[key].validate(source[key], joinPath(path, key));
+        const result = shape[key]!.validate(source[key], joinPath(path, key));
         if (result.ok) {
           output[key] = result.value;
         } else {

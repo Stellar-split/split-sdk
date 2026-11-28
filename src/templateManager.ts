@@ -163,7 +163,7 @@ export function getTemplate(id: string, version?: number): TemplateVersion | nul
 
   if (!version) {
     // Return the latest version when no version is specified.
-    return history[history.length - 1];
+    return history[history.length - 1]!;
   }
 
   // Versions are 1-indexed; array is 0-indexed.

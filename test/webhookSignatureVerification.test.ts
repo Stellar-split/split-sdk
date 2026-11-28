@@ -108,7 +108,7 @@ describe("Webhook Signature Verification (#1042)", () => {
       const rawBody = JSON.stringify({ event: "invoice.settled", id: 1 });
       const signature = hmacSha256(TEST_SECRET, rawBody);
 
-      const isValid = verifyRawWebhookSignature(TEST_SECRET, rawBody, signature);
+      const isValid = verifyRawWebhookSignature(rawBody, signature, TEST_SECRET);
       expect(isValid).toBe(true);
     });
 

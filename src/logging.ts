@@ -93,8 +93,8 @@ export class LogAggregator {
     return {
       total: this.entries.length,
       byLevel,
-      firstTimestamp: this.entries.length > 0 ? this.entries[0].timestamp : null,
-      lastTimestamp: this.entries.length > 0 ? this.entries[this.entries.length - 1].timestamp : null,
+      firstTimestamp: this.entries.length > 0 ? this.entries[0]!.timestamp : null,
+      lastTimestamp: this.entries.length > 0 ? this.entries[this.entries.length - 1]!.timestamp : null,
     };
   }
 

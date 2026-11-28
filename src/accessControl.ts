@@ -4,6 +4,66 @@
  * Manages off-chain access grants for resources like invoices.
  */
 
+// ---------------------------------------------------------------------------
+// Generic principal/action access control (used by SecureKeyStore)
+// ---------------------------------------------------------------------------
+
+/** Context describing who is requesting access, for {@link AccessControl.isAllowed}. */
+export interface AccessContext {
+  /** Identity of the caller requesting access. */
+  principal: string;
+  [key: string]: unknown;
+}
+
+/** A resource's access policy: which principals may perform which actions. */
+export interface AccessPolicy {
+  /** Principals allowed by this policy. Omit to allow any principal. */
+  principals?: string[];
+  /** Actions this policy permits (e.g. "read", "rotate", "use"). Omit to permit any action. */
+  actions?: string[];
+}
+
+/**
+ * Generic per-resource access control: tracks one {@link AccessPolicy} per
+ * resource id and checks whether a given principal/action combination is
+ * permitted. Distinct from {@link AclManager} (binary grant/revoke per
+ * address) and {@link KeyAccessPolicy} (fixed read/rotate/use operations):
+ * this one is action-agnostic and policy-driven.
+ */
+export class AccessControl {
+  private readonly policies = new Map<string, AccessPolicy>();
+
+  /** Set (or replace) the access policy for a resource id. */
+  setPolicy(id: string, policy: AccessPolicy): void {
+    this.policies.set(id, policy);
+  }
+
+  /** Get the access policy for a resource id, if one is set. */
+  getPolicy(id: string): AccessPolicy | undefined {
+    return this.policies.get(id);
+  }
+
+  /** Remove the access policy for a resource id. */
+  removePolicy(id: string): void {
+    this.policies.delete(id);
+  }
+
+  /** Check whether `context.principal` may perform `action` on resource `id`. */
+  isAllowed(action: string, id: string, context: AccessContext): boolean {
+    const policy = this.policies.get(id);
+    if (!policy) {
+      return true;
+    }
+    if (policy.actions && !policy.actions.includes(action)) {
+      return false;
+    }
+    if (policy.principals && !policy.principals.includes(context.principal)) {
+      return false;
+    }
+    return true;
+  }
+}
+
 export interface AsyncAclStore {
   grant(resourceId: string, address: string): Promise<void>;
   revoke(resourceId: string, address: string): Promise<void>;

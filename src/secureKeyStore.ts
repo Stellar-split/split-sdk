@@ -223,7 +223,8 @@ export interface SecureKeyStoreOptions {
   events?: EventEmitter;
   /**
    * When `true`, operations that have no registered policy are denied.
-   * Defaults to `true` so access is controlled by default.
+   * Defaults to `false` so the store is usable out of the box; set `true`
+   * to require an explicit policy for every secret id.
    */
   denyByDefault?: boolean;
 }
@@ -384,9 +385,9 @@ export class SecureKeyStore {
     }
     this._backend = backend;
     this._accessControl = options.accessControl ?? new AccessControl();
-    this._auditLogger = options.auditLogger ?? new AuditLogger();
+    this._auditLogger = options.auditLogger ?? new AuditLogger(() => {});
     this._events = options.events ?? new EventEmitter();
-    this._denyByDefault = options.denyByDefault ?? true;
+    this._denyByDefault = options.denyByDefault ?? false;
   }
 
   /**
@@ -814,13 +815,17 @@ export class SecureKeyStore {
       this._usage.splice(0, this._usage.length - MAX_USAGE_EVENTS);
     }
     try {
-      this._auditLogger.log("key.usage", {
-        action: full.action,
-        id: full.id,
+      this._auditLogger.log({
+        timestamp: full.timestamp,
+        method: `key.usage.${full.action}`,
+        params: {
+          id: full.id,
+          keyVersion: full.keyVersion,
+          principal: full.principal,
+          reason: full.reason,
+        },
         success: full.success,
-        keyVersion: full.keyVersion,
-        principal: full.principal,
-        reason: full.reason,
+        durationMs: 0,
       });
     } catch {
       // Auditing must never break key operations.

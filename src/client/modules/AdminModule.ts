@@ -1,6 +1,12 @@
+import type { Keypair } from "@stellar/stellar-sdk";
 import { BaseClientModule } from "./BaseModule.js";
 import type { TxResult } from "../../client.js";
-import type { TimelockAction } from "../../types.js";
+import type {
+  AdminFreezeResult,
+  AdminUnfreezeResult,
+  QueueActionParams,
+  TimelockAction,
+} from "../../types.js";
 
 /**
  * Module dedicated to Administrative operations:
@@ -22,13 +28,21 @@ export class AdminModule extends BaseClientModule {
   /**
    * Freezes an invoice with a recorded reason.
    */
-  async freezeInvoice(invoiceId: string, admin: string, reason?: string): Promise<TxResult> {
-    return this.client.adminFreezeInvoice(invoiceId, admin, reason);
+  async freezeInvoice(
+    invoiceId: string,
+    reason: string,
+    adminKeypair: Keypair
+  ): Promise<AdminFreezeResult> {
+    return this.client.adminFreezeInvoice(invoiceId, reason, adminKeypair);
   }
 
   /** Alias for `freezeInvoice`. */
-  async adminFreezeInvoice(invoiceId: string, admin: string, reason?: string): Promise<TxResult> {
-    return this.freezeInvoice(invoiceId, admin, reason);
+  async adminFreezeInvoice(
+    invoiceId: string,
+    reason: string,
+    adminKeypair: Keypair
+  ): Promise<AdminFreezeResult> {
+    return this.freezeInvoice(invoiceId, reason, adminKeypair);
   }
 
   /**
@@ -46,25 +60,19 @@ export class AdminModule extends BaseClientModule {
   /**
    * Unfreezes an invoice administratively.
    */
-  async unfreezeInvoice(invoiceId: string, admin: string): Promise<TxResult> {
-    return this.client.adminUnfreezeInvoice(invoiceId, admin);
+  async unfreezeInvoice(invoiceId: string, adminKeypair: Keypair): Promise<AdminUnfreezeResult> {
+    return this.client.adminUnfreezeInvoice(invoiceId, adminKeypair);
   }
 
   /** Alias for `unfreezeInvoice`. */
-  async adminUnfreezeInvoice(invoiceId: string, admin: string): Promise<TxResult> {
-    return this.unfreezeInvoice(invoiceId, admin);
+  async adminUnfreezeInvoice(invoiceId: string, adminKeypair: Keypair): Promise<AdminUnfreezeResult> {
+    return this.unfreezeInvoice(invoiceId, adminKeypair);
   }
 
   /**
    * Queues a timelock administrative action.
    */
-  async queueAction(params: {
-    caller: string;
-    actionType: string;
-    target: string;
-    eta: number;
-    data?: string;
-  }): Promise<TxResult> {
+  async queueAction(params: QueueActionParams): Promise<{ actionId: string; txHash: string }> {
     return this.client.queueAction(params);
   }
 

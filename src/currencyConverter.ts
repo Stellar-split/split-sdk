@@ -388,11 +388,11 @@ function toDecimalString(value: number): string {
     return str;
   }
   // Expand exponential notation into a plain decimal string.
-  const [mantissa, expPart] = str.toLowerCase().split("e");
+  const [mantissa = "0", expPart = "0"] = str.toLowerCase().split("e");
   const exponent = parseInt(expPart, 10);
   const negative = mantissa.startsWith("-");
   const unsigned = negative ? mantissa.slice(1) : mantissa;
-  const [intPart, fracPart = ""] = unsigned.split(".");
+  const [intPart = "0", fracPart = ""] = unsigned.split(".");
   const digits = intPart + fracPart;
   let pointPos = intPart.length + exponent;
   let result: string;
@@ -421,9 +421,9 @@ function multiplyDecimalStrings(a: string, b: string): string {
     for (let j = bDigits.length - 1; j >= 0; j--) {
       const db = bDigits.charCodeAt(j) - 48;
       const pos = i + j + 1;
-      const sum = result[pos] + da * db;
+      const sum = result[pos]! + da * db;
       result[pos] = sum % 10;
-      result[pos - 1] += Math.floor(sum / 10);
+      result[pos - 1]! += Math.floor(sum / 10);
     }
   }
 
@@ -440,7 +440,7 @@ function multiplyDecimalStrings(a: string, b: string): string {
 
 /** Round a non-negative decimal string half-up to `precision` decimal places. */
 function roundDecimalString(value: string, precision: number): number {
-  const [intPart, fracPart = ""] = value.split(".");
+  const [intPart = "0", fracPart = ""] = value.split(".");
   if (fracPart.length <= precision) {
     return Number(value);
   }
@@ -452,8 +452,8 @@ function roundDecimalString(value: string, precision: number): number {
     const digits = (intPart + kept).split("").map((d) => d.charCodeAt(0) - 48);
     let i = digits.length - 1;
     while (i >= 0) {
-      if (digits[i] < 9) {
-        digits[i]++;
+      if (digits[i]! < 9) {
+        digits[i]!++;
         break;
       }
       digits[i] = 0;

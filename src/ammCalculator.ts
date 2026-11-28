@@ -532,13 +532,19 @@ export function buildPoolHealthSnapshot(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+function trimTrailingZeros(value: string): string {
+  if (!value.includes(".")) return value;
+  const trimmed = value.replace(/0+$/, "").replace(/\.$/, "");
+  return trimmed === "" || trimmed === "-" ? "0" : trimmed;
+}
+
 function computeSpotPrice(reserveIn: bigint, reserveOut: bigint): string {
   if (reserveIn <= 0n) {
     return "0";
   }
   // Scale by 1e7 to preserve precision, then format as decimal string.
   const scaled = (reserveOut * 10000000n) / reserveIn;
-  return formatScaled(scaled, 7);
+  return trimTrailingZeros(formatScaled(scaled, 7));
 }
 
 function computeEffectivePrice(outputAmount: bigint, inputAmount: bigint): string {
@@ -546,7 +552,7 @@ function computeEffectivePrice(outputAmount: bigint, inputAmount: bigint): strin
     return "0";
   }
   const scaled = (outputAmount * 10000000n) / inputAmount;
-  return formatScaled(scaled, 7);
+  return trimTrailingZeros(formatScaled(scaled, 7));
 }
 
 function computePriceImpact(spotPrice: string, effectivePrice: string): string {

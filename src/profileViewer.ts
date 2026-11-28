@@ -236,7 +236,7 @@ export function renderProfileViewer(profile: ProfileExport): string {
   if (profile.memory.length === 0) {
     lines.push('(no memory samples)');
   } else {
-    const last = profile.memory[profile.memory.length - 1];
+    const last = profile.memory[profile.memory.length - 1]!;
     lines.push(`used: ${last.usedHeapBytes} bytes, total: ${last.totalHeapBytes} bytes`);
   }
   lines.push('');

@@ -322,7 +322,7 @@ export function validateAddress(
       valid: contractResult.valid,
       type: contractResult.valid ? "contract" : undefined,
       errors: contractResult.errors,
-      normalizedAddress: contractResult.normalizedAddress,
+      normalizedAddress: contractResult.valid ? contractResult.address : undefined,
     };
   }
 

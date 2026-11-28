@@ -154,7 +154,7 @@ export class SecretsManager {
     const nowMs = this.now().getTime();
     for (const record of this.secrets.values()) {
       if (!record.rotationIntervalMs) continue;
-      const last = record.lastRotatedAt ?? record.versions[record.versions.length - 1].createdAt;
+      const last = record.lastRotatedAt ?? record.versions[record.versions.length - 1]!.createdAt;
       if (nowMs - new Date(last).getTime() >= record.rotationIntervalMs) {
         this.rotate(record.name, valueFactory(record.name), "policy");
         rotated.push(record.name);
@@ -198,7 +198,7 @@ export class SecretsManager {
       name: record.name,
       currentVersion: record.currentVersion,
       versionCount: record.versions.length,
-      createdAt: record.versions[0].createdAt,
+      createdAt: record.versions[0]!.createdAt,
       lastRotatedAt: record.lastRotatedAt,
       rotationIntervalMs: record.rotationIntervalMs,
     };

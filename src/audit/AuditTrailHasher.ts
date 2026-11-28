@@ -1,4 +1,13 @@
-import { AuditEvent, AuditChainEntry, AuditTrailRoot } from '../types/audit';
+import {
+  AuditEvent,
+  AuditChainEntry,
+  AuditTrailRoot,
+  CrossTenantAuditRecord,
+  CrossTenantAuditQuery,
+  CrossTenantAuditListener,
+  CrossTenantAuditEvent,
+  MerkleProof,
+} from '../types/audit';
 import * as crypto from 'crypto';
 
 // Use node crypto webcrypto subtle
@@ -9,6 +18,8 @@ export type AuditTrailListener = (entry: AuditChainEntry) => void;
 export class AuditTrailHasher {
   private entries: AuditChainEntry[] = [];
   private listeners: Set<AuditTrailListener> = new Set();
+  private crossTenantRecords: CrossTenantAuditRecord[] = [];
+  private crossTenantListeners: Set<CrossTenantAuditListener> = new Set();
 
   constructor(entries: AuditChainEntry[] = []) {
     this.entries = [...entries];
@@ -57,7 +68,7 @@ export class AuditTrailHasher {
    */
   async append(event: AuditEvent): Promise<AuditChainEntry> {
     const index = this.entries.length;
-    const prevHash = index > 0 ? this.entries[index - 1].hash : await AuditTrailHasher.sha256Hex('');
+    const prevHash = index > 0 ? this.entries[index - 1]!.hash : await AuditTrailHasher.sha256Hex('');
     
     // Hash stringified payload
     const dataString = JSON.stringify({ event, prevHash, index });
@@ -152,19 +163,19 @@ export class AuditTrailHasher {
    * Registers a listener for cross-tenant audit lifecycle events.
    */
   on(listener: CrossTenantAuditListener): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    this.crossTenantListeners.add(listener);
+    return () => this.crossTenantListeners.delete(listener);
   }
 
   /**
    * Removes a previously registered listener.
    */
   off(listener: CrossTenantAuditListener): void {
-    this.listeners.delete(listener);
+    this.crossTenantListeners.delete(listener);
   }
 
   private emit(event: CrossTenantAuditEvent): void {
-    for (const listener of this.listeners) {
+    for (const listener of this.crossTenantListeners) {
       listener(event);
     }
   }
@@ -183,16 +194,16 @@ export class AuditTrailHasher {
       const nextLayer: string[] = [];
       for (let i = 0; i < currentLayer.length; i += 2) {
         if (i + 1 < currentLayer.length) {
-          nextLayer.push(await AuditTrailHasher.sha256Hex(currentLayer[i] + currentLayer[i + 1]));
+          nextLayer.push(await AuditTrailHasher.sha256Hex(currentLayer[i]! + currentLayer[i + 1]!));
         } else {
           // Odd number of nodes, pad with itself (left-pad/duplicate)
-          nextLayer.push(await AuditTrailHasher.sha256Hex(currentLayer[i] + currentLayer[i]));
+          nextLayer.push(await AuditTrailHasher.sha256Hex(currentLayer[i]! + currentLayer[i]!));
         }
       }
       currentLayer = nextLayer;
     }
 
-    return currentLayer[0];
+    return currentLayer[0]!;
   }
 
   /**
@@ -203,7 +214,7 @@ export class AuditTrailHasher {
       throw new Error(`Index ${index} out of bounds for ${this.entries.length} entries`);
     }
 
-    const leaf = this.entries[index].hash;
+    const leaf = this.entries[index]!.hash;
     const siblings: MerkleProof['siblings'] = [];
     let currentLayer = this.entries.map(e => e.hash);
     let currentIndex = index;
@@ -212,8 +223,8 @@ export class AuditTrailHasher {
       const isRightNode = currentIndex % 2 === 1;
       const siblingIndex = isRightNode ? currentIndex - 1 : currentIndex + 1;
       const siblingHash = siblingIndex < currentLayer.length
-        ? currentLayer[siblingIndex]
-        : currentLayer[currentIndex];
+        ? currentLayer[siblingIndex]!
+        : currentLayer[currentIndex]!;
 
       siblings.push({
         hash: siblingHash,
@@ -223,16 +234,16 @@ export class AuditTrailHasher {
       const nextLayer: string[] = [];
       for (let i = 0; i < currentLayer.length; i += 2) {
         if (i + 1 < currentLayer.length) {
-          nextLayer.push(await AuditTrailHasher.sha256Hex(currentLayer[i] + currentLayer[i + 1]));
+          nextLayer.push(await AuditTrailHasher.sha256Hex(currentLayer[i]! + currentLayer[i + 1]!));
         } else {
-          nextLayer.push(await AuditTrailHasher.sha256Hex(currentLayer[i] + currentLayer[i]));
+          nextLayer.push(await AuditTrailHasher.sha256Hex(currentLayer[i]! + currentLayer[i]!));
         }
       }
       currentLayer = nextLayer;
       currentIndex = Math.floor(currentIndex / 2);
     }
 
-    return { leaf, index, siblings, root: currentLayer[0] };
+    return { leaf, index, siblings, root: currentLayer[0]! };
   }
 
   /**
@@ -259,7 +270,7 @@ export class AuditTrailHasher {
     // Check integrity of the chain
     let prevHash = await AuditTrailHasher.sha256Hex('');
     for (let i = 0; i < this.entries.length; i++) {
-      const entry = this.entries[i];
+      const entry = this.entries[i]!;
       if (entry.index !== i) {
         this.emit({ type: 'validation:failure', reason: 'index-mismatch', mismatchAt: i });
         return { valid: false, mismatchAt: i };

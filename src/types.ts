@@ -18,6 +18,29 @@ export interface ApprovalResult {
   reason?: string;
 }
 
+/** Result of submitting a signature to an {@link ApprovalSession}. */
+export interface ApprovalSessionResult {
+  /** Whether the signature threshold has now been met. */
+  complete: boolean;
+  /** Total weight of signatures collected so far. */
+  weight: number;
+}
+
+/** A signer's share of signing weight in a multi-signature policy. */
+export interface MultiSigSigner {
+  publicKey: string;
+  weight: number;
+}
+
+/** Policy governing a multi-signature approval workflow. */
+export interface MultiSigPolicy {
+  signers: MultiSigSigner[];
+  /** Combined signer weight required to approve. */
+  threshold: number;
+  /** How long the approval session stays open before expiring. */
+  timeoutMs: number;
+}
+
 /** Result of an NFT gate status check for a creator address. */
 export interface NftGateResult {
   /** Whether an NFT gate is configured for this creator. */
@@ -375,6 +398,8 @@ export interface Invoice<
   cloneDepth?: number;
   /** The address of the NFT contract used for gating, if any. */
   nft_gate?: string;
+  /** Cumulative basis points (0-10000) released so far via `releasePartial`. */
+  totalReleasedBps?: number;
   /** ID of the next invoice in the forward chain, if any. */
   forward_invoice_id?: string;
   /** Unix timestamp after which penalties apply. */
@@ -571,8 +596,8 @@ export interface WalletAdapter {
   signTransaction(xdr: string, network: string): Promise<string>;
   /** Disconnect from the wallet */
   disconnect(): void;
-  /** Register a handler for account change events. Returns an unsubscribe function. */
-  onAccountChange(handler: (address: string) => void): () => void;
+  /** Register a handler for account change events (`null` on disconnect). Returns an unsubscribe function. */
+  onAccountChange(handler: (address: string | null) => void): () => void;
 }
 
 /** Parameters for paying toward an invoice. */
@@ -2344,6 +2369,28 @@ export interface ProtocolStats {
   uniquePayers?: number;
 }
 
+/** A freeform note attached to an invoice (#875). */
+export interface Note {
+  /** Position of this note among the invoice's notes, in insertion order. */
+  index: number;
+  /** Note body (max 512 UTF-8 bytes). */
+  content: string;
+  /** When the note was added. */
+  timestamp: Date;
+}
+
+/**
+ * Minimal structured-logging contract a caller may provide via `setLogger`
+ * (#874). A narrower surface than {@link Logger}/`SdkLogger` in `logger.ts`,
+ * for callers who only want the four severity methods.
+ */
+export interface SdkLogger {
+  debug(message: string, context?: Record<string, unknown>): void;
+  info(message: string, context?: Record<string, unknown>): void;
+  warn(message: string, context?: Record<string, unknown>): void;
+  error(message: string, context?: Record<string, unknown>): void;
+}
+
 // ---------------------------------------------------------------------------
 // Automatic Nonce Management Types (Issue #1223)
 // ---------------------------------------------------------------------------
@@ -2541,3 +2588,500 @@ export interface BatchStats {
 // ---------------------------------------------------------------------------
 
 export * from "./types/utilities.js";
+
+// ---------------------------------------------------------------------------
+// Issue #867 — Pledge matching
+// ---------------------------------------------------------------------------
+
+/** A single matching-fund pledge against an invoice's funding pool. */
+export interface MatchPledge {
+  /** Address of the matcher backing the pledge. */
+  matcher: string;
+  /** Total amount the matcher pledged, in stroops. */
+  pledgedAmount: bigint;
+  /** Portion of the pledge matched against incoming payments so far. */
+  matchedAmount: bigint;
+  /** Remaining unmatched portion of the pledge. */
+  unmatched: bigint;
+}
+
+// ---------------------------------------------------------------------------
+// Issue #868 — Streaming payments
+// ---------------------------------------------------------------------------
+
+/** Lifecycle status of a continuous ledger-based payment stream. */
+export type StreamStatus = "active" | "settled" | "cancelled";
+
+/** A continuous ledger-based payment stream toward an invoice. */
+export interface Stream {
+  /** Unique stream identifier. */
+  id: string;
+  /** Invoice the stream pays toward. */
+  invoiceId: string;
+  /** Address funding the stream. */
+  payer: string;
+  /** Payment flow rate per Stellar ledger, in stroops. */
+  amountPerLedger: bigint;
+  /** Ledger sequence number the stream started at. */
+  startLedger: number;
+  /** Current lifecycle status. */
+  status: StreamStatus;
+}
+
+// ---------------------------------------------------------------------------
+// Fundraising rounds
+// ---------------------------------------------------------------------------
+
+/** A payer's refund resulting from a fundraising round closing over-subscribed. */
+export interface PayerRefund {
+  /** Address of the payer being refunded. */
+  payer: string;
+  /** Portion of the payer's contribution kept toward the raise. */
+  amountKept: bigint;
+  /** Portion of the payer's contribution refunded. */
+  amountRefunded: bigint;
+}
+
+/** Result of closing a fundraising round. */
+export interface RoundCloseResult {
+  /** Total amount raised before overflow refunds. */
+  totalRaised: bigint;
+  /** The round's hard funding cap. */
+  hardCap: bigint;
+  /** Amount raised above the hard cap, refunded back to payers. */
+  overflow: bigint;
+  /** Per-payer refunds issued for over-subscription. */
+  refunds: PayerRefund[];
+  /** Transaction hash of the close operation. */
+  txHash: string;
+}
+
+/** Current state of an invoice's fundraising round. */
+export interface RoundInfo {
+  /** Invoice the round belongs to. */
+  invoiceId: string;
+  /** Total amount raised so far. */
+  totalRaised: bigint;
+  /** The round's hard funding cap. */
+  hardCap: bigint;
+  /** Unix timestamp (seconds) the round ends. */
+  roundEnd: number;
+  /** Whether the round has already been closed. */
+  closed: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Issue #879 — Milestone methods
+// ---------------------------------------------------------------------------
+
+/** Lifecycle status of a single milestone. */
+export type MilestoneStatus = "locked" | "active" | "completed";
+
+/** A single milestone within a milestone-based invoice. */
+export interface Milestone {
+  /** Zero-based milestone index. */
+  index: number;
+  /** Human-readable description of the milestone's deliverable. */
+  description: string;
+  /** Amount required to fund this milestone, in stroops. */
+  targetAmount: bigint;
+  /** Amount funded toward this milestone so far, in stroops. */
+  fundedAmount: bigint;
+  /** Current lifecycle status. */
+  status: MilestoneStatus;
+}
+
+/** Result of completing a milestone. */
+export interface MilestoneResult {
+  /** Index of the milestone that was completed. */
+  index: number;
+  /** Amount released to recipients upon completion, in stroops. */
+  amountReleased: bigint;
+  /** Index of the next milestone, when one follows. */
+  nextMilestoneIndex?: number;
+  /** Transaction hash of the completion operation. */
+  txHash: string;
+}
+
+// ---------------------------------------------------------------------------
+// Referral program
+// ---------------------------------------------------------------------------
+
+/** Result of claiming accumulated referral rewards. */
+export interface ReferralClaimResult {
+  /** Amount of accumulated rewards claimed, in stroops. */
+  amountClaimed: bigint;
+  /** Transaction hash of the claim operation. */
+  txHash: string;
+}
+
+/** Result of paying toward an invoice while crediting a referrer. */
+export interface ReferralPayResult {
+  /** Transaction hash of the payment. */
+  txHash: string;
+  /** Referrer address credited for the payment. */
+  referrer: string;
+}
+
+// ---------------------------------------------------------------------------
+// Pause status
+// ---------------------------------------------------------------------------
+
+/** Current pause state of an invoice against new payments. */
+export interface PauseStatus {
+  /** Whether the invoice is currently paused. */
+  paused: boolean;
+  /** When the pause automatically lifts, if it was scheduled to. */
+  autoResumeAt?: Date;
+}
+
+// ---------------------------------------------------------------------------
+// Fiat price oracle
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// SEP-12 KYC
+// ---------------------------------------------------------------------------
+
+/** SEP-9 text fields submitted for KYC (e.g. `first_name`, `last_name`, `email_address`). */
+export type KycFields = Record<string, string>;
+
+/** A binary document attached to a SEP-12 KYC submission (e.g. a photo ID scan). */
+export interface KycDocument {
+  /** SEP-9 field name for this document (e.g. `photo_id_front`). */
+  field: string;
+  /** File content. */
+  content: Blob | Buffer | Uint8Array;
+  /** MIME type, required when `content` isn't already a `Blob`. */
+  contentType?: string;
+  /** Filename sent with the multipart upload. */
+  filename: string;
+}
+
+/** Typed result of a SEP-12 `GET /customer` status check. */
+export type KycStatus =
+  | { status: "ACCEPTED"; id: string }
+  | { status: "NEEDS_INFO"; id: string; missingFields: string[]; message?: string }
+  | { status: "REJECTED"; id: string; message?: string }
+  | { status: "PROCESSING"; id: string; message?: string };
+
+/** Thrown when a SEP-12 customer needs more info or was rejected. */
+export class KycNeedsInfoError extends StellarSplitError {
+  readonly status: Extract<KycStatus, { status: "NEEDS_INFO" | "REJECTED" }>;
+
+  constructor(status: Extract<KycStatus, { status: "NEEDS_INFO" | "REJECTED" }>) {
+    super(
+      status.status === "NEEDS_INFO"
+        ? `SEP-12 customer ${status.id} needs more info: ${status.missingFields.join(", ")}`
+        : `SEP-12 customer ${status.id} was rejected: ${status.message ?? "no reason given"}`,
+      "KYC_NEEDS_INFO",
+      { status },
+    );
+    this.name = "KycNeedsInfoError";
+    this.status = status;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Escrow vault (time-locked claimable balance)
+// ---------------------------------------------------------------------------
+
+/** Lifecycle status of an escrow vault. */
+export type EscrowStatus = "holding" | "released" | "expired";
+
+/** A time-locked claimable balance backing an invoice's escrowed payment. */
+export interface EscrowVault {
+  vaultId: string;
+  invoiceId: string;
+  balanceId: string;
+  amount: bigint;
+  asset: string;
+  holdUntil: Date;
+  status: EscrowStatus;
+  createdAt: Date;
+  releasedAt?: Date;
+  recipientId?: string;
+}
+
+/** Condition under which an escrow vault's funds become claimable. */
+export interface EscrowReleaseCondition {
+  /** Earliest time the recipient may claim, if time-locked. */
+  holdUntil?: Date;
+  /** Address allowed to claim the release, if restricted. */
+  recipientId?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Webhook delivery
+// ---------------------------------------------------------------------------
+
+/** Signed envelope delivered by {@link WebhookAgent.deliver}. */
+export interface WebhookPayload<T = unknown> {
+  event_id: string;
+  event_type: string;
+  timestamp: string;
+  data: T;
+}
+
+// ---------------------------------------------------------------------------
+// Soroban contract deployment
+// ---------------------------------------------------------------------------
+
+/** Options for {@link SorobanDeployer.deploy}. */
+export interface DeployOptions {
+  /** Compiled contract WASM bytes to upload. */
+  wasmBytes: Buffer;
+  /** Salt for contract instance ID derivation. A random one is generated when omitted. */
+  salt?: Buffer;
+}
+
+/** Result of uploading and instantiating a contract via {@link SorobanDeployer.deploy}. */
+export interface DeployResult {
+  wasmHash: string;
+  contractId: string;
+}
+
+// ---------------------------------------------------------------------------
+// Payment reconciliation
+// ---------------------------------------------------------------------------
+
+/** One internal-vs-on-chain payment discrepancy surfaced by {@link ReconciliationEngine}. */
+export interface ReconciliationFinding {
+  accountId: string;
+  assetCode: string;
+  expectedDelta: bigint;
+  actualDelta: bigint;
+  discrepancy: bigint;
+  severity: "info" | "warning" | "critical";
+  reason?: string;
+}
+
+/** Result of reconciling internal payment records against on-chain activity. */
+export interface ReconciliationReport {
+  accountId: string;
+  assetCode: string;
+  dateRange: { from: number; to: number };
+  findings: ReconciliationFinding[];
+  isBalanced: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Multi-recipient payment progress tracking
+// ---------------------------------------------------------------------------
+
+/** Per-recipient payment state tracked by {@link PaymentProgressTracker}. */
+export interface RecipientPaymentState {
+  accountId: string;
+  status: string;
+  settledAmount: bigint;
+  lastUpdatedAt: number;
+}
+
+/** Aggregated multi-recipient payment progress for an invoice. */
+export interface InvoicePaymentProgress {
+  invoiceId: string;
+  percentComplete: number;
+  recipientStates: RecipientPaymentState[];
+  trancheProgress?: import("./trancheProgress.js").TrancheProgressReport;
+}
+
+// ---------------------------------------------------------------------------
+// Horizon path queries
+// ---------------------------------------------------------------------------
+
+/** A validated strict-send or strict-receive path-finding query. */
+export type PathQuery =
+  | {
+      kind: "strictSend";
+      sourceAsset: import("@stellar/stellar-sdk").Asset;
+      sourceAmount: bigint;
+      destination: string | import("@stellar/stellar-sdk").Asset[];
+    }
+  | {
+      kind: "strictReceive";
+      source: string | import("@stellar/stellar-sdk").Asset[];
+      destinationAsset: import("@stellar/stellar-sdk").Asset;
+      destinationAmount: bigint;
+    };
+
+/** A single payment path returned by a {@link PathQuery}. */
+export interface PathQueryResult {
+  path: Array<{ asset_code: string; asset_issuer: string; asset_type: string }>;
+  sourceAmount: bigint;
+  destinationAmount: bigint;
+}
+
+// ---------------------------------------------------------------------------
+// Operation chunking / batch submission
+// ---------------------------------------------------------------------------
+
+/** Submits one chunk of operations and resolves with its transaction hash. */
+export type ChunkSubmitter<T> = (
+  operations: T[],
+  chunkIndex: number,
+) => Promise<{ txHash: string }>;
+
+/** Outcome of submitting a batch of operation chunks via {@link OperationChunker}. */
+export interface BatchPaymentResult {
+  succeeded: { chunkIndex: number; txHash: string }[];
+  failed: { chunkIndex: number; error: Error } | null;
+}
+
+// ---------------------------------------------------------------------------
+// DEX offer tracking
+// ---------------------------------------------------------------------------
+
+/** A tracked Stellar DEX offer and its last-known fill status. */
+export interface OfferRecord {
+  offerId: string;
+  selling: unknown;
+  buying: unknown;
+  amount: string;
+  price: string;
+  status: "open" | "filled" | "stale" | "cancelled";
+  createdAt: number;
+}
+
+// ---------------------------------------------------------------------------
+// Split rounding / auditing
+// ---------------------------------------------------------------------------
+
+/** A recipient's share of an invoice total, as a ratio. */
+export interface SplitLine {
+  recipientId: string;
+  ratio: number;
+}
+
+/** A single largest-remainder rounding correction applied to a recipient. */
+export interface RoundingAdjustment {
+  recipientId: string;
+  delta: bigint;
+}
+
+/** Result of splitting a total among recipients with largest-remainder rounding. */
+export interface AuditedSplitResult {
+  amounts: Record<string, bigint>;
+  adjustments: RoundingAdjustment[];
+  total: bigint;
+}
+
+// ---------------------------------------------------------------------------
+// Fee trend analysis
+// ---------------------------------------------------------------------------
+
+/** Options for {@link FeeTrendAnalyzer}. */
+export interface FeeTrendOptions {
+  /** Horizon server URL to sample fee stats from. */
+  horizonUrl: string;
+  /** Number of samples to retain in the rolling window. */
+  windowSize?: number;
+  /** Time-to-live for a sample before it's evicted, in milliseconds. */
+  ttlMs?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Transaction finality checking
+// ---------------------------------------------------------------------------
+
+/** Options for {@link FinalityChecker}. */
+export interface FinalityCheckConfig {
+  /** Ledgers past the transaction's ledger required before it's considered final. Defaults to 2. */
+  minConfirmations?: number;
+  /** Polling interval in milliseconds while waiting for finality. Defaults to 1000. */
+  pollIntervalMs?: number;
+  /** Maximum time to wait before throwing {@link FinalityTimeoutError}. Defaults to 30000. */
+  maxWaitMs?: number;
+}
+
+/** Result of a transaction finality check. */
+export interface FinalityStatus {
+  finalized: boolean;
+  confirmations: number;
+  ledgerSequence: number;
+}
+
+// ---------------------------------------------------------------------------
+// Transaction effect aggregation
+// ---------------------------------------------------------------------------
+
+/** Net change in one asset's balance for an account, in stroops. */
+export interface AssetDelta {
+  asset: string;
+  delta: bigint;
+}
+
+/** Net credit/debit effects on a single account from a transaction. */
+export interface AccountEffectSummary {
+  accountId: string;
+  assetDeltas: AssetDelta[];
+}
+
+/** Adapter for resolving fiat/asset conversion rates. */
+export interface PriceOracleAdapter {
+  /**
+   * Resolve the price of one unit of `base` denominated in `quote`.
+   *
+   * @param base - Asset or currency code (e.g. "XLM", "USDC").
+   * @param quote - Currency to quote the price in (e.g. "USD").
+   */
+  getPrice(base: string, quote: string): Promise<number>;
+}
+
+// ---------------------------------------------------------------------------
+// Issue #873 — Partial release
+// ---------------------------------------------------------------------------
+
+/** Result of a successful `releasePartial` call. */
+export interface PartialReleaseResult {
+  txHash: string;
+  /** Basis points released in this call. */
+  bps: number;
+  /** Amount released in this call, in stroops. */
+  amountReleased: bigint;
+  /** Amount still held by the invoice after this release, in stroops. */
+  remaining: bigint;
+  /** Cumulative basis points released across all calls so far. */
+  totalReleasedBps: number;
+}
+
+// ---------------------------------------------------------------------------
+// Issue #871 — TTL bumping / health
+// ---------------------------------------------------------------------------
+
+/** Health classification for an invoice's remaining storage TTL. */
+export type TtlHealth = "healthy" | "warning" | "critical";
+
+/** Current storage TTL state for an invoice. */
+export interface TtlInfo {
+  /** Remaining ledgers until the invoice's storage entry expires. */
+  ttlLedgers: number;
+  /** Approximate remaining days, assuming ~5s ledger close time. */
+  approximateDays: number;
+  /** Health classification derived from `approximateDays`. */
+  health: TtlHealth;
+}
+
+// ---------------------------------------------------------------------------
+// Issue #870 — Funding velocity / trending
+// ---------------------------------------------------------------------------
+
+/** Options for {@link StellarSplitClient.getFundingVelocity}. */
+export interface FundingVelocityOptions {
+  /** Start hour (Unix hours since epoch). Defaults to 7 days before `toHour`. */
+  fromHour?: number;
+  /** End hour (Unix hours since epoch). Defaults to the current hour. */
+  toHour?: number;
+  /** Maximum number of buckets to return. */
+  limit?: number;
+}
+
+/** Funding volume for a single hourly bucket. */
+export interface VelocityBucket {
+  /** Unix hours since epoch for this bucket. */
+  hour: number;
+  /** The bucket's start time as a Date. */
+  timestamp: Date;
+  /** Total amount funded within this hour, in stroops. */
+  amount: bigint;
+}

@@ -1,5 +1,5 @@
 import { Horizon } from "@stellar/stellar-sdk";
-import type { InvoiceStatus } from "./types.js";
+import type { Invoice, InvoiceStatus } from "./types.js";
 import { SearchFailedError } from "./errors.js";
 
 /** Query parameters for searching invoices. */

@@ -245,8 +245,8 @@ export class PriceOracleClient implements PriceOracleClientInstance {
     const mid = Math.floor(sorted.length / 2);
     const median =
       sorted.length % 2 === 0
-        ? (sorted[mid - 1].price + sorted[mid].price) / 2
-        : sorted[mid].price;
+        ? (sorted[mid - 1]!.price + sorted[mid]!.price) / 2
+        : sorted[mid]!.price;
 
     const inliers = sorted.filter(
       (p) => Math.abs(p.price - median) / median <= this.options.maxDeviation,

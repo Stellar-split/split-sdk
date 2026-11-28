@@ -89,9 +89,9 @@ describe("Integration tests for all wallet types (#1038)", () => {
   describe("Connections & Wallet Detection", () => {
     it("connects to FreighterAdapter and integrates with WalletSessionManager and client", async () => {
       (window as any).freighter = {
-        isConnected: vi.fn().mockResolvedValue(true),
-        getPublicKey: vi.fn().mockResolvedValue(freighterKeypair.publicKey()),
-        signTransaction: vi.fn().mockResolvedValue("signed-freighter-xdr"),
+        isConnected: vi.fn().mockResolvedValue({ isConnected: true }),
+        getAddress: vi.fn().mockResolvedValue({ address: freighterKeypair.publicKey() }),
+        signTransaction: vi.fn().mockResolvedValue({ signedTxXdr: "signed-freighter-xdr" }),
       };
 
       const adapter = new FreighterAdapter();
@@ -195,8 +195,8 @@ describe("Integration tests for all wallet types (#1038)", () => {
 
     it("handles wallet disconnection cleanly and emits disconnected event", async () => {
       (window as any).freighter = {
-        isConnected: vi.fn().mockResolvedValue(true),
-        getPublicKey: vi.fn().mockResolvedValue(freighterKeypair.publicKey()),
+        isConnected: vi.fn().mockResolvedValue({ isConnected: true }),
+        getAddress: vi.fn().mockResolvedValue({ address: freighterKeypair.publicKey() }),
       };
 
       const adapter = new FreighterAdapter();
@@ -223,9 +223,9 @@ describe("Integration tests for all wallet types (#1038)", () => {
     it("signs transaction with FreighterAdapter", async () => {
       const sampleXdr = makeSampleTxXdr(freighterKeypair.publicKey());
       (window as any).freighter = {
-        isConnected: vi.fn().mockResolvedValue(true),
-        getPublicKey: vi.fn().mockResolvedValue(freighterKeypair.publicKey()),
-        signTransaction: vi.fn().mockResolvedValue("signed-freighter-sample-xdr"),
+        isConnected: vi.fn().mockResolvedValue({ isConnected: true }),
+        getAddress: vi.fn().mockResolvedValue({ address: freighterKeypair.publicKey() }),
+        signTransaction: vi.fn().mockResolvedValue({ signedTxXdr: "signed-freighter-sample-xdr" }),
       };
 
       const adapter = new FreighterAdapter();
@@ -369,8 +369,8 @@ describe("Integration tests for all wallet types (#1038)", () => {
 
     it("handles user rejection when signing in Freighter", async () => {
       (window as any).freighter = {
-        isConnected: vi.fn().mockResolvedValue(true),
-        getPublicKey: vi.fn().mockResolvedValue(freighterKeypair.publicKey()),
+        isConnected: vi.fn().mockResolvedValue({ isConnected: true }),
+        getAddress: vi.fn().mockResolvedValue({ address: freighterKeypair.publicKey() }),
         signTransaction: vi.fn().mockRejectedValue(new Error("User declined transaction")),
       };
 

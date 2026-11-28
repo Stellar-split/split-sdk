@@ -198,8 +198,6 @@ export class OptimisticCache<T = unknown> {
   /** In-flight background revalidations, keyed by cache key. */
   private readonly revalidations = new Map<string, Promise<void>>();
   private readonly revalidateErrorHandlers = new Set<(event: RevalidateErrorEvent) => void>();
-  private readonly expiries = new Map<string, number>();
-  private readonly eventHandlers = new Set<CacheEventHandler<T>>();
   private readonly defaultTtlMs: number;
   private readonly staleWhileRevalidateMs: number;
   private readonly now: () => number;

@@ -84,7 +84,7 @@ export class Cli {
     }
     this.history.push(trimmed);
 
-    const [name, ...args] = trimmed.split(/\s+/);
+    const [name, ...args] = trimmed.split(/\s+/) as [string, ...string[]];
 
     if (name === 'help') {
       this.print(this.registry.help());

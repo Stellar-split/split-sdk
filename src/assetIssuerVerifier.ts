@@ -7,7 +7,7 @@
  * This prevents fraudulent lookalike assets from being used in invoice payments.
  */
 
-import { Server, StellarTomlResolver } from "@stellar/stellar-sdk";
+import { Horizon, StellarToml } from "@stellar/stellar-sdk";
 import type { IssuerVerificationResult } from "./types.js";
 
 /**
@@ -41,7 +41,7 @@ export async function verifyAssetIssuer(
   let frozen = false;
   let deauthorised = false;
 
-  const server = new Server(horizonUrl);
+  const server = new Horizon.Server(horizonUrl);
 
   // Step 1: Load the issuer account
   let accountRaw: Record<string, unknown> | null = null;
@@ -127,13 +127,12 @@ export async function verifyAssetIssuer(
 
   // Step 3: Fetch stellar.toml
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => {}, timeoutMs);
 
     try {
-      const toml = await StellarTomlResolver.resolve(homeDomain, {
-        signal: controller.signal,
-      } as unknown as { signal: AbortSignal });
+      const toml = await StellarToml.Resolver.resolve(homeDomain, {
+        timeout: timeoutMs,
+      });
 
       tomlFound = true;
 

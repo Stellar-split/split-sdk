@@ -210,8 +210,8 @@ export class OptimizedTransactionSigner {
       settled.forEach((s, idx) => {
         // allSettled with async fn that never throws — value is always fulfilled
         results[i + idx] = s.status === 'fulfilled' ? s.value : {
-          txId: chunk[idx].txId,
-          keyId: chunk[idx].keyId,
+          txId: chunk[idx]!.txId,
+          keyId: chunk[idx]!.keyId,
           signature: null,
           ok: false,
           error: s.reason instanceof Error ? s.reason.message : String(s.reason),

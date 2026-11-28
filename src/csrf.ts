@@ -25,9 +25,9 @@
  * Issue #1059
  */
 
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { StellarSplitError } from "./errors.js";
-import { EventEmitter } from "./events.js";
 
 /** Default request header carrying the CSRF token. */
 export const CSRF_HEADER_NAME = "x-csrf-token";
@@ -458,6 +458,140 @@ export class CsrfTokenManager {
       if (oldest.done) break;
       this._tokens.delete(oldest.value);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Stateless, signed CSRF protection for request middleware
+// ---------------------------------------------------------------------------
+
+/** Thrown when a request's CSRF token fails validation. */
+export class CsrfValidationError extends StellarSplitError {
+  readonly reason: string;
+
+  constructor(reason: string, context?: Record<string, unknown>) {
+    super(`CSRF validation failed: ${reason}`, "CSRF_VALIDATION_FAILED", { reason, ...context });
+    this.name = "CsrfValidationError";
+    this.reason = reason;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Options for {@link CsrfProtection}. */
+export interface CsrfOptions {
+  /** HMAC signing secret. A random one is generated when omitted (not stable across restarts/instances — pass a persistent secret in production). */
+  secret?: string;
+  /** Header carrying the token. Defaults to {@link CSRF_HEADER_NAME}. */
+  headerName?: string;
+  /** Token lifetime in ms. Defaults to 30 minutes. */
+  ttlMs?: number;
+  /** Optional emitter used to publish CSRF events. */
+  emitter?: EventEmitter;
+}
+
+/** Outcome of validating a request's CSRF token. */
+export interface CsrfValidationResult {
+  valid: boolean;
+  reason?: string;
+  /** A freshly issued token, when the protection layer chooses to rotate on success. */
+  refreshedToken?: string;
+}
+
+/** Context passed to {@link CsrfProtection.on} listeners. */
+export interface CsrfEventContext {
+  reason: string;
+  timestamp: number;
+}
+
+const CSRF_REJECTED_EVENT = "csrf:rejected";
+
+/**
+ * Stateless, HMAC-signed CSRF protection for request middleware.
+ *
+ * Unlike {@link CsrfTokenManager} (which tracks one token per session id
+ * server-side), this issues self-verifying tokens — `issuedAt.nonce.hmac` —
+ * that need no server-side storage: validity is checked purely from the
+ * token's own signature and age.
+ */
+export class CsrfProtection {
+  readonly options: Required<Pick<CsrfOptions, "headerName" | "ttlMs">>;
+  private readonly secret: string;
+  private readonly emitter?: EventEmitter;
+
+  constructor(options: CsrfOptions = {}) {
+    this.secret = options.secret ?? randomBytes(32).toString("hex");
+    this.options = {
+      headerName: options.headerName ?? CSRF_HEADER_NAME,
+      ttlMs: options.ttlMs ?? 30 * 60 * 1000,
+    };
+    this.emitter = options.emitter;
+  }
+
+  /** Issue a fresh, self-verifying CSRF token. */
+  generateToken(): string {
+    const issuedAt = Date.now();
+    const nonce = randomBytes(16).toString("hex");
+    const payload = `${issuedAt}.${nonce}`;
+    const signature = createHmac("sha256", this.secret).update(payload).digest("hex");
+    return `${payload}.${signature}`;
+  }
+
+  /** Issue a replacement token (e.g. after a successful validation, to rotate). */
+  refreshToken(_previousToken: string): string {
+    return this.generateToken();
+  }
+
+  private verifyToken(token: string): { valid: boolean; reason?: string } {
+    const parts = token.split(".");
+    if (parts.length !== 3) {
+      return { valid: false, reason: "malformed_token" };
+    }
+    const [issuedAtRaw, nonce, signature] = parts;
+    const payload = `${issuedAtRaw}.${nonce}`;
+    const expected = createHmac("sha256", this.secret).update(payload).digest("hex");
+
+    const sigBuf = Buffer.from(signature!, "hex");
+    const expectedBuf = Buffer.from(expected, "hex");
+    if (sigBuf.length !== expectedBuf.length || !timingSafeEqual(sigBuf, expectedBuf)) {
+      return { valid: false, reason: "invalid_signature" };
+    }
+
+    const issuedAt = Number(issuedAtRaw);
+    if (!Number.isFinite(issuedAt) || Date.now() - issuedAt > this.options.ttlMs) {
+      return { valid: false, reason: "expired_token" };
+    }
+    return { valid: true };
+  }
+
+  /** Validate the CSRF token carried by an incoming request's headers. */
+  validateRequest(req: {
+    headers: Record<string, string | string[] | undefined>;
+  }): CsrfValidationResult {
+    const token = extractCsrfToken(req.headers, this.options.headerName);
+    if (!token) {
+      return { valid: false, reason: "missing_token" };
+    }
+    const result = this.verifyToken(token);
+    if (!result.valid) {
+      return { valid: false, reason: result.reason };
+    }
+    return { valid: true };
+  }
+
+  /** Emit a CSRF rejection event for observability. */
+  emitRejected(_req: unknown, reason: string): void {
+    this.emitter?.emit(CSRF_REJECTED_EVENT, { reason, timestamp: Date.now() } satisfies CsrfEventContext);
+  }
+
+  /** Subscribe to CSRF rejection events. Returns an unsubscribe function. */
+  on(handler: (event: CsrfEventContext) => void): () => void {
+    if (!this.emitter) {
+      return () => {};
+    }
+    this.emitter.on(CSRF_REJECTED_EVENT, handler);
+    return () => {
+      this.emitter?.off(CSRF_REJECTED_EVENT, handler);
+    };
   }
 }
 

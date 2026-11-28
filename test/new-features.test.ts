@@ -1,5 +1,16 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { Keypair } from "@stellar/stellar-sdk";
 import { StellarSplitClient } from "../src/client.js";
+
+// `scValToNative` is a non-configurable getter on the real SDK namespace, so
+// it can't be `vi.spyOn`/`vi.stubGlobal`-ed; override it via a partial module mock.
+vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@stellar/stellar-sdk")>();
+  return {
+    ...actual,
+    scValToNative: vi.fn((val: any) => val?._value),
+  };
+});
 import {
   Attestation,
   CreatorRating,
@@ -11,6 +22,8 @@ import {
   NotEligibleToVoteError,
   InvoiceNotReleasedForRatingError,
 } from "../src/errors.js";
+
+const FAKE_ADDRESS = Keypair.random().publicKey();
 
 describe("Issue #862: Attestation System", () => {
   let mockClient: any;
@@ -27,7 +40,7 @@ describe("Issue #862: Attestation System", () => {
     const client = Object.create(StellarSplitClient.prototype);
     Object.assign(client, mockClient);
 
-    const result = await client.attestInvoice("123", "Great work!", "payer-addr");
+    const result = await client.attestInvoice("123", "Great work!", FAKE_ADDRESS);
     expect(result.txHash).toBe("mock-tx-hash");
   });
 
@@ -37,7 +50,7 @@ describe("Issue #862: Attestation System", () => {
 
     const longStatement = "x".repeat(257);
     await expect(
-      client.attestInvoice("123", longStatement, "payer-addr")
+      client.attestInvoice("123", longStatement, FAKE_ADDRESS)
     ).rejects.toThrow();
   });
 
@@ -45,7 +58,7 @@ describe("Issue #862: Attestation System", () => {
     const client = Object.create(StellarSplitClient.prototype);
     Object.assign(client, mockClient);
 
-    const result = await client.revokeAttestation("123", "payer-addr");
+    const result = await client.revokeAttestation("123", FAKE_ADDRESS);
     expect(result.txHash).toBe("mock-tx-hash");
   });
 
@@ -86,7 +99,7 @@ describe("Issue #863: Campaign Group Management", () => {
     // Mock scValToNative
     vi.stubGlobal("scValToNative", (val: any) => val._value);
 
-    const result = await client.createGroup("creator", "My Group", "Description");
+    const result = await client.createGroup(FAKE_ADDRESS, "My Group", "Description");
     expect(result.groupId).toBe("456");
     expect(result.txHash).toBe("mock-tx-hash");
   });
@@ -95,7 +108,7 @@ describe("Issue #863: Campaign Group Management", () => {
     const client = Object.create(StellarSplitClient.prototype);
     Object.assign(client, mockClient);
 
-    const result = await client.addInvoiceToGroup("creator", "456", "789");
+    const result = await client.addInvoiceToGroup(FAKE_ADDRESS, "456", "789");
     expect(result.txHash).toBe("mock-tx-hash");
   });
 
@@ -143,7 +156,7 @@ describe("Issue #864: Deadline Extension Voting", () => {
     const client = Object.create(StellarSplitClient.prototype);
     Object.assign(client, mockClient);
 
-    const result = await client.voteExtendDeadline("123", "payer-addr");
+    const result = await client.voteExtendDeadline("123", FAKE_ADDRESS);
     expect(result.txHash).toBe("mock-tx-hash");
   });
 
@@ -183,7 +196,7 @@ describe("Issue #865: Invoice Rating System", () => {
     Object.assign(client, mockClient);
 
     for (const stars of [1, 2, 3, 4, 5] as const) {
-      const result = await client.rateInvoice("123", stars, "payer-addr");
+      const result = await client.rateInvoice("123", stars, FAKE_ADDRESS);
       expect(result.txHash).toBe("mock-tx-hash");
     }
   });
@@ -197,7 +210,7 @@ describe("Issue #865: Invoice Rating System", () => {
       totalStars: "43",
     });
 
-    const rating = await client.getCreatorRating("creator-addr");
+    const rating = await client.getCreatorRating(FAKE_ADDRESS);
     expect(rating.totalRatings).toBe(10n);
     expect(rating.averageStars).toBeCloseTo(4.3, 1);
   });
@@ -211,7 +224,7 @@ describe("Issue #865: Invoice Rating System", () => {
       totalStars: "14",
     });
 
-    const rating = await client.getCreatorRating("creator-addr");
+    const rating = await client.getCreatorRating(FAKE_ADDRESS);
     expect(rating.averageStars).toBeCloseTo(4.67, 1);
   });
 
@@ -224,7 +237,7 @@ describe("Issue #865: Invoice Rating System", () => {
       totalStars: "0",
     });
 
-    const rating = await client.getCreatorRating("creator-addr");
+    const rating = await client.getCreatorRating(FAKE_ADDRESS);
     expect(rating.totalRatings).toBe(0n);
     expect(rating.averageStars).toBe(0);
   });

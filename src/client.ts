@@ -23,7 +23,7 @@ import type { CircuitStateChangeLogEvent } from "./resilience/CircuitBreaker.js"
 import { InvoiceStateMachine } from "./state/InvoiceStateMachine.js";
 import type { StateMachineConfig } from "./types/state.js";
 import { RpcLoadBalancer } from "./rpc/RpcLoadBalancer.js";
-import { OfflineQueue, type QueuedOperation } from "./offlineQueue.js";
+import { OfflineQueue, type QueuedOperation, type OfflineTransaction, type OfflineTransactionSyncResult } from "./offlineQueue.js";
 import type { EndpointConfig, RpcLoadBalancerOptions } from "./rpc/RpcLoadBalancer.js";
 import {
   LogLevel,
@@ -50,6 +50,20 @@ export type SplitClientEventMap = {
   "endpoint:reinstated": { url: string };
   /** Emitted when a batch of invoices is successfully created. */
   "batch:created": { invoiceIds: bigint[] };
+  /** Emitted when an invoice's recipient is successfully rerouted to a new address. */
+  "recipient:rerouted": { invoiceId: string; oldAddress: string; newAddress: string };
+  /** Emitted when an invoice is successfully cancelled via `cancelInvoice`. */
+  "invoice:cancelled": { invoiceId: string; txHash: string };
+  /** Emitted when the connected wallet adapter reports an account/address change. */
+  "wallet:accountChanged": string;
+  /** Emitted when a wallet is connected via {@link StellarSplitClient.connectWallet}. */
+  "wallet:connected": { walletName: string; address: string };
+  /** Emitted when the active wallet session is disconnected. */
+  "wallet:disconnected": { walletName?: string };
+  /** Emitted when a single offline-queued transaction fails to submit during sync. */
+  "queue:transaction:failed": { transaction: OfflineTransaction; error: unknown };
+  /** Emitted once an offline-queue sync pass completes. */
+  "queue:transactions:synced": OfflineTransactionSyncResult;
   /** Emitted when a payment is made to an invoice. */
   payment: import("./contractEvents.js").PaymentEvent;
   /** Emitted when funds are released from an invoice. */
@@ -96,7 +110,7 @@ import {
   runRequestInterceptors,
   runResponseInterceptors,
 } from "./interceptors.js";
-import { createRequestSigningInterceptor } from "./requestSigner.js";
+import { createKeypairSigningInterceptor } from "./requestSigner.js";
 import {
   createCompressionRequestInterceptor,
   createCompressionResponseInterceptor,
@@ -128,7 +142,18 @@ import {
   AlreadyRatedError,
   InvoiceNotReleasedForRatingError,
   NotEligibleToVoteError,
+  InvalidBpsError,
+  OverReleaseError,
+  CannotCancelFundedInvoiceError,
+  InvoiceTerminatedError,
 } from "./errors.js";
+import type {
+  PartialReleaseResult,
+  TtlInfo,
+  TtlHealth,
+  FundingVelocityOptions,
+  VelocityBucket,
+} from "./types.js";
 import { OptimisticCache } from "./cache/OptimisticCache.js";
 import type { CommitFn, RollbackFn } from "./cache/OptimisticCache.js";
 import { getOptimisticInvoice } from "./optimistic.js";
@@ -280,7 +305,7 @@ import type {
   SubscribeToInvoiceOptions,
   SSEInvoiceEvent,
 } from "./sse.js";
-import { ConnectionPool } from "./connectionPool.js";
+import { RpcServerPool } from "./connectionPool.js";
 import { WebSocketTransport } from "./websocket.js";
 import type { TransportType, TransportStatus } from "./websocket.js";
 import { snapshotInvoice as _snapshotInvoice } from "./snapshot.js";
@@ -453,6 +478,8 @@ export interface StellarSplitClientConfig {
     endpoint?: string;
     /** Flush interval in milliseconds. Default: 60_000. */
     flushIntervalMs?: number;
+    /** Set to true to force-disable collection even when `enabled` is true. Default: false. */
+    optOut?: boolean;
   };
   /**
    * Optional idempotency configuration for write methods.
@@ -655,6 +682,32 @@ const NETWORKS: Record<string, NetworkConfig> = {
 export { getScheduledReleaseCountdown, verifyCompletionProof } from "./client/helpers.js";
 import { _computeCountdown, getScheduledReleaseCountdown, verifyCompletionProof, toBigInt } from "./client/helpers.js";
 
+/**
+ * Scores an invoice's recent (last 24h) funding activity against its prior
+ * activity on a 0-100 scale (#870). `100` when there's recent volume but no
+ * prior activity to compare against; `0` when there's no recent volume at
+ * all, regardless of history.
+ */
+export function computeTrendingScore(buckets: VelocityBucket[]): number {
+  if (buckets.length === 0) return 0;
+
+  const sorted = [...buckets].sort((a, b) => a.hour - b.hour);
+  const recentWindow = sorted.slice(-24);
+  const historicWindow = sorted.slice(0, Math.max(0, sorted.length - 24));
+
+  const recentSum = recentWindow.reduce((sum, b) => sum + b.amount, 0n);
+  if (recentSum === 0n) return 0;
+  if (historicWindow.length === 0) return 100;
+
+  const historicSum = historicWindow.reduce((sum, b) => sum + b.amount, 0n);
+  const recentAvg = Number(recentSum) / recentWindow.length;
+  const historicAvg = Number(historicSum) / historicWindow.length;
+  if (historicAvg === 0) return 100;
+
+  const ratio = recentAvg / historicAvg;
+  return Math.min(100, Math.max(0, 50 * ratio));
+}
+
 export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
   private _mainServer!: SorobanRpc.Server;
   private _standby: WarmStandby | null = null;
@@ -686,13 +739,13 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
   private _degradation: DegradationManager | null = null;
   private _rateLimiter: RateLimiter | null = null;
   private _rpcClient: IRPCClient | null = null;
-  private _adapter: WalletAdapter | null = null;
+  private _adapter: IWalletAdapter | null = null;
   private _hooks: import("./types.js").InvoiceLifecycleHooks = {};
   private _retryOptions: RetryOptions | null = null;
   private _horizonReader: HorizonFallbackReader | null = null;
   private _idempotency: IdempotencyManager | null = null;
   private _rollbackCoordinator: RollbackCoordinator | null = null;
-  private _pool: ConnectionPool | null = null;
+  private _pool: RpcServerPool | null = null;
   /**
    * Effective pool size chosen at construction (or 0 when pooling is off).
    * Cached separately from `config` because {@link NetworkConfig} (used by
@@ -977,7 +1030,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
         Math.max(config.rpcPoolSize!, 1),
         5,
       );
-      this._pool = new ConnectionPool({
+      this._pool = new RpcServerPool({
         rpcUrl: primaryUrl,
         poolSize: this._effectiveRpcPoolSize,
         allowHttp: primaryUrl.startsWith("http://"),
@@ -1005,7 +1058,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
    * @returns The result of the method.
    * @throws {Error} If the method fails.
    */
-        createRequestSigningInterceptor(config.signingKeypair),
+        createKeypairSigningInterceptor(config.signingKeypair),
       );
     }
     if (config.compression?.enabled) {
@@ -1037,7 +1090,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
    * @returns The result of the method.
    * @throws {Error} If the method fails.
    */
-        createCompressionResponseInterceptor(config.compression),
+        createCompressionResponseInterceptor(),
       );
     }
 
@@ -6312,7 +6365,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
     this._pool = null;
     if (this._effectiveRpcPoolSize >= 2) {
       try {
-        this._pool = new ConnectionPool({
+        this._pool = new RpcServerPool({
           rpcUrl: preset.rpcUrl,
           poolSize: this._effectiveRpcPoolSize,
           allowHttp: preset.rpcUrl.startsWith("http://"),
@@ -9583,10 +9636,14 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
    * ```
    */
   async connectWallet(adapter: WalletAdapter): Promise<string> {
-    const address =
+    const connectResult =
       typeof (adapter as any).connect === "function"
         ? await (adapter as any).connect()
         : await adapter.getAddress();
+    // Some adapters (e.g. WalletConnectAdapter) return a richer
+    // { address, chainId } object from connect() instead of a bare string.
+    const address: string =
+      typeof connectResult === "string" ? connectResult : connectResult.address;
     this._adapter = adapter;
 
     // Listen for account changes and update internal reference
@@ -9614,7 +9671,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
    */
   disconnectWallet(): void {
     if (this._adapter) {
-      this._adapter.disconnect();
+      this._adapter.disconnect?.();
       const walletName = this._adapter.name;
       this._adapter = null;
       this.emit("wallet:disconnected", { walletName });
@@ -9819,7 +9876,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
 
       // Parse the result — the contract returns a map of payer -> amounts
       // We decode optimistically; real XDR parsing is contract-specific
-      const native = sim.result ? scValToNative(sim.result.retval) : null;
+      const native = sim.result?.retval ? scValToNative(sim.result.retval) : null;
       const refunds: PayerRefund[] = [];
       let totalRaised = 0n;
       let hardCap = 0n;
@@ -9892,7 +9949,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
         throw new SimulationFailedError(raw ?? "Simulation failed", method, raw);
       }
 
-      const native = sim.result ? scValToNative(sim.result.retval) : {};
+      const native = sim.result?.retval ? scValToNative(sim.result.retval) : {};
       const n = (native ?? {}) as Record<string, any>;
       return {
         invoiceId,
@@ -9907,6 +9964,165 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
       }
       throw parseSorobanError(err instanceof Error ? err.message : String(err));
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #873 — Partial release
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Releases `bps` basis points (1-10000) of an invoice's funded amount.
+   *
+   * @throws {InvalidBpsError} if `bps` is not in `[1, 10000]`.
+   * @throws {OverReleaseError} if this call would push the invoice's
+   *   cumulative released bps past 10000.
+   */
+  async releasePartial(invoiceId: string, bps: number): Promise<PartialReleaseResult> {
+    if (!Number.isFinite(bps) || bps < 1 || bps > 10_000) {
+      throw new InvalidBpsError(bps);
+    }
+
+    const invoice = await this._fetchInvoice(invoiceId);
+    const currentTotalBps = invoice.totalReleasedBps ?? 0;
+    if (currentTotalBps + bps > 10_000) {
+      throw new OverReleaseError(invoiceId, currentTotalBps, bps);
+    }
+
+    const operation = this.contract.call(
+      "release_partial",
+      nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+      nativeToScVal(bps, { type: "u32" }),
+    );
+    const result = await this._submitTx(invoice.creator, operation);
+    const [amountReleased, remaining, totalReleasedBps] = scValToNative(
+      result.returnValue,
+    ) as [bigint, bigint, number];
+
+    return {
+      txHash: result.txHash,
+      bps,
+      amountReleased,
+      remaining,
+      totalReleasedBps,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #872 — cancelInvoice
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Cancels an invoice that has not yet received any payment.
+   *
+   * @throws {CannotCancelFundedInvoiceError} if the invoice has already
+   *   received payment — cancelled before any RPC write is attempted.
+   */
+  async cancelInvoice(invoiceId: string): Promise<TxResult> {
+    const invoice = await this._fetchInvoice(invoiceId);
+    if (invoice.funded > 0n) {
+      throw new CannotCancelFundedInvoiceError(invoiceId, invoice.funded);
+    }
+
+    const operation = this.contract.call(
+      "cancel_invoice",
+      nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+    );
+    const result = await this._submitTx(invoice.creator, operation);
+    this.emit("invoice:cancelled", { invoiceId, txHash: result.txHash });
+    return { txHash: result.txHash };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #871 — bumpInvoiceTtl / getTtl
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Bumps the storage TTL (time-to-live) of an active invoice to prevent it
+   * from being archived/evicted by the ledger.
+   *
+   * @throws {InvoiceTerminatedError} if the invoice is in a terminal state
+   *   (Released, Refunded, or Cancelled).
+   */
+  async bumpInvoiceTtl(invoiceId: string): Promise<TxResult> {
+    const invoice = await this._fetchInvoice(invoiceId);
+    if (invoice.status !== "Pending") {
+      throw new InvoiceTerminatedError(invoiceId, invoice.status);
+    }
+
+    const operation = this.contract.call(
+      "bump_invoice_ttl",
+      nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+    );
+    const result = await this._submitTx(invoice.creator, operation);
+    return { txHash: result.txHash };
+  }
+
+  /**
+   * Fetches the invoice's remaining storage TTL and classifies its health
+   * (healthy: >30 days, warning: 7-30 days, critical: <7 days or 0).
+   */
+  async getTtl(invoiceId: string): Promise<TtlInfo> {
+    const operation = this.contract.call(
+      "get_ttl",
+      nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+    );
+    const raw = await this._simulateView(operation);
+    const ttlLedgers = Number(raw ?? 0);
+
+    const LEDGERS_PER_DAY = (24 * 60 * 60) / 5;
+    const approximateDays = ttlLedgers / LEDGERS_PER_DAY;
+
+    let health: TtlHealth;
+    if (ttlLedgers > 0 && approximateDays > 30) {
+      health = "healthy";
+    } else if (ttlLedgers > 0 && approximateDays > 7) {
+      health = "warning";
+    } else {
+      health = "critical";
+    }
+
+    return { ttlLedgers, approximateDays, health };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Issue #870 — getFundingVelocity / isTrending
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetches hourly funding-volume buckets for an invoice over the requested
+   * window (defaults to the last 7 days).
+   */
+  async getFundingVelocity(
+    invoiceId: string,
+    options: FundingVelocityOptions = {},
+  ): Promise<VelocityBucket[]> {
+    const toHour = options.toHour ?? Math.floor(Date.now() / 3_600_000);
+    const fromHour = options.fromHour ?? toHour - 24 * 7;
+
+    const operation = this.contract.call(
+      "get_funding_velocity",
+      nativeToScVal(BigInt(invoiceId), { type: "u64" }),
+      nativeToScVal(fromHour, { type: "u32" }),
+      nativeToScVal(toHour, { type: "u32" }),
+      ...(options.limit !== undefined ? [nativeToScVal(options.limit, { type: "u32" })] : []),
+    );
+    const raw = (await this._simulateView(operation)) as Array<[number, bigint]>;
+
+    return (raw ?? []).map(([hour, amount]) => ({
+      hour,
+      timestamp: new Date(hour * 3_600_000),
+      amount,
+    }));
+  }
+
+  /**
+   * Returns whether the invoice's funding activity over the last 24 hours is
+   * trending upward relative to its prior 24-hour average
+   * ({@link computeTrendingScore} > 70).
+   */
+  async isTrending(invoiceId: string): Promise<boolean> {
+    const buckets = await this.getFundingVelocity(invoiceId);
+    return computeTrendingScore(buckets) > 70;
   }
 
   // ---------------------------------------------------------------------------
@@ -9967,7 +10183,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
         throw new TransactionFailedError("complete_milestone transaction failed", result.hash);
       }
 
-      const native = sim.result ? scValToNative(sim.result.retval) : {};
+      const native = sim.result?.retval ? scValToNative(sim.result.retval) : {};
       const n = (native ?? {}) as Record<string, any>;
       return {
         index,
@@ -10025,7 +10241,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
         throw new SimulationFailedError(raw ?? "Simulation failed", method, raw);
       }
 
-      const native = sim.result ? scValToNative(sim.result.retval) : null;
+      const native = sim.result?.retval ? scValToNative(sim.result.retval) : null;
       if (!native) return null;
       const n = native as Record<string, any>;
       return {
@@ -10080,7 +10296,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
         throw new SimulationFailedError(raw ?? "Simulation failed", method, raw);
       }
 
-      const native = sim.result ? scValToNative(sim.result.retval) : [];
+      const native = sim.result?.retval ? scValToNative(sim.result.retval) : [];
       if (!Array.isArray(native)) return [];
       return (native as Record<string, any>[]).map((n) => ({
         index: Number(n.index ?? 0),
@@ -10113,14 +10329,15 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
    */
   async claimReferralRewards(): Promise<ReferralClaimResult> {
     const method = "claim_referral_rewards";
-    const address = this.config.publicKey ?? "";
     try {
+      const account = await this.server.getAccount(this.config.publicKey ?? "");
+      const address = this.config.publicKey ?? account.accountId();
+
       const balance = await this.getReferralBalance(address);
       if (balance === 0n) {
         throw new NothingToClaimError(address);
       }
 
-      const account = await this.server.getAccount(address);
       const contract = new Contract(this.config.contractId);
       const tx = new TransactionBuilder(account, {
         fee: BASE_FEE,
@@ -10153,7 +10370,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
         throw new TransactionFailedError("claim_referral_rewards transaction failed", result.hash);
       }
 
-      const native = sim.result ? scValToNative(sim.result.retval) : 0n;
+      const native = sim.result?.retval ? scValToNative(sim.result.retval) : 0n;
       const amountClaimed = BigInt(typeof native === "bigint" ? native : ((native as any) ?? 0));
       return { amountClaimed, txHash: result.hash };
     } catch (err) {
@@ -10179,20 +10396,18 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
    */
   async getReferralBalance(address?: string): Promise<bigint> {
     const method = "get_referral_balance";
-    const target = address ?? this.config.publicKey ?? "";
+    const target = address ?? this.config.publicKey;
     try {
       const account = await this.server.getAccount(this.config.publicKey ?? "");
       const contract = new Contract(this.config.contractId);
+      const operation = target
+        ? contract.call(method, nativeToScVal(target, { type: "address" }))
+        : contract.call(method);
       const tx = new TransactionBuilder(account, {
         fee: BASE_FEE,
         networkPassphrase: this.config.networkPassphrase,
       })
-        .addOperation(
-          contract.call(
-            method,
-            nativeToScVal(target, { type: "address" })
-          )
-        )
+        .addOperation(operation)
         .setTimeout(30)
         .build();
 
@@ -10202,7 +10417,7 @@ export class StellarSplitClient extends TypedEventEmitter<SplitClientEventMap> {
         throw new SimulationFailedError(raw ?? "Simulation failed", method, raw);
       }
 
-      const native = sim.result ? scValToNative(sim.result.retval) : 0n;
+      const native = sim.result?.retval ? scValToNative(sim.result.retval) : 0n;
       return BigInt(typeof native === "bigint" ? native : ((native as any) ?? 0));
     } catch (err) {
       if (err instanceof SimulationFailedError) throw err;

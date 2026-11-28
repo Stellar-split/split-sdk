@@ -32,7 +32,7 @@
 import { StrKey } from "@stellar/stellar-sdk";
 import { StellarSplitError } from "./errors.js";
 import { parseAmount } from "./utils.js";
-import { EventEmitter } from "./events.js";
+import { EventEmitter } from "node:events";
 
 // ---------------------------------------------------------------------------
 // Error
@@ -723,7 +723,7 @@ export interface SanitizationEvent {
 
 /** Emitter used to publish sanitization events. */
 export const sanitizationEvents = new EventEmitter<{
-  sanitization: SanitizationEvent;
+  sanitization: [SanitizationEvent];
 }>();
 
 /**
@@ -746,7 +746,7 @@ export function sanitizeForMethod<T = unknown>(
     const hooked = runValidationHooks(method, field, value);
     const result = ruleOrName
       ? applySanitizationRule<T>(ruleOrName, hooked, field)
-      : ({ value: hooked as T, rule: undefined, modified: hooked !== value } as SanitizationResult<T>);
+      : ({ value: hooked as T, rule: "none", modified: hooked !== value } satisfies SanitizationResult<T>);
     sanitizationEvents.emit("sanitization", {
       method,
       field,

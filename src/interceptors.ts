@@ -2,12 +2,18 @@ export interface RPCRequest {
   method: string;
   params: unknown[];
   headers?: Record<string, string>;
+  /** Optional raw request body, for interceptors (e.g. compression) that operate below the RPC param layer. */
+  body?: unknown;
 }
 
 export interface RPCResponse {
   method: string;
   result: unknown;
   durationMs: number;
+  /** Optional response headers, for interceptors (e.g. compression) that need transport-level metadata. */
+  headers?: Record<string, string>;
+  /** Optional raw response body, for interceptors (e.g. compression) that operate below the RPC result layer. */
+  body?: unknown;
 }
 
 export type RequestInterceptor = (req: RPCRequest) => RPCRequest | Promise<RPCRequest>;

@@ -194,7 +194,9 @@ export class OfflineTransactionBuilder {
     this.operations.push(
       Operation.manageData({
         name: params.name,
-        value: params.value,
+        value: params.value instanceof Uint8Array && !Buffer.isBuffer(params.value)
+          ? Buffer.from(params.value)
+          : params.value,
         source: params.source,
       }),
     );
@@ -539,7 +541,9 @@ export class OfflineTransactionBuilder {
       case "hash":
         return Memo.hash(memoInput.value);
       case "return":
-        return Memo.return(memoInput.value);
+        return Memo.return(
+          typeof memoInput.value === "string" ? memoInput.value : memoInput.value.toString("hex"),
+        );
       default:
         throw new ValidationError("Unsupported memo type");
     }

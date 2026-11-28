@@ -52,7 +52,7 @@ function tokenize(input: string): string[] {
   const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(input)) !== null) {
-    tokens.push(m[1] ?? m[2] ?? m[3]);
+    tokens.push(m[1] ?? m[2] ?? m[3] ?? "");
   }
   return tokens;
 }
@@ -61,11 +61,11 @@ async function dispatch(input: string, ctx: CliContext): Promise<void> {
   const trimmed = input.trim();
   if (!trimmed) return;
   ctx.history.push(trimmed);
-  const [name, ...args] = tokenize(trimmed);
+  const [name, ...args] = tokenize(trimmed) as [string, ...string[]];
 
   if (name === 'help') {
     if (args.length > 0) {
-      const target = findCommand(args[0]);
+      const target = findCommand(args[0]!);
       ctx.print(target ? formatCommandHelp(target) : `Unknown command: ${args[0]}`);
     } else {
       ctx.print(formatHelp());

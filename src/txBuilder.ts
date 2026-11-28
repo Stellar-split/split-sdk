@@ -16,7 +16,7 @@ import { ValidationError, SimulationFailedError, TransactionFailedError, Transac
 import { checkInvoiceExpiry } from "./preflightChecker.js";
 import type { LedgerCloseEstimator } from "./ledgerCloseEstimator.js";
 import { detectFeeSurge, type FeeSurgeConfig } from "./feeSurgeDetector.js";
-import { NonceManager, type NonceManagerConfig } from "./nonceManager.js";
+import { NonceManager, type NonceManagerOptions as NonceManagerConfig } from "./nonceManager.js";
 
 /** Validation hook: return an error message (or throw) to reject the pending operations. */
 export type TxBuilderValidator = (
@@ -151,7 +151,7 @@ export class StellarSplitTxBuilder {
    * @param config - Optional nonce manager configuration.
    */
   enableNonceManagement(config?: NonceManagerConfig): this {
-    this._nonceManager = new NonceManager(this.sourceAddress, config);
+    this._nonceManager = new NonceManager(config);
     return this;
   }
 
@@ -292,7 +292,7 @@ export class StellarSplitTxBuilder {
     // Acquire the next nonce from the manager when available; otherwise fall
     // back to sequence 0 for offline/inspection builds.
     const nonce = this._nonceManager
-      ? this._nonceManager.acquire()
+      ? this._nonceManager.acquireNextNonce(this.sourceAddress)
       : undefined;
     const sequence = nonce !== undefined ? String(nonce) : "0";
 
@@ -325,7 +325,7 @@ export class StellarSplitTxBuilder {
     } catch (err) {
       // Roll back the reserved nonce so it can be reused.
       if (this._nonceManager && nonce !== undefined) {
-        this._nonceManager.release(nonce);
+        this._nonceManager.releaseNonce(this.sourceAddress, nonce);
       }
       throw err;
     }
@@ -367,7 +367,7 @@ export class StellarSplitTxBuilder {
     // tracks the account's on-chain sequence so concurrent submissions do not
     // collide.
     const nonce = this._nonceManager
-      ? this._nonceManager.acquire()
+      ? this._nonceManager.acquireNextNonce(this.sourceAddress)
       : undefined;
     const sequence = nonce !== undefined ? String(nonce) : account.sequenceNumber();
 
@@ -396,7 +396,7 @@ export class StellarSplitTxBuilder {
       tx = tb.build();
     } catch (err) {
       if (this._nonceManager && nonce !== undefined) {
-        this._nonceManager.release(nonce);
+        this._nonceManager.releaseNonce(this.sourceAddress, nonce);
       }
       throw err;
     }
@@ -410,7 +410,7 @@ export class StellarSplitTxBuilder {
       preparedTx = SorobanRpc.assembleTransaction(tx, simResult).build();
     } catch (err) {
       if (this._nonceManager && nonce !== undefined) {
-        this._nonceManager.release(nonce);
+        this._nonceManager.releaseNonce(this.sourceAddress, nonce);
       }
       throw err;
     }
@@ -426,7 +426,7 @@ export class StellarSplitTxBuilder {
     if (sendResult.status === "ERROR") {
       // Submission rejected — release the nonce so it can be retried.
       if (this._nonceManager && nonce !== undefined) {
-        this._nonceManager.release(nonce);
+        this._nonceManager.releaseNonce(this.sourceAddress, nonce);
       }
       throw new TransactionFailedError(
         `Transaction failed: ${JSON.stringify(sendResult.errorResult)}`
@@ -447,14 +447,14 @@ export class StellarSplitTxBuilder {
 
     if (getResult.status !== SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
       if (this._nonceManager && nonce !== undefined) {
-        this._nonceManager.release(nonce);
+        this._nonceManager.releaseNonce(this.sourceAddress, nonce);
       }
       throw new TransactionNotConfirmedError(String(getResult.status));
     }
 
     // Confirm the nonce as consumed so the manager advances its sequence.
     if (this._nonceManager && nonce !== undefined) {
-      this._nonceManager.confirm(nonce);
+      this._nonceManager.commitNonce(this.sourceAddress, nonce);
     }
 
     return { txHash };

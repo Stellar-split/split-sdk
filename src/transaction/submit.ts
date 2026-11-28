@@ -3,7 +3,7 @@ import {
   FootprintLogger,
   optimizeFootprint,
 } from "../soroban/footprint.js";
-import type { NonceManager } from "./nonce.js";
+import type { NonceManager } from "../nonceManager.js";
 
 /** The minimal RPC surface needed to submit a transaction. */
 export type SubmitServer = {
@@ -61,19 +61,19 @@ export async function submitTransaction(
     return server.submitTransaction(toSubmit);
   }
 
-  const reservation = await nonceManager.reserve(account);
+  const nonce = nonceManager.acquireNextNonce(account);
   try {
     const response = await server.submitTransaction(toSubmit);
     if (response.status === "ERROR") {
-      await nonceManager.release(account, reservation.nonce);
-      await nonceManager.refresh(account);
+      nonceManager.releaseNonce(account, nonce);
+      nonceManager.resetNonce(account);
     } else {
-      await nonceManager.commit(account, reservation.nonce);
+      nonceManager.commitNonce(account, nonce);
     }
     return response;
   } catch (err) {
-    await nonceManager.release(account, reservation.nonce);
-    await nonceManager.refresh(account);
+    nonceManager.releaseNonce(account, nonce);
+    nonceManager.resetNonce(account);
     throw err;
   }
 }

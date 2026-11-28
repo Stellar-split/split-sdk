@@ -179,7 +179,14 @@ export class ContractInterfaceBuilder extends TypedEventEmitter<ContractInterfac
       params: [...this._params],
     });
 
-    const scArgs = this._params.map((p) => nativeToScVal(p.value));
+    // A plain JS `number` param is encoded as a u32 so it round-trips back
+    // to a `number` on decode; a `bigint` param keeps the default inference
+    // (i128), preserving values outside the u32/safe-integer range.
+    const scArgs = this._params.map((p) =>
+      typeof p.value === "number"
+        ? nativeToScVal(p.value, { type: "u32" })
+        : nativeToScVal(p.value),
+    );
     const operation = this._contract.call(this._method, ...scArgs);
 
     this.emit("after:build", { method: this._method, operation });
@@ -231,19 +238,15 @@ export class ContractInterfaceBuilder extends TypedEventEmitter<ContractInterfac
         "ContractInterfaceBuilder.decode: expected an InvokeHostFunction operation",
       );
     }
-    const hostFn = body.invokeHostFunction().hostFunction();
+    const hostFn = body.invokeHostFunctionOp().hostFunction();
     if (hostFn.switch().name !== "hostFunctionTypeInvokeContract") {
       throw new Error(
         "ContractInterfaceBuilder.decode: expected a contract invocation",
       );
     }
-    const invokeArgs = hostFn.invokeContract().args();
-    // First two entries are contract address + method name
-    const methodNameVal = invokeArgs[1];
-    const methodName = methodNameVal
-      ? String(scValToNative(methodNameVal))
-      : "<unknown>";
-    const args = invokeArgs.slice(2).map(scValToNative);
+    const invokeContract = hostFn.invokeContract();
+    const methodName = invokeContract.functionName().toString();
+    const args = invokeContract.args().map(scValToNative);
     return { method: methodName, args };
   }
 }

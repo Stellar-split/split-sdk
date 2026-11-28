@@ -10,7 +10,7 @@
  * @see https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0024.md
  */
 
-import { StellarTomlResolver } from "@stellar/stellar-sdk";
+import { StellarToml } from "@stellar/stellar-sdk";
 import { TypedEventEmitter } from "../events/TypedEventEmitter.js";
 import type {
   Sep24TransactionRecord,
@@ -284,7 +284,7 @@ export async function resolveAnchorTransferServer(
   homeDomain: string,
 ): Promise<string | null> {
   try {
-    const toml = await StellarTomlResolver.resolve(homeDomain);
+    const toml = await StellarToml.Resolver.resolve(homeDomain);
     return (toml.TRANSFER_SERVER as string) ?? null;
   } catch {
     return null;

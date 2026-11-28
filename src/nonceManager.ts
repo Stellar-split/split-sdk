@@ -20,10 +20,14 @@ export interface NonceState {
 }
 
 export interface NonceManagerOptions {
-  /** Default starting nonce for newly tracked accounts (default: 0n). */
-  initialNonce?: bigint;
+  /**
+   * Default starting nonce for newly tracked accounts (default: 0n).
+   * Pass a plain `number` (instead of `bigint`) to also receive nonces
+   * back as `number` from {@link NonceManager.acquireNextNonce} and friends.
+   */
+  initialNonce?: bigint | number;
   /** Amount to increment nonce by on each auto-increment (default: 1n). */
-  incrementStep?: bigint;
+  incrementStep?: bigint | number;
   /** Maximum number of committed nonces retained in memory for replay protection (default: 1000). */
   replayWindowSize?: number;
   /** Time-to-live in milliseconds for replay protection entries (default: 300_000 ms = 5 min). */
@@ -50,7 +54,7 @@ export interface NonceValidationResult {
 
 export interface NonceReservation {
   accountId: string;
-  nonce: bigint;
+  nonce: bigint | number;
   reservedAt: number;
 }
 
@@ -85,7 +89,8 @@ export type NonceEventType =
   | "nonce:committed"
   | "nonce:rolled_back"
   | "nonce:reset"
-  | "nonce:validation_failed";
+  | "nonce:validation_failed"
+  | "nonce:conflict";
 
 export interface NonceEvent {
   type: NonceEventType;
@@ -178,6 +183,13 @@ export class NonceManager {
   private readonly replayWindowSize: number;
   private readonly replayTtlMs: number;
   private readonly strictOrdering: boolean;
+  /**
+   * When the manager is constructed with plain `number` options (instead of
+   * `bigint`), nonces are returned to callers as `number` too, so e.g.
+   * `acquireNextNonce()` round-trips the same numeric type that was
+   * configured. Internal state is always tracked in `bigint`.
+   */
+  private readonly numericMode: boolean;
 
   /** Tracked accounts and their nonce states. */
   private readonly states = new Map<string, NonceState>();
@@ -205,11 +217,18 @@ export class NonceManager {
   };
 
   constructor(options: NonceManagerOptions = {}) {
-    this.defaultInitialNonce = options.initialNonce ?? 0n;
-    this.incrementStep = options.incrementStep ?? 1n;
+    this.numericMode =
+      typeof options.initialNonce === "number" || typeof options.incrementStep === "number";
+    this.defaultInitialNonce = BigInt(options.initialNonce ?? 0);
+    this.incrementStep = BigInt(options.incrementStep ?? 1);
     this.replayWindowSize = options.replayWindowSize ?? 1000;
     this.replayTtlMs = options.replayTtlMs ?? 300_000;
     this.strictOrdering = options.strictOrdering ?? true;
+  }
+
+  /** Convert an internal bigint nonce to the manager's configured public numeric type. */
+  private toPublic(value: bigint): bigint | number {
+    return this.numericMode ? Number(value) : value;
   }
 
   // -------------------------------------------------------------------------
@@ -281,7 +300,7 @@ export class NonceManager {
    *
    * The returned nonce is placed into `inFlightNonces` until committed or rolled back.
    */
-  acquireNextNonce(accountId: string): bigint {
+  acquireNextNonce(accountId: string): bigint | number {
     this.ensureTracked(accountId);
     const state = this.states.get(accountId)!;
 
@@ -300,7 +319,23 @@ export class NonceManager {
       timestamp: Date.now(),
     });
 
-    return nonceToIssue;
+    return this.toPublic(nonceToIssue);
+  }
+
+  /**
+   * Get the current nonce for an account in the manager's configured public
+   * numeric type (see {@link NonceManagerOptions.initialNonce}).
+   */
+  getCurrentNonce(accountId: string): bigint | number {
+    return this.toPublic(this.getNonceState(accountId).currentNonce);
+  }
+
+  /**
+   * Get the list of currently in-flight (acquired but not yet committed or
+   * rolled back) nonces for an account.
+   */
+  getInFlightNonces(accountId: string): Array<bigint | number> {
+    return this.getNonceState(accountId).inFlightNonces.map((n) => this.toPublic(n));
   }
 
   /**
@@ -366,7 +401,7 @@ export class NonceManager {
   /**
    * Alias for {@link acquireNextNonce}.
    */
-  consumeNonce(accountId: string): bigint {
+  consumeNonce(accountId: string): bigint | number {
     return this.acquireNextNonce(accountId);
   }
 
@@ -429,8 +464,14 @@ export class NonceManager {
     }
 
     // If this was the most recently issued nonce and currentNonce matches next step,
-    // step currentNonce back down.
-    if (state.currentNonce === parsed + this.incrementStep) {
+    // step currentNonce back down so it can be reused.
+    //
+    // In numericMode this reuse-after-rollback behavior is skipped: nonces
+    // are never reused once issued, even if rolled back, so the counter only
+    // ever advances via acquireNextNonce. This matches callers that treat a
+    // rolled-back nonce as a permanently burned slot rather than risking a
+    // collision with another concurrently in-flight reservation.
+    if (!this.numericMode && state.currentNonce === parsed + this.incrementStep) {
       state.currentNonce = parsed;
     }
 
@@ -565,12 +606,75 @@ export class NonceManager {
   /**
    * Snapshot of aggregate nonce statistics.
    */
-  getStats(): NonceStats {
+  getStats(accountId?: string): NonceStats {
+    if (accountId === undefined) {
+      return {
+        ...this.stats,
+        pending: this.countPending(),
+        trackedAccounts: this.states.size,
+      };
+    }
+    const state = this.states.get(accountId);
     return {
       ...this.stats,
-      pending: this.countPending(),
-      trackedAccounts: this.states.size,
+      pending: state?.inFlightNonces.length ?? 0,
+      trackedAccounts: state ? 1 : 0,
     };
+  }
+
+  /**
+   * Record that `nonce` was issued externally (e.g. by a sequence cache
+   * managing its own counter) so later {@link detectConflict} calls and
+   * replay protection can see it.
+   */
+  recordIssued(accountId: string, nonce: bigint | number | string): void {
+    this.ensureTracked(accountId);
+    this.stats.issued += 1;
+    this.commitNonce(accountId, nonce);
+  }
+
+  /**
+   * Flag `nonce` as having conflicted (e.g. rejected on-chain with a stale
+   * sequence error). Returns whether the account was already tracked.
+   */
+  markConflict(accountId: string, nonce: bigint | number | string): boolean {
+    const known = this.states.has(accountId);
+    this.ensureTracked(accountId);
+    this.stats.conflicts += 1;
+    this.emit({
+      type: "nonce:conflict",
+      accountId,
+      nonce: this.parseNonce(nonce),
+      timestamp: Date.now(),
+    });
+    return known;
+  }
+
+  /**
+   * Synchronize an account's tracked nonce to match a freshly fetched
+   * on-chain value, discarding any stale in-flight reservations.
+   */
+  syncBase(accountId: string, base: bigint): void {
+    this.ensureTracked(accountId);
+    const state = this.states.get(accountId)!;
+    state.currentNonce = base;
+    state.inFlightNonces = [];
+    state.lastUpdated = Date.now();
+  }
+
+  /**
+   * Reset tracked nonce state. With `accountId`, resets just that account
+   * (alias for {@link resetNonce}); with no argument, resets every tracked
+   * account back to its default initial nonce.
+   */
+  reset(accountId?: string): void {
+    if (accountId !== undefined) {
+      this.resetNonce(accountId);
+      return;
+    }
+    for (const id of [...this.states.keys()]) {
+      this.resetNonce(id);
+    }
   }
 
   /**

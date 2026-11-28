@@ -208,6 +208,29 @@ export function createInvoiceStateBroadcaster(
  * network conditions inform the result without discarding past data.
  * Emits lifecycle events so callers can react to estimates and errors.
  */
+/** A single historical fee-rate observation. */
+export interface FeeHistoryEntry {
+  /** Observed fee rate, in stroops. */
+  feeRate: number;
+  /** Unix ms timestamp the observation was recorded. */
+  timestamp: number;
+}
+
+/** A fee estimate derived from recent {@link FeeHistoryEntry} history. */
+export interface FeeEstimate {
+  feeRate: number;
+  minFeeRate: number;
+  maxFeeRate: number;
+  averageFeeRate: number;
+  sampleCount: number;
+}
+
+/** Lifecycle event emitted by {@link FeeEstimator}. */
+export type FeeEstimationEvent = "estimate" | "error";
+
+/** Handler function for {@link FeeEstimator} lifecycle events. */
+export type FeeEstimationHandler = (event: FeeEstimationEvent, payload: FeeEstimate | Error) => void;
+
 export class FeeEstimator {
   private history: FeeHistoryEntry[] = [];
   private handlers: Set<FeeEstimationHandler> = new Set();
@@ -267,7 +290,7 @@ export class FeeEstimator {
         rates.reduce((sum, rate) => sum + rate, 0) / rates.length;
 
       // Weight the most recent observation against the historical average.
-      const latest = samples[samples.length - 1].feeRate;
+      const latest = samples[samples.length - 1]!.feeRate;
       const feeRate = Math.round((latest + averageFeeRate) / 2);
 
       const estimate: FeeEstimate = {
@@ -313,6 +336,41 @@ export function createFeeEstimator(): FeeEstimator {
  * probabilities rank higher. The optimizer emits lifecycle events so callers
  * can react to optimization results and errors.
  */
+/** A candidate payment pathway to be scored by {@link PaymentPathwayOptimizer}. */
+export interface PaymentPathway {
+  /** Identifier for this pathway (e.g. the intermediary asset/route). */
+  id: string;
+  /** Probability the payment succeeds via this pathway, in `[0, 1]`. */
+  successProbability: number;
+  /** Fee rate charged by this pathway, in stroops. */
+  feeRate: number;
+}
+
+/** A {@link PaymentPathway} annotated with its composite score. */
+export interface ScoredPaymentPathway extends PaymentPathway {
+  /** Composite score (higher is better): success probability divided by fee rate. */
+  score: number;
+}
+
+/** Result of optimizing a set of candidate payment pathways. */
+export interface PaymentPathwayOptimization {
+  /** All evaluated pathways, ordered from best to worst. */
+  pathways: ScoredPaymentPathway[];
+  /** The highest-scored pathway, or `null` when none were evaluated. */
+  recommended: ScoredPaymentPathway | null;
+  /** Number of pathways evaluated. */
+  evaluatedCount: number;
+}
+
+/** Lifecycle event emitted by {@link PaymentPathwayOptimizer}. */
+export type PaymentPathwayEvent = "optimized" | "error";
+
+/** Handler function for {@link PaymentPathwayOptimizer} lifecycle events. */
+export type PaymentPathwayHandler = (
+  event: PaymentPathwayEvent,
+  payload: PaymentPathwayOptimization | Error,
+) => void;
+
 export class PaymentPathwayOptimizer {
   private handlers: Set<PaymentPathwayHandler> = new Set();
 
@@ -359,7 +417,7 @@ export class PaymentPathwayOptimizer {
 
       const result: PaymentPathwayOptimization = {
         pathways: scored,
-        recommended: scored.length > 0 ? scored[0] : null,
+        recommended: scored.length > 0 ? scored[0]! : null,
         evaluatedCount: scored.length,
       };
 
@@ -479,6 +537,15 @@ export function createTransactionRollbackSimulator(): TransactionRollbackSimulat
  * {@link InvoiceStateBroadcaster}, emitting lifecycle events for
  * subscribe, unsubscribe, and notify operations.
  */
+/** Lifecycle event emitted by {@link InvoiceNotificationSubscriptionManager}. */
+export type InvoiceNotificationEvent =
+  | { type: "subscribed"; invoiceId: string }
+  | { type: "unsubscribed"; invoiceId: string }
+  | { type: "notified"; invoiceId: string; invoice: Invoice };
+
+/** Handler function for {@link InvoiceNotificationSubscriptionManager} lifecycle events. */
+export type NotificationEventHandler = (event: InvoiceNotificationEvent) => void;
+
 export class InvoiceNotificationSubscriptionManager {
   private readonly broadcaster: InvoiceStateBroadcaster;
   private readonly eventHandlers: Set<NotificationEventHandler> = new Set();

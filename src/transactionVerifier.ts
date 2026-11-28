@@ -44,7 +44,8 @@ export type TransactionCheckName =
   | "sequence"
   | "timebounds"
   | "signatures"
-  | "hash";
+  | "hash"
+  | "network";
 
 /** Outcome of a single verification check. */
 export interface TransactionCheckResult {
@@ -488,6 +489,11 @@ export class TransactionVerifier {
 /** Shared default verifier used by {@link verifyTransaction}. */
 const defaultVerifier = new TransactionVerifier();
 
+/** Snapshot of the shared default verifier's aggregate statistics. */
+export function getTransactionVerificationStats(): TransactionVerifierStats {
+  return defaultVerifier.getStats();
+}
+
 /**
  * Run every verification check against `tx` and return the structured result.
  *
@@ -512,6 +518,9 @@ export function verifyTransaction(
   // Execute synchronously by invoking each default rule directly.
   for (const rule of createDefaultRules()) {
     const result = rule.validate(tx, options) as TransactionCheckResult;
+    // The fee check is vacuous (and omitted) when the caller doesn't supply
+    // maxFee, so callers only see checks they actually asked for.
+    if (result.name === "fee" && options.maxFee === undefined) continue;
     checks.push(result);
   }
 

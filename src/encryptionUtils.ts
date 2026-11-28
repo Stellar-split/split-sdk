@@ -114,7 +114,7 @@ export async function deriveEncryptionKey(
     ["deriveBits"],
   );
   const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
+    { name: "PBKDF2", salt: salt as BufferSource, iterations, hash: "SHA-256" },
     material,
     ENCRYPTION_KEY_BYTES * 8,
   );
@@ -267,7 +267,7 @@ export class SdkEncryptor {
       const iv = this.crypto.getRandomValues(new Uint8Array(ENCRYPTION_IV_BYTES));
       const additionalData = this.additionalData(keyVersion);
       const encrypted = await this.crypto.subtle.encrypt(
-        { name: "AES-GCM", iv, additionalData },
+        { name: "AES-GCM", iv: iv as BufferSource, additionalData: additionalData as BufferSource },
         key,
         new TextEncoder().encode(text),
       );
@@ -308,8 +308,8 @@ export class SdkEncryptor {
       const decrypted = await this.crypto.subtle.decrypt(
         {
           name: "AES-GCM",
-          iv,
-          additionalData: this.additionalData(keyVersion),
+          iv: iv as BufferSource,
+          additionalData: this.additionalData(keyVersion) as BufferSource,
         },
         key,
         combined,
@@ -372,7 +372,7 @@ export class SdkEncryptor {
 
   private async importKey(version: number): Promise<CryptoKey> {
     const raw = this.keys.getKey(version);
-    return this.crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, [
+    return this.crypto.subtle.importKey("raw", raw as BufferSource, { name: "AES-GCM" }, false, [
       "encrypt",
       "decrypt",
     ]);

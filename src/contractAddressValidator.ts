@@ -145,6 +145,11 @@ export function isValidContractAddress(address: string): boolean {
   return validateContractAddress(address).valid;
 }
 
+/** Alias of {@link isValidContractAddress} accepting `unknown`, for callers validating untyped input. */
+export function isSorobanContractAddress(address: unknown): boolean {
+  return validateContractAddress(address).valid;
+}
+
 /**
  * Assert that `address` is a valid Soroban contract address, throwing
  * {@link InvalidContractAddressError} with every violated rule when it is not.
@@ -343,4 +348,36 @@ export class ContractAddressValidator {
   resetStats(): void {
     this.stats = { total: 0, valid: 0, invalid: 0, cached: 0, verified: 0 };
   }
+
+  /** Clear every cached validation result. */
+  clearCache(): void {
+    this.cache.clear();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Module-level singleton (issue #1259) — convenience wrappers for callers
+// that don't need a dedicated ContractAddressValidator instance.
+// ---------------------------------------------------------------------------
+
+let defaultValidator: ContractAddressValidator | undefined;
+
+function getDefaultValidator(): ContractAddressValidator {
+  defaultValidator ??= new ContractAddressValidator();
+  return defaultValidator;
+}
+
+/** Validate a contract address using the shared default {@link ContractAddressValidator}, caching results. */
+export function validateContractAddressCached(address: unknown): Promise<ContractValidationResult> {
+  return getDefaultValidator().validate(address);
+}
+
+/** Clear the shared default validator's cache. */
+export function clearContractAddressCache(): void {
+  getDefaultValidator().clearCache();
+}
+
+/** Snapshot of the shared default validator's aggregate counters. */
+export function getContractAddressValidationStats(): ContractValidationStats {
+  return getDefaultValidator().getStats();
 }

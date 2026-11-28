@@ -5,6 +5,7 @@ import {
   deleteTemplate,
   getTemplate,
   listTemplates,
+  resetTemplates,
   TemplateNotFoundError,
   TemplateAccessDeniedError,
 } from "../src/templates";
@@ -21,6 +22,7 @@ describe("Template Management", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetTemplates();
   });
 
   describe("saveTemplate", () => {

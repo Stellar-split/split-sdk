@@ -11,15 +11,16 @@ import type {
  */
 export class GroupModule extends BaseClientModule {
   /**
-   * Creates a new invoice group.
+   * Creates a new invoice group. Forwards all arguments as given to
+   * `client.createGroup`, which supports several positional overloads.
    */
-  async create(name: string, memo?: string): Promise<string> {
-    return this.client.createGroup(name, memo);
+  async create(...args: unknown[]): Promise<unknown> {
+    return (this.client.createGroup as (...a: unknown[]) => Promise<unknown>)(...args);
   }
 
   /** Alias for `create`. */
-  async createGroup(name: string, memo?: string): Promise<string> {
-    return this.create(name, memo);
+  async createGroup(...args: unknown[]): Promise<unknown> {
+    return this.create(...args);
   }
 
   /**

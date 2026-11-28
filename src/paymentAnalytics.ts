@@ -223,7 +223,7 @@ export class PaymentAnalyticsEngine {
   private track(event: string, properties?: Record<string, unknown>): void {
     if (!this.tracker) return;
     try {
-      this.tracker.track(event, properties);
+      this.tracker.trackEvent({ name: event, properties });
     } catch {
       // Tracking must never break analytics computation.
     }
@@ -232,10 +232,10 @@ export class PaymentAnalyticsEngine {
   /**
    * Record a counter metric, tolerating a missing registry.
    */
-  private incrementCounter(name: string, value = 1, tags?: Record<string, string>): void {
+  private incrementCounter(name: string, value = 1, _tags?: Record<string, string>): void {
     if (!this.metrics) return;
     try {
-      this.metrics.incrementCounter(name, value, tags);
+      this.metrics.counter(name).inc(value);
     } catch {
       // Metrics must never break analytics computation.
     }
@@ -244,10 +244,10 @@ export class PaymentAnalyticsEngine {
   /**
    * Record a histogram observation, tolerating a missing registry.
    */
-  private observeHistogram(name: string, value: number, tags?: Record<string, string>): void {
+  private observeHistogram(name: string, value: number, _tags?: Record<string, string>): void {
     if (!this.metrics) return;
     try {
-      this.metrics.observeHistogram(name, value, tags);
+      this.metrics.histogram(name).observe(value);
     } catch {
       // Metrics must never break analytics computation.
     }
@@ -954,14 +954,6 @@ export class PaymentAnalyticsEngine {
     this.track("payment_analytics.export_json", { pretty });
     this.incrementCounter("payment_analytics.reports.exported", 1, { format: "json" });
 
-    if (this.exporter) {
-      try {
-        return this.exporter.toJson(report, { pretty });
-      } catch {
-        // Fall through to built-in serializer.
-      }
-    }
-
     return JSON.stringify(
       report,
       (_, val) => (typeof val === "bigint" ? val.toString() : val),
@@ -977,14 +969,6 @@ export class PaymentAnalyticsEngine {
       invoiceCount: report.invoices.length,
     });
     this.incrementCounter("payment_analytics.reports.exported", 1, { format: "csv" });
-
-    if (this.exporter) {
-      try {
-        return this.exporter.toCsv(report);
-      } catch {
-        // Fall through to built-in serializer.
-      }
-    }
 
     const headers = [
       "InvoiceId",

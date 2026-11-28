@@ -103,7 +103,7 @@ export class RateCache<TRate = number> {
       this._misses++;
       return undefined;
     }
-    if (Date.now() - entry.fetchedAt > this.ttlMs) {
+    if (Date.now() - entry.fetchedAt >= this.ttlMs) {
       this.store.delete(key);
       this._expirations++;
       this._misses++;

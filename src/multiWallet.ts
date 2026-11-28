@@ -586,7 +586,7 @@ export class MultiWalletManager {
       this.emit({
         type: "wallet:account_changed",
         walletName: adapter.name,
-        address: newAddress,
+        address: newAddress ?? undefined,
         timestamp: Date.now(),
       });
     });

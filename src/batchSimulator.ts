@@ -121,7 +121,7 @@ export class BatchSimulator extends EventEmitter {
       while (cursor < total) {
         const index = cursor;
         cursor += 1;
-        const scenario = scenarios[index];
+        const scenario = scenarios[index]!;
         this.emit('scenario:start', { id: scenario.id, index });
         try {
           const result = simulateScenario(scenario, this.random);

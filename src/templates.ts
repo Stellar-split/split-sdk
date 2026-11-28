@@ -2,15 +2,41 @@
  * Invoice template management — save, create, delete, get, list templates.
  */
 
-import type {
-  InvoiceTemplate,
-  CreateFromTemplateParams,
-  SaveTemplateParams,
-  SerializedTemplate,
-  TemplateUsage,
-} from "./types/templates.js";
 import type { CreateInvoiceParams } from "./types.js";
 import { StellarSplitError } from "./errors.js";
+
+export interface InvoiceTemplate {
+  id: bigint;
+  name: string;
+  params: CreateInvoiceParams;
+  createdAt: number;
+  creator: string;
+  shared: boolean;
+}
+
+export interface SaveTemplateParams {
+  name: string;
+  params: CreateInvoiceParams;
+  shared?: boolean;
+}
+
+export interface CreateFromTemplateParams {
+  templateId: bigint;
+  overrides?: Partial<CreateInvoiceParams>;
+}
+
+export interface SerializedTemplate {
+  name: string;
+  params: CreateInvoiceParams;
+  shared: boolean;
+  version: number;
+}
+
+export interface TemplateUsage {
+  templateId: bigint;
+  count: number;
+  lastUsedAt: number;
+}
 
 export class TemplateNotFoundError extends StellarSplitError {
   readonly templateId: bigint;
@@ -45,6 +71,13 @@ export class TemplateAccessDeniedError extends StellarSplitError {
 const templates = new Map<bigint, InvoiceTemplate>();
 const usage = new Map<bigint, TemplateUsage>();
 let nextTemplateId = BigInt(1);
+
+/** Clears all stored templates and usage records. Intended for test isolation. */
+export function resetTemplates(): void {
+  templates.clear();
+  usage.clear();
+  nextTemplateId = BigInt(1);
+}
 
 function getUsageRecord(templateId: bigint): TemplateUsage {
   let record = usage.get(templateId);

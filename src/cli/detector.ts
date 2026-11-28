@@ -80,7 +80,7 @@ function compareFunctions(name: string, fromFn: FunctionDeclaration, toFn: Funct
   }
 
   for (let i = 0; i < toParams.length; i++) {
-    const toParam = toParams[i];
+    const toParam = toParams[i]!;
     const fromParam = fromParams[i];
 
     if (!fromParam) {
@@ -145,11 +145,11 @@ function compareInterfaces(name: string, fromInt: InterfaceDeclaration, toInt: I
       const fromParams = fromMethod.getParameters();
       const toParams = toMethod.getParameters();
       for (let i = 0; i < toParams.length; i++) {
-        if (!fromParams[i] && !toParams[i].isOptional()) {
+        if (!fromParams[i] && !toParams[i]!.isOptional()) {
            changes.push({
              type: "added_required_param",
              name: `${name}.${methodName}`,
-             description: `Added required parameter \`${toParams[i].getName()}\` to \`${name}.${methodName}\`.`,
+             description: `Added required parameter \`${toParams[i]!.getName()}\` to \`${name}.${methodName}\`.`,
              beforeSnippet: fromMethod.getText(),
              afterSnippet: toMethod.getText()
            });

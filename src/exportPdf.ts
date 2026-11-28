@@ -91,7 +91,7 @@ export function wrapText(text: string, width: number): string[] {
 export function buildInvoicePdf(
   title: string,
   rows: { text: string; bold?: boolean; indent?: number }[],
-  options: { title?: string } = {}
+  options: { title?: string; fontSize?: number; textColor?: string; accentColor?: string; margin?: number } = {}
 ): string {
   const content = buildPdfContent(title, rows);
   const objects = [

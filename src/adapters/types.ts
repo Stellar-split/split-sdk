@@ -37,19 +37,35 @@ export interface WalletAdapter {
    * @returns Signed transaction XDR.
    */
   signTransaction(xdr: string, network: string): Promise<string>;
-  /** Connect / authorize the wallet. Optional for adapters that need no handshake. */
-  connect?(): Promise<void>;
+  /**
+   * Connect / authorize the wallet. Optional for adapters that need no
+   * handshake. Resolves with adapter-specific session info when the
+   * backend has any to offer (e.g. WalletConnect's chain id).
+   */
+  connect?(): Promise<unknown>;
   /** Disconnect / revoke the wallet session. */
   disconnect?(): Promise<void>;
   /**
-   * Subscribe to account changes (e.g. the user switches accounts).
+   * Subscribe to account/session changes (e.g. the user switches accounts,
+   * or the session is torn down, in which case `null` is passed).
    *
-   * @param callback - Invoked with the new public key when the account changes.
+   * @param callback - Invoked with the new public key, or `null` on disconnect.
    * @returns An unsubscribe function.
    */
-  onAccountChange?(callback: (address: string) => void): () => void;
+  onAccountChange?(callback: (address: string | null) => void): () => void;
   /** Whether the wallet is available in the current environment. */
   isAvailable?(): boolean | Promise<boolean>;
+}
+
+/** Listener invoked when the connected wallet's account/session changes. Receives `null` on disconnect. */
+export type WalletAccountChangeListener = (address: string | null) => void;
+
+/** Result of establishing (or re-establishing) a WalletConnect session. */
+export interface WalletConnectResult {
+  /** The connected wallet's Stellar public key. */
+  address: string;
+  /** Stellar chain ID the session is scoped to (e.g. "stellar:testnet"). */
+  chainId: string;
 }
 
 /** Supported source chains for the cross-chain payment bridge. */

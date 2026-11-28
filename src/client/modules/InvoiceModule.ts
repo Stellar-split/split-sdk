@@ -4,10 +4,13 @@ import type {
   CreateInvoiceParams,
   SimulationResult,
   InvoiceStatus,
-  InvoiceFilter,
-  InvoicePage,
-  InvoiceSnapshot,
+  CloneOverrides,
+  InvoiceParamOverrides,
+  PaginationOptions,
+  PaginatedResult,
 } from "../../types.js";
+import type { InvoiceFilter, InvoicePage } from "../../invoiceQuery.js";
+import type { InvoiceSnapshot } from "../../snapshot.js";
 import type { PerMethodRetryOptions } from "../../retryPolicy.js";
 import { withTrace } from "../../tracing.js";
 
@@ -77,7 +80,7 @@ export class InvoiceModule extends BaseClientModule {
    */
   async clone(
     invoiceId: string,
-    overrides?: Partial<CreateInvoiceParams>
+    overrides?: CloneOverrides & InvoiceParamOverrides
   ): Promise<string> {
     return withTrace("InvoiceModule.clone", () =>
       this.client.cloneInvoice(invoiceId, overrides)
@@ -87,7 +90,7 @@ export class InvoiceModule extends BaseClientModule {
   /** Alias for `clone`. */
   async cloneInvoice(
     invoiceId: string,
-    overrides?: Partial<CreateInvoiceParams>
+    overrides?: CloneOverrides & InvoiceParamOverrides
   ): Promise<string> {
     return withTrace("InvoiceModule.cloneInvoice", () =>
       this.clone(invoiceId, overrides)
@@ -97,16 +100,16 @@ export class InvoiceModule extends BaseClientModule {
   /**
    * Updates an invoice with the provided changes.
    */
-  async update(invoiceId: string, updates: Partial<Invoice>): Promise<Invoice> {
+  async update(invoiceId: string, updates: Partial<Invoice>, changedBy: string): Promise<Invoice> {
     return withTrace("InvoiceModule.update", () =>
-      this.client.updateInvoice(invoiceId, updates)
+      this.client.updateInvoice(invoiceId, updates, changedBy)
     );
   }
 
   /** Alias for `update`. */
-  async updateInvoice(invoiceId: string, updates: Partial<Invoice>): Promise<Invoice> {
+  async updateInvoice(invoiceId: string, updates: Partial<Invoice>, changedBy: string): Promise<Invoice> {
     return withTrace("InvoiceModule.updateInvoice", () =>
-      this.update(invoiceId, updates)
+      this.update(invoiceId, updates, changedBy)
     );
   }
 
@@ -148,32 +151,32 @@ export class InvoiceModule extends BaseClientModule {
   /**
    * Finalizes an invoice on-chain.
    */
-  async finalize(invoiceId: string, caller?: string) {
+  async finalize(invoiceId: string, options?: { allowUnreachable?: boolean }) {
     return withTrace("InvoiceModule.finalize", () =>
-      this.client.finalizeInvoice(invoiceId, caller)
+      this.client.finalizeInvoice(invoiceId, options)
     );
   }
 
   /** Alias for `finalize`. */
-  async finalizeInvoice(invoiceId: string, caller?: string) {
+  async finalizeInvoice(invoiceId: string, options?: { allowUnreachable?: boolean }) {
     return withTrace("InvoiceModule.finalizeInvoice", () =>
-      this.finalize(invoiceId, caller)
+      this.finalize(invoiceId, options)
     );
   }
 
   /**
    * Synchronizes an invoice's on-chain state with optimistic tracking.
    */
-  async sync(invoiceId: string, options?: { traceId?: string; timeout?: number }) {
+  async sync(invoiceId: string) {
     return withTrace("InvoiceModule.sync", () =>
-      this.client.syncInvoice(invoiceId, options)
+      this.client.syncInvoice(invoiceId)
     );
   }
 
   /** Alias for `sync`. */
-  async syncInvoice(invoiceId: string, options?: { traceId?: string; timeout?: number }) {
+  async syncInvoice(invoiceId: string) {
     return withTrace("InvoiceModule.syncInvoice", () =>
-      this.sync(invoiceId, options)
+      this.sync(invoiceId)
     );
   }
 
@@ -214,8 +217,8 @@ export class InvoiceModule extends BaseClientModule {
    */
   async getByCreator(
     creator: string,
-    opts?: { limit?: number; cursor?: string }
-  ): Promise<Invoice[]> {
+    opts?: PaginationOptions
+  ): Promise<PaginatedResult<string>> {
     return withTrace("InvoiceModule.getByCreator", () =>
       this.client.getInvoicesByCreator(creator, opts)
     );
@@ -224,8 +227,8 @@ export class InvoiceModule extends BaseClientModule {
   /** Alias for `getByCreator`. */
   async getInvoicesByCreator(
     creator: string,
-    opts?: { limit?: number; cursor?: string }
-  ): Promise<Invoice[]> {
+    opts?: PaginationOptions
+  ): Promise<PaginatedResult<string>> {
     return withTrace("InvoiceModule.getInvoicesByCreator", () =>
       this.getByCreator(creator, opts)
     );
@@ -236,8 +239,8 @@ export class InvoiceModule extends BaseClientModule {
    */
   async getByRecipient(
     recipient: string,
-    opts?: { limit?: number; cursor?: string }
-  ): Promise<Invoice[]> {
+    opts?: PaginationOptions
+  ): Promise<PaginatedResult<string>> {
     return withTrace("InvoiceModule.getByRecipient", () =>
       this.client.getInvoicesByRecipient(recipient, opts)
     );
@@ -246,8 +249,8 @@ export class InvoiceModule extends BaseClientModule {
   /** Alias for `getByRecipient`. */
   async getInvoicesByRecipient(
     recipient: string,
-    opts?: { limit?: number; cursor?: string }
-  ): Promise<Invoice[]> {
+    opts?: PaginationOptions
+  ): Promise<PaginatedResult<string>> {
     return withTrace("InvoiceModule.getInvoicesByRecipient", () =>
       this.getByRecipient(recipient, opts)
     );

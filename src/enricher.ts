@@ -15,7 +15,7 @@ import { parseIPFSCid, fetchInvoiceMetadata, verifyCID } from "./ipfs.js";
 /**
  * An invoice enriched with resolved IPFS metadata.
  */
-export interface EnrichedInvoice extends Invoice {
+export interface EnrichedInvoice extends Omit<Invoice, "metadata"> {
   /** The resolved IPFS metadata, or null if not available. */
   metadata: InvoiceMetadata | Record<string, unknown> | null;
   /** The CID that was resolved, if any. */

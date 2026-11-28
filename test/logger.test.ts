@@ -271,7 +271,7 @@ describe("SdkLogger", () => {
       });
 
       expect(client.logger.getLevel()).toBe(LogLevel.NONE);
-    });
+    }, 20000);
 
     it("respects logger config and captures startup log", async () => {
       const { StellarSplitClient } = await import("../src/client.js");

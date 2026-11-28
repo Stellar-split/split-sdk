@@ -7,7 +7,7 @@
  * Issue #1030
  */
 
-import { isRetryableErrorCode } from "./errorRecovery";
+import { isRetryableErrorCode } from "./errorCodes.js";
 
 export interface BackoffOptions {
   /** Initial delay before first retry in milliseconds. Default: 500ms. */
@@ -81,7 +81,7 @@ export class MaxRetriesExceededError extends Error {
 
   constructor(attempts: number, lastError: unknown) {
     const reason = lastError instanceof Error ? lastError.message : String(lastError);
-    super(`Operation failed after ${attempts} attempts. Last error: ${reason}`);
+    super(`Operation failed after ${attempts} retries. Last error: ${reason}`);
     this.name = "MaxRetriesExceededError";
     this.attempts = attempts;
     this.lastError = lastError;

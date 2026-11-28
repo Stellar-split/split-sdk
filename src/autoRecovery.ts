@@ -124,6 +124,12 @@ export interface RollbackSimulationOptions {
   shouldFail?: (attempt: number, transactionId: string) => boolean;
   /** Optional hook invoked for every rollback lifecycle event. */
   onEvent?: (event: RollbackEvent) => void;
+  /** Optional hook invoked at the start of each attempt (used by {@link TransactionRollbackSimulator.run}). */
+  onStart?: (attempt: number) => void;
+  /** Optional hook invoked when an attempt succeeds (used by {@link TransactionRollbackSimulator.run}). */
+  onSuccess?: (attempt: number) => void;
+  /** Optional hook invoked when an attempt fails (used by {@link TransactionRollbackSimulator.run}). */
+  onFailure?: (attempt: number, error: Error) => void;
 }
 
 export interface RollbackSimulationResult {
@@ -144,12 +150,50 @@ export class TransactionRollbackSimulator {
   private readonly retryDelayMs: number;
   private readonly shouldFail: (attempt: number, transactionId: string) => boolean;
   private readonly onEvent: (event: RollbackEvent) => void;
+  private readonly onStart: (attempt: number) => void;
+  private readonly onSuccess: (attempt: number) => void;
+  private readonly onFailure: (attempt: number, error: Error) => void;
 
   constructor(options: RollbackSimulationOptions = {}) {
     this.maxAttempts = options.maxAttempts ?? 3;
     this.retryDelayMs = options.retryDelayMs ?? 0;
     this.shouldFail = options.shouldFail ?? (() => false);
     this.onEvent = options.onEvent ?? (() => {});
+    this.onStart = options.onStart ?? (() => {});
+    this.onSuccess = options.onSuccess ?? (() => {});
+    this.onFailure = options.onFailure ?? (() => {});
+  }
+
+  /**
+   * Run an executor function under the configured retry/failure policy,
+   * firing `onStart`/`onSuccess`/`onFailure` once per attempt. Unlike
+   * {@link simulate}, this does not require a `transactionId` and treats a
+   * `shouldFail` hit the same as a thrown error from `execute`.
+   */
+  async run(execute: () => Promise<unknown>): Promise<RollbackSimulationResult> {
+    let attempts = 0;
+    let lastError: Error | undefined;
+
+    while (attempts < this.maxAttempts) {
+      attempts += 1;
+      this.onStart(attempts);
+      try {
+        if (this.shouldFail(attempts, "")) {
+          throw new Error(`Simulated failure on attempt ${attempts}`);
+        }
+        await execute();
+        this.onSuccess(attempts);
+        return { transactionId: "", success: true, attempts, rolledBack: false };
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        this.onFailure(attempts, lastError);
+        if (attempts < this.maxAttempts) {
+          await this.delay();
+        }
+      }
+    }
+
+    return { transactionId: "", success: false, attempts, rolledBack: true, error: lastError };
   }
 
   private emit(event: RollbackEvent): void {

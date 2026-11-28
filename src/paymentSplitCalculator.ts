@@ -136,7 +136,7 @@ export class PaymentSplitCalculator {
     if (this.distributeRemainder && remainder > 0 && shares.length > 0) {
       let index = 0;
       while (remainder > 0) {
-        shares[index % shares.length].amount += 1;
+        shares[index % shares.length]!.amount += 1;
         remainder -= 1;
         index += 1;
       }

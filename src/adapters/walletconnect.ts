@@ -34,6 +34,22 @@ export interface WalletConnectAdapterOptions {
   expiry?: number;
 }
 
+/** A custody solution authorized to sign on behalf of the connected wallet. */
+export interface SigningDelegation {
+  /** Address of the delegate authorized to sign. */
+  delegate: string;
+  /** Unix timestamp (ms) after which the delegation is no longer valid. */
+  expiresAt: number;
+}
+
+/** Lifecycle event emitted when a signing delegation is created or revoked. */
+export type SigningDelegationEvent =
+  | { type: "delegation:created"; delegate: string; expiresAt: number }
+  | { type: "delegation:revoked"; delegate: string };
+
+/** Listener invoked for each emitted signing delegation event. */
+export type SigningDelegationListener = (event: SigningDelegationEvent) => void;
+
 /** Shape of the data written to / read from localStorage. */
 interface PersistedSession {
   topic: string;
@@ -159,6 +175,17 @@ export class WalletConnectAdapter implements WalletAdapter {
     };
   }
 
+  /** Notify delegation listeners of a lifecycle event. */
+  private emit(event: SigningDelegationEvent): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch {
+        // Listener failures must not break the adapter.
+      }
+    }
+  }
+
   async signTransaction(xdr: string, network: string): Promise<string> {
     return this.opts.client.request({
       topic: this.opts.topic,
@@ -174,7 +201,7 @@ export class WalletConnectAdapter implements WalletAdapter {
    * Clear the persisted session data from localStorage and reset internal
    * state so the user must reconnect after the next page load.
    */
-  disconnect(): void {
+  async disconnect(): Promise<void> {
     this.connected = false;
     WalletConnectAdapter.clearStoredSession();
     this.emitAccountChange(null);

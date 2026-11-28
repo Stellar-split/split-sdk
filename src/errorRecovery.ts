@@ -327,6 +327,102 @@ export const RECOVERY_STRATEGY_TABLE: Record<SdkErrorCode, RecoveryStrategy> = {
     backoffMs: 500,
     description: "Internal SDK error. Retry once with backoff; report the issue if it persists.",
   },
+  [SdkErrorCode.INVALID_INVOICE_ID]: {
+    action: "correct_input",
+    retryable: false,
+    description: "The invoice ID is malformed. Provide a valid invoice identifier.",
+  },
+  [SdkErrorCode.INVALID_DEADLINE]: {
+    action: "correct_input",
+    retryable: false,
+    description: "The invoice deadline is invalid. Provide a future Unix timestamp.",
+  },
+  [SdkErrorCode.INVALID_STATUS]: {
+    action: "correct_input",
+    retryable: false,
+    description: "The invoice status value is not recognized. Use a documented status value.",
+  },
+  [SdkErrorCode.MISSING_REQUIRED_FIELD]: {
+    action: "correct_input",
+    retryable: false,
+    description: "A required field is missing from the request. Populate it and retry.",
+  },
+  [SdkErrorCode.VALUE_OUT_OF_RANGE]: {
+    action: "correct_input",
+    retryable: false,
+    description: "A provided value is outside its permitted range. Correct it and retry.",
+  },
+  [SdkErrorCode.CONNECTION_REFUSED]: {
+    action: "use_fallback",
+    retryable: true,
+    maxAttempts: 3,
+    backoffMs: 1000,
+    description: "The connection was refused. Switch to a fallback endpoint or retry once it's reachable.",
+  },
+  [SdkErrorCode.DNS_RESOLUTION_FAILED]: {
+    action: "use_fallback",
+    retryable: true,
+    maxAttempts: 3,
+    backoffMs: 1000,
+    description: "The endpoint hostname could not be resolved. Check the URL or switch endpoints.",
+  },
+  [SdkErrorCode.TLS_ERROR]: {
+    action: "correct_input",
+    retryable: false,
+    description: "A TLS/SSL error occurred. Verify the endpoint certificate and trust store.",
+  },
+  [SdkErrorCode.TRANSACTION_NOT_FOUND]: {
+    action: "refresh_and_retry",
+    retryable: true,
+    maxAttempts: 3,
+    backoffMs: 2000,
+    description: "The transaction could not be found by hash yet. Allow time for propagation and recheck.",
+  },
+  [SdkErrorCode.DUPLICATE_TRANSACTION]: {
+    action: "wait_for_resolution",
+    retryable: false,
+    description: "An identical transaction was already submitted. Check its status before resubmitting.",
+  },
+  [SdkErrorCode.TRANSACTION_MALFORMED]: {
+    action: "correct_input",
+    retryable: false,
+    description: "The transaction envelope is malformed. Rebuild it with the SDK builders.",
+  },
+  [SdkErrorCode.CONTRACT_PANIC]: {
+    action: "correct_input",
+    retryable: false,
+    description: "The contract panicked during execution. Inspect diagnostic events and correct the invocation.",
+  },
+  [SdkErrorCode.CONTRACT_INVOCATION_FAILED]: {
+    action: "correct_input",
+    retryable: false,
+    description: "The contract invocation failed. Review operation parameters and invoice state.",
+  },
+  [SdkErrorCode.FORBIDDEN]: {
+    action: "abort",
+    retryable: false,
+    description: "The action is forbidden for the current account. Verify the required role or permission.",
+  },
+  [SdkErrorCode.SESSION_EXPIRED]: {
+    action: "correct_input",
+    retryable: false,
+    description: "The authentication session has expired. Re-authenticate and retry.",
+  },
+  [SdkErrorCode.NOT_IMPLEMENTED]: {
+    action: "abort",
+    retryable: false,
+    description: "This feature is not implemented in the current SDK version.",
+  },
+  [SdkErrorCode.UNSUPPORTED_NETWORK]: {
+    action: "correct_input",
+    retryable: false,
+    description: "The configured network is not supported. Use a supported network passphrase.",
+  },
+  [SdkErrorCode.CONFIGURATION_ERROR]: {
+    action: "correct_input",
+    retryable: false,
+    description: "The SDK is misconfigured. Review and correct the configuration before retrying.",
+  },
 };
 
 /**
@@ -431,7 +527,7 @@ export interface BackoffOptions {
   /**
    * Jitter fraction in `[0, 1]` applied to each delay to avoid thundering
    * herds. `0` disables jitter; `1` randomizes the delay within `[0, delay]`.
-   * Defaults to 0.2.
+   * Defaults to 0 (no jitter).
    */
   jitter?: number;
 }
@@ -505,6 +601,9 @@ export function resetRecoveryStats(): void {
   recoveryStats = { ...EMPTY_STATS };
 }
 
+/** Alias of {@link RecoveryRunnerOptions}, for callers configuring an {@link ErrorRecoveryRunner}. */
+export type RecoveryStrategyOptions = RecoveryRunnerOptions;
+
 /**
  * Classify an error as transient (safe to retry) or permanent.
  *
@@ -536,7 +635,7 @@ function computeBackoff(
   const base = options.baseDelayMs ?? strategy.backoffMs ?? 500;
   const multiplier = options.multiplier ?? 2;
   const maxDelay = options.maxDelayMs ?? 30_000;
-  const jitter = Math.min(Math.max(options.jitter ?? 0.2, 0), 1);
+  const jitter = Math.min(Math.max(options.jitter ?? 0, 0), 1);
 
   const raw = base * multiplier ** (attempt - 1);
   const capped = Math.min(raw, maxDelay);
@@ -663,5 +762,49 @@ export async function executeWithRecovery<T>(
       ? (attempt, _err, _delay, strategy) => options.onRetry!(attempt, strategy)
       : undefined,
   });
+}
+
+/**
+ * Stateful wrapper around {@link runWithRecovery} that tracks its own
+ * {@link RecoveryStats} independent of the shared global counters
+ * ({@link getRecoveryStats}/{@link resetRecoveryStats}), for callers (such as
+ * `AutoRecoveryMonitor`) that want per-instance recovery statistics.
+ */
+export class ErrorRecoveryRunner {
+  private stats: RecoveryStats = { ...EMPTY_STATS };
+
+  constructor(private readonly options: RecoveryRunnerOptions = {}) {}
+
+  /** Run `op` with this runner's configured recovery strategy, tracking local stats. */
+  async run<T>(op: () => Promise<T>): Promise<T> {
+    const before = getRecoveryStats();
+    try {
+      return await runWithRecovery(op, this.options);
+    } finally {
+      this.mergeDelta(before, getRecoveryStats());
+    }
+  }
+
+  private mergeDelta(before: RecoveryStats, after: RecoveryStats): void {
+    this.stats = {
+      operations: this.stats.operations + (after.operations - before.operations),
+      attempts: this.stats.attempts + (after.attempts - before.attempts),
+      successes: this.stats.successes + (after.successes - before.successes),
+      failures: this.stats.failures + (after.failures - before.failures),
+      retries: this.stats.retries + (after.retries - before.retries),
+      totalBackoffMs: this.stats.totalBackoffMs + (after.totalBackoffMs - before.totalBackoffMs),
+      totalTimeMs: this.stats.totalTimeMs + (after.totalTimeMs - before.totalTimeMs),
+    };
+  }
+
+  /** Snapshot of this runner's accumulated statistics. */
+  getStats(): RecoveryStats {
+    return { ...this.stats };
+  }
+
+  /** Reset this runner's accumulated statistics to zero. */
+  resetStats(): void {
+    this.stats = { ...EMPTY_STATS };
+  }
 }
 

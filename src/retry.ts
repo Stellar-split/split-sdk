@@ -35,17 +35,44 @@ export class RetryBudget {
   }
 }
 
+export interface WithRetryOptions {
+  maxAttempts: number;
+  baseDelayMs: number;
+  /** Optional predicate overriding the default retryable-error check. */
+  retryIf?: (error: unknown) => boolean;
+  budget?: RetryBudget;
+}
+
 /**
  * Retry an asynchronous operation with exponential backoff.
  * If a RetryBudget is supplied, retries stop once it is exhausted.
+ *
+ * Accepts either positional args (legacy) or a single options object.
  */
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  options: WithRetryOptions
+): Promise<T>;
 export async function withRetry<T>(
   fn: () => Promise<T>,
   maxAttempts: number,
   baseDelayMs: number,
   budget?: RetryBudget
+): Promise<T>;
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  maxAttemptsOrOptions: number | WithRetryOptions,
+  baseDelayMsArg?: number,
+  budgetArg?: RetryBudget
 ): Promise<T> {
-  const attempts = Math.max(1, maxAttempts);
+  const opts: WithRetryOptions =
+    typeof maxAttemptsOrOptions === "number"
+      ? { maxAttempts: maxAttemptsOrOptions, baseDelayMs: baseDelayMsArg!, budget: budgetArg }
+      : maxAttemptsOrOptions;
+
+  const attempts = Math.max(1, opts.maxAttempts);
+  const retryIf = opts.retryIf ?? isRetryableError;
+  const budget = opts.budget;
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -53,13 +80,13 @@ export async function withRetry<T>(
       return await fn();
     } catch (error) {
       lastError = error;
-      if (attempt === attempts || !isRetryableError(error)) {
+      if (attempt === attempts || !retryIf(error)) {
         break;
       }
       if (budget && !budget.hasRemaining()) {
         break;
       }
-      const delayMs = computeBackoffDelay(attempt, { baseDelayMs });
+      const delayMs = computeBackoffDelay(attempt, { baseDelayMs: opts.baseDelayMs });
       const start = Date.now();
       await sleep(delayMs);
       budget?.consume(Date.now() - start);

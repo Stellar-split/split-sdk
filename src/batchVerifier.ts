@@ -177,6 +177,24 @@ export interface VerifyBatchPayResult {
   errors: string[];
 }
 
+/** A payment carrying its own already-resolved invoice, for the single-arg {@link verifyBatchPayments} overload. */
+export interface SimpleBatchPayment {
+  invoice: { id: string; status: string; token: string };
+  token: string;
+}
+
+/** Result returned by the single-arg {@link verifyBatchPayments} overload. */
+export interface SimpleBatchVerificationResult {
+  valid: boolean;
+  errors: string[];
+}
+
+/**
+ * Verify a batch of payments that each already carry their own resolved
+ * invoice, checking that every invoice is `Pending` and that the payment's
+ * token matches the invoice's token.
+ */
+export function verifyBatchPayments(payments: SimpleBatchPayment[]): SimpleBatchVerificationResult;
 /**
  * Verify that all invoices in a batch share the same token and are in a
  * payable state, before submitting the on-chain transaction.
@@ -185,6 +203,36 @@ export interface VerifyBatchPayResult {
  * @param payments - The proposed batch payments (invoiceId + amount pairs).
  */
 export function verifyBatchPayments(
+  invoices: Invoice[],
+  payments: BatchPayment[]
+): BatchVerificationResult;
+export function verifyBatchPayments(
+  invoicesOrPayments: Invoice[] | SimpleBatchPayment[],
+  payments?: BatchPayment[]
+): BatchVerificationResult | SimpleBatchVerificationResult {
+  if (payments === undefined) {
+    const simplePayments = invoicesOrPayments as SimpleBatchPayment[];
+    const errors: string[] = [];
+    for (const payment of simplePayments) {
+      if (payment.invoice.status !== "Pending") {
+        errors.push(
+          `Invoice ${payment.invoice.id}: status is "${payment.invoice.status}", expected "Pending"`,
+        );
+      }
+      if (payment.token !== payment.invoice.token) {
+        errors.push(
+          `Invoice ${payment.invoice.id}: token "${payment.token}" does not match invoice token "${payment.invoice.token}"`,
+        );
+      }
+    }
+    return { valid: errors.length === 0, errors };
+  }
+
+  const invoices = invoicesOrPayments as Invoice[];
+  return verifyBatchPaymentsFull(invoices, payments);
+}
+
+function verifyBatchPaymentsFull(
   invoices: Invoice[],
   payments: BatchPayment[]
 ): BatchVerificationResult {

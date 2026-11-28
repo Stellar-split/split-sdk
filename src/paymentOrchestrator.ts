@@ -188,10 +188,57 @@ export class PaymentOrchestrator {
     [K in EventName]?: Set<EventHandler<K>>;
   } = {};
 
-  constructor(executor: PaymentExecutor, options: PaymentOrchestratorOptions = {}) {
-    this._executor = executor;
+  /** Generic by-id payments queued via {@link queuePayment} (separate from the batch `queue`/`process` API above). */
+  private readonly _byId = new Map<PaymentId, { status: PaymentStatus; payment: Record<string, unknown> }>();
+
+  constructor(executor?: PaymentExecutor, options: PaymentOrchestratorOptions = {}) {
+    this._executor = executor ?? (async () => ({ txHash: `mock-${generateId()}` }));
     this._maxRetries = options.maxRetries ?? 3;
     this._baseRetryDelayMs = options.baseRetryDelayMs ?? 200;
+  }
+
+  // -------------------------------------------------------------------------
+  // Public API — generic by-id queueing (queuePayment / processPayment)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Queue an arbitrary payment record (not required to match
+   * {@link PaymentParams}) and return a unique id to process it later with
+   * {@link processPayment} and inspect with the single-arg {@link getStatus}.
+   */
+  async queuePayment(payment: Record<string, unknown>): Promise<PaymentId> {
+    const id = generateId();
+    this._byId.set(id, { status: "queued", payment });
+    return id;
+  }
+
+  /**
+   * Process a payment previously queued with {@link queuePayment}.
+   * Invalid amounts (negative numbers) fail; everything else succeeds.
+   * Safe to call concurrently for the same id — only the first call performs
+   * the transition, later calls observe the already-updated status.
+   */
+  async processPayment(id: PaymentId): Promise<void> {
+    const entry = this._byId.get(id);
+    if (!entry) {
+      throw new Error(`PaymentOrchestrator: unknown payment id "${id}"`);
+    }
+    if (entry.status !== "queued") {
+      // Already processing/completed/failed — no-op to avoid double-processing.
+      return;
+    }
+    entry.status = "processing";
+
+    try {
+      const amount = entry.payment.amount;
+      if (typeof amount === "number" && amount < 0) {
+        throw new Error(`Invalid payment amount: ${amount}`);
+      }
+      await this._executor(entry.payment as unknown as QueuedPayment);
+      entry.status = "completed";
+    } catch {
+      entry.status = "failed";
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -254,7 +301,18 @@ export class PaymentOrchestrator {
   /**
    * Return a point-in-time snapshot of the orchestrator's state counters.
    */
-  getStatus(): OrchestratorStatus {
+  getStatus(): OrchestratorStatus;
+  /** Return the status of a single payment previously queued via {@link queuePayment}. */
+  getStatus(id: PaymentId): PaymentStatus;
+  getStatus(id?: PaymentId): OrchestratorStatus | PaymentStatus {
+    if (id !== undefined) {
+      const entry = this._byId.get(id);
+      if (!entry) {
+        throw new Error(`PaymentOrchestrator: unknown payment id "${id}"`);
+      }
+      return entry.status;
+    }
+
     const processing = this._processing ? 1 : 0;
     return {
       queued: this._queue.length,

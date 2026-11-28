@@ -99,7 +99,7 @@ export class MetaMaskAdapter implements WalletAdapter {
         throw new MetaMaskConnectionError("No accounts returned from MetaMask.");
       }
 
-      this.connectedAddress = accounts[0];
+      this.connectedAddress = accounts[0]!;
       this.setupAccountChangeListener(provider);
       return this.connectedAddress;
     } catch (err: any) {
@@ -131,7 +131,7 @@ export class MetaMaskAdapter implements WalletAdapter {
       throw new MetaMaskConnectionError("MetaMask is not connected. Call connect() first.");
     }
 
-    this.connectedAddress = accounts[0];
+    this.connectedAddress = accounts[0]!;
     return this.connectedAddress;
   }
 
@@ -190,7 +190,7 @@ export class MetaMaskAdapter implements WalletAdapter {
     if (!provider.on || this.accountsChangedBound) return;
 
     this.accountsChangedBound = (accounts: string[]) => {
-      const newAddress = accounts && accounts.length > 0 ? accounts[0] : "";
+      const newAddress = accounts && accounts.length > 0 ? accounts[0]! : "";
       this.connectedAddress = newAddress || null;
       for (const handler of this.accountChangeHandlers) {
         try {

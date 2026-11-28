@@ -158,11 +158,34 @@ export interface BatchExecutorConfig {
 // ---------------------------------------------------------------------------
 
 export function validateBatchOperation(op: BatchOperation, index: number): void {
-  if (!op || typeof op !== "object" || !("type" in op)) {
+  if (!op || typeof op !== "object") {
     throw new ValidationError(`Operation at index ${index} is missing a valid type.`);
   }
 
-  if (op.source && !StrKey.isValidEd25519PublicKey(op.source)) {
+  // A simple, untyped payment-like shape (destination/amount/token, no
+  // `type` discriminant) is also accepted as a convenience shorthand for a
+  // "payment" operation — validated loosely (non-empty destination/token,
+  // positive amount) rather than against the strict StrKey-address checks
+  // used by the fully-typed `payment` branch below.
+  if (!("type" in op)) {
+    if ("destination" in op && "amount" in op) {
+      const loose = op as unknown as { destination: unknown; amount: unknown; token?: unknown };
+      if (typeof loose.destination !== "string" || loose.destination.length === 0) {
+        throw new ValidationError(`Invalid payment destination at index ${index}: ${loose.destination}`, { index });
+      }
+      const numAmt = Number(loose.amount);
+      if (!Number.isFinite(numAmt) || numAmt <= 0) {
+        throw new ValidationError(`Payment amount must be a positive number at index ${index}, got: ${loose.amount}`, { index });
+      }
+      if ("token" in loose && (typeof loose.token !== "string" || loose.token.length === 0)) {
+        throw new ValidationError(`Payment token must be a non-empty string at index ${index}`, { index });
+      }
+      return;
+    }
+    throw new ValidationError(`Operation at index ${index} is missing a valid type.`);
+  }
+
+  if ("source" in op && op.source && !StrKey.isValidEd25519PublicKey(op.source)) {
     throw new ValidationError(`Invalid source address at operation index ${index}: ${op.source}`, { index });
   }
 
@@ -304,7 +327,9 @@ export class BatchOperationBuilder {
         case "manageData":
           return Operation.manageData({
             name: op.name,
-            value: op.value,
+            value: op.value instanceof Uint8Array && !Buffer.isBuffer(op.value)
+              ? Buffer.from(op.value)
+              : op.value,
             source: op.source,
           });
         case "changeTrust":
@@ -548,10 +573,10 @@ export class BatchExecutor {
     const validIndices: number[] = [];
     for (let i = 0; i < operations.length; i++) {
       try {
-        validateBatchOperation(operations[i], i);
+        validateBatchOperation(operations[i]!, i);
         validIndices.push(i);
       } catch (err) {
-        results[i].error = err instanceof Error ? err.message : String(err);
+        results[i]!.error = err instanceof Error ? err.message : String(err);
       }
     }
 
@@ -562,7 +587,7 @@ export class BatchExecutor {
     // Execute valid operations in sub-batches of at most MAX_OPERATIONS_PER_BATCH.
     for (let start = 0; start < validIndices.length; start += MAX_OPERATIONS_PER_BATCH) {
       const chunkIndices = validIndices.slice(start, start + MAX_OPERATIONS_PER_BATCH);
-      const chunkOps = chunkIndices.map((i) => operations[i]);
+      const chunkOps = chunkIndices.map((i) => operations[i]!);
 
       try {
         if (!seq && this.config.server?.getAccount) {
@@ -573,7 +598,7 @@ export class BatchExecutor {
         totalFee += BigInt(chunkResult.feeStroops || "0");
         txHashes.push(chunkResult.txHash);
         for (const i of chunkIndices) {
-          results[i].success = true;
+          results[i]!.success = true;
         }
         // Advance sequence for subsequent sub-batches.
         if (seq !== undefined) {
@@ -582,8 +607,8 @@ export class BatchExecutor {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         for (const i of chunkIndices) {
-          results[i].success = false;
-          results[i].error = message;
+          results[i]!.success = false;
+          results[i]!.error = message;
         }
       }
     }

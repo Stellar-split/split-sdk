@@ -8,6 +8,16 @@
 
 import { Keypair, StrKey, xdr } from "@stellar/stellar-sdk";
 import { StellarSplitClient } from "../src/client.js";
+
+// `scValToNative` is a non-configurable getter on the real SDK namespace, so
+// it can't be `vi.spyOn`-ed directly; override it via a partial module mock.
+vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@stellar/stellar-sdk")>();
+  return {
+    ...actual,
+    scValToNative: vi.fn(actual.scValToNative),
+  };
+});
 import {
   InvalidBpsError,
   OverReleaseError,

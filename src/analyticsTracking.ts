@@ -447,8 +447,8 @@ export class AnalyticsCollector {
 
   private calculatePercentile(sorted: number[], p: number): number {
     if (sorted.length === 0) return 0;
-    const idx = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
-    return sorted[idx];
+    const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
+    return sorted[idx]!;
   }
 
   getMethodMetrics(): Record<string, MethodMetric> {
@@ -461,8 +461,8 @@ export class AnalyticsCollector {
         errors: rec.errors,
         errorRate: rec.count === 0 ? 0 : rec.errors / rec.count,
         avgDurationMs: rec.durations.length === 0 ? 0 : total / rec.durations.length,
-        minDurationMs: sorted.length === 0 ? 0 : sorted[0],
-        maxDurationMs: sorted.length === 0 ? 0 : sorted[sorted.length - 1],
+        minDurationMs: sorted.length === 0 ? 0 : sorted[0]!,
+        maxDurationMs: sorted.length === 0 ? 0 : sorted[sorted.length - 1]!,
         p50DurationMs: this.calculatePercentile(sorted, 50),
         p95DurationMs: this.calculatePercentile(sorted, 95),
         p99DurationMs: this.calculatePercentile(sorted, 99),
@@ -743,7 +743,7 @@ export class AnalyticsTracker {
         try {
           await fetchImpl(this.endpoint, {
             method: "POST",
-            headers: { "content-type": "application/json" },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify(report),
           });
         } catch (err) {
@@ -763,4 +763,66 @@ export class AnalyticsTracker {
       this.flushTimer = undefined;
     }
   }
+
+  /** Alias for {@link trackEvent}. */
+  track(input: AnalyticsEventInput): void {
+    this.trackEvent(input);
+  }
+
+  /** Alias for {@link recordMethod}. */
+  trackMethod(method: string, durationMs: number, success = true): void {
+    this.recordMethod(method, durationMs, success);
+  }
+
+  /** Alias for {@link recordMetric}. */
+  trackMetric(name: string, value: number): void {
+    this.recordMetric(name, value);
+  }
+
+  /** Records an error as both a metric counter and an "errors"-category event. */
+  trackError(error: unknown, properties?: Record<string, unknown>): void {
+    if (!this.isActive()) return;
+    this.collector.recordMetric("error_count", 1);
+    this.trackEvent({
+      name: "error",
+      category: "errors",
+      properties: {
+        message: error instanceof Error ? error.message : String(error),
+        ...properties,
+      },
+    });
+  }
+
+  /** Alias for {@link getReport}. */
+  generateReport(): AnalyticsReport {
+    return this.getReport();
+  }
+}
+
+/**
+ * Wraps a client object so every method call is timed and recorded via
+ * {@link AnalyticsTracker.trackMethod}. Returns the original client unchanged
+ * when the tracker is inactive.
+ */
+export function wrapClientWithAnalytics<T extends object>(client: T, tracker: AnalyticsTracker): T {
+  if (!tracker.isActive()) return client;
+
+  return new Proxy(client, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value !== "function") return value;
+
+      return async (...args: unknown[]) => {
+        const start = Date.now();
+        try {
+          const result = await (value as (...a: unknown[]) => unknown).apply(target, args);
+          tracker.trackMethod(String(prop), Date.now() - start, true);
+          return result;
+        } catch (err) {
+          tracker.trackMethod(String(prop), Date.now() - start, false);
+          throw err;
+        }
+      };
+    },
+  }) as T;
 }

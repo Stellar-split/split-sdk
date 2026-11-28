@@ -127,8 +127,8 @@ export class Histogram {
     this.max = Math.max(this.max, value);
     this.observations.push(value);
     for (let i = 0; i < this.buckets.length; i += 1) {
-      if (value <= this.buckets[i]) {
-        this.bucketCounts[i] += 1;
+      if (value <= this.buckets[i]!) {
+        this.bucketCounts[i]! += 1;
       }
     }
   }
@@ -149,7 +149,7 @@ export class Histogram {
   summary(): HistogramSnapshot {
     const buckets: Record<string, number> = {};
     this.buckets.forEach((bound, i) => {
-      buckets[String(bound)] = this.bucketCounts[i];
+      buckets[String(bound)] = this.bucketCounts[i]!;
     });
 
     const percentiles: Record<string, number> = {};
@@ -174,13 +174,22 @@ export class Histogram {
       return 0;
     }
     const idx = Math.min(sorted.length - 1, Math.floor(p * sorted.length));
-    return sorted[idx];
+    return sorted[idx]!;
   }
 }
 
 /** Registry that owns and exposes all metrics. */
 export class MetricsRegistry {
   private readonly metrics = new Map<string, Counter | Gauge | Histogram>();
+
+  private getOrCreate<T extends Counter | Gauge | Histogram>(name: string, create: () => T): T {
+    let metric = this.metrics.get(name);
+    if (!metric) {
+      metric = create();
+      this.metrics.set(name, metric);
+    }
+    return metric as T;
+  }
 
   counter(name: string, help?: string): Counter {
     return this.getOrCreate(name, () => new Counter(name, help)) as Counter;

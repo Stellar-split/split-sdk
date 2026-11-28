@@ -646,7 +646,7 @@ export class ErrorAggregator {
             lines.push(`  Accounts: ${g.affectedAccounts.join(", ")}`);
           }
           if (g.sampleErrors.length > 0) {
-            lines.push(`  Latest sample: ${g.sampleErrors[g.sampleErrors.length - 1].message}`);
+            lines.push(`  Latest sample: ${g.sampleErrors[g.sampleErrors.length - 1]!.message}`);
           }
         }
         lines.push("==================================================");
@@ -686,7 +686,7 @@ export class ErrorAggregator {
             md.push(`- **Affected Invoices:** ${g.affectedInvoices.map((id) => `\`${id}\``).join(", ")}`);
           }
           if (g.sampleErrors.length > 0) {
-            md.push(`- **Sample Error:** \`${g.sampleErrors[g.sampleErrors.length - 1].message}\``);
+            md.push(`- **Sample Error:** \`${g.sampleErrors[g.sampleErrors.length - 1]!.message}\``);
           }
           md.push("");
         }

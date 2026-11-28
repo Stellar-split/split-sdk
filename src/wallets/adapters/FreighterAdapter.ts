@@ -8,15 +8,17 @@
  */
 
 import type { WalletAdapter } from "../../types.js";
+import { StellarSplitError } from "../../errors.js";
 
 type Unsubscribe = () => void;
 
 declare global {
   interface Window {
     freighter?: {
-      isConnected(): Promise<boolean>;
-      getPublicKey(): Promise<string>;
-      signTransaction(xdr: string, network: string): Promise<string>;
+      isConnected(): Promise<{ isConnected: boolean }>;
+      getAddress(): Promise<{ address: string }>;
+      getNetwork(): Promise<{ network: string; networkPassphrase: string }>;
+      signTransaction(xdr: string, network: string): Promise<{ signedTxXdr: string }>;
     };
   }
 }
@@ -41,38 +43,71 @@ export class FreighterNotInstalledError extends Error {
   }
 }
 
+/**
+ * Thrown when the Freighter extension is installed but a connection
+ * operation (reading the public key) fails — e.g. the wallet is locked or
+ * the user has no account set up.
+ */
+export class FreighterConnectionError extends StellarSplitError {
+  constructor(message: string, context?: Record<string, unknown>) {
+    super(message, "FREIGHTER_CONNECTION_ERROR", context);
+    this.name = "FreighterConnectionError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
 export class FreighterAdapter implements WalletAdapter {
   readonly name = "Freighter";
-  private accountChangeHandlers: Array<(address: string) => void> = [];
+  private accountChangeHandlers: Array<(address: string | null) => void> = [];
   private pollInterval: NodeJS.Timeout | null = null;
   private lastKnownAddress: string | null = null;
+
+  /** Check whether the Freighter extension is available in the current environment. */
+  isAvailable(): boolean {
+    return typeof window !== "undefined" && !!window.freighter;
+  }
 
   async connect(): Promise<string> {
     this.assertInstalled();
 
-    const address = await window.freighter!.getPublicKey();
+    let address: string;
+    try {
+      ({ address } = await window.freighter!.getAddress());
+    } catch (err) {
+      throw new FreighterConnectionError(
+        `Failed to connect to Freighter: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
+      );
+    }
     this.lastKnownAddress = address;
-    
+
     // Start polling for account changes (Freighter doesn't have a native event)
     this.startAccountChangePolling();
-    
+
     return address;
   }
 
   async sign(xdr: string, network: string): Promise<string> {
     this.assertInstalled();
 
-    return await window.freighter!.signTransaction(xdr, network);
+    const { signedTxXdr } = await window.freighter!.signTransaction(xdr, network);
+    return signedTxXdr;
   }
 
   async getAddress(): Promise<string> {
     this.assertInstalled();
 
-    return await window.freighter!.getPublicKey();
+    const { address } = await window.freighter!.getAddress();
+    return address;
   }
 
   async signTransaction(xdr: string, network: string): Promise<string> {
     return this.sign(xdr, network);
+  }
+
+  /** Whether `connect()` has succeeded and `disconnect()` hasn't been called since. */
+  isConnected(): boolean {
+    return this.lastKnownAddress !== null;
   }
 
   disconnect(): void {
@@ -80,11 +115,18 @@ export class FreighterAdapter implements WalletAdapter {
       clearInterval(this.pollInterval);
       this.pollInterval = null;
     }
-    this.accountChangeHandlers = [];
     this.lastKnownAddress = null;
+    for (const handler of this.accountChangeHandlers) {
+      try {
+        handler(null);
+      } catch (err) {
+        console.error("Error in account change handler:", err);
+      }
+    }
+    this.accountChangeHandlers = [];
   }
 
-  onAccountChange(handler: (address: string) => void): Unsubscribe {
+  onAccountChange(handler: (address: string | null) => void): Unsubscribe {
     this.accountChangeHandlers.push(handler);
     
     return () => {
@@ -115,8 +157,8 @@ export class FreighterAdapter implements WalletAdapter {
     this.pollInterval = setInterval(async () => {
       try {
         if (!window.freighter) return;
-        
-        const currentAddress = await window.freighter.getPublicKey();
+
+        const { address: currentAddress } = await window.freighter.getAddress();
         
         if (currentAddress !== this.lastKnownAddress) {
           this.lastKnownAddress = currentAddress;

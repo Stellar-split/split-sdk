@@ -1,4 +1,4 @@
-import type { Keypair } from "@stellar/stellar-sdk";
+import { Keypair } from "@stellar/stellar-sdk";
 import type { RequestInterceptor, RPCRequest } from "./interceptors.js";
 import type { SecureKeyStore } from "./secureKeyStore.js";
 
@@ -50,12 +50,34 @@ export function createRequestSigningInterceptor(
     const message = `stellar-split:${timestamp}`;
     // Retrieve the key through the secure store: this enforces access controls,
     // decrypts the key material, and records key usage.
-    const keypair = keyStore.useKey(keyId, principal, "request-signing");
+    const secret = await keyStore.getSecret(keyId, { principal });
+    const keypair = Keypair.fromSecret(secret);
     const header = `Bearer ${keypair.publicKey()}:${timestamp}:${signRequest("ed25519", message, keypair)}`;
 
     // Attach an `__auth` property to params so tests/interceptors can inspect it.
     // The RPC transport in this SDK does not surface HTTP headers via interceptors,
     // so we put the header into the request params for downstream consumers/tests.
+    const params = Array.isArray(req.params) ? [...req.params] : [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (params as any).__auth = header;
+
+    return { method: req.method, params };
+  };
+}
+
+/**
+ * Create a request-signing interceptor from a raw {@link Keypair} directly,
+ * bypassing {@link SecureKeyStore}'s access-control/audit layer. Intended for
+ * the simple `SplitClientConfig.signingKeypair` option, where the caller
+ * already holds the keypair in memory and doesn't need key-store-managed
+ * access policies or usage auditing.
+ */
+export function createKeypairSigningInterceptor(keypair: Keypair): RequestInterceptor {
+  return async (req: RPCRequest): Promise<RPCRequest> => {
+    const timestamp = Date.now();
+    const message = `stellar-split:${timestamp}`;
+    const header = `Bearer ${keypair.publicKey()}:${timestamp}:${signRequest("ed25519", message, keypair)}`;
+
     const params = Array.isArray(req.params) ? [...req.params] : [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (params as any).__auth = header;

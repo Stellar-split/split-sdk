@@ -5,9 +5,9 @@
  * network lookups, reduce RPC pressure, and improve invocation performance.
  */
 
-import { AbiFetchError, AbiNotFoundError } from "./errors.js";
 import type { StorageAdapter } from "./storage/storageAdapter.js";
 import { MemoryStorageAdapter } from "./storage/storageAdapter.js";
+import { AbiNotFoundError } from "./errors.js";
 
 // ---------------------------------------------------------------------------
 // Types & Interfaces
@@ -465,5 +465,162 @@ export class AdapterAbiStorage implements AbiStorage {
       const value = this.adapter.getItem(storageKey);
       return total + new TextEncoder().encode(storageKey + (value ?? '')).length;
     }, 0);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Static fetcher (test / offline use)
+// ---------------------------------------------------------------------------
+
+/** A {@link ContractAbiFetcher} backed by a static, in-memory registry of ABIs. */
+export class StaticContractAbiFetcher implements ContractAbiFetcher {
+  private readonly abis = new Map<string, ContractAbi>();
+
+  /** Registers (or replaces) the ABI for a contract ID. */
+  registerAbi(contractId: string, abi: ContractAbi): void {
+    this.abis.set(contractId, abi);
+  }
+
+  async fetchAbi(contractId: string): Promise<ContractAbi> {
+    const abi = this.abis.get(contractId);
+    if (!abi) {
+      throw new AbiNotFoundError(contractId);
+    }
+    return abi;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Contract ABI cache
+// ---------------------------------------------------------------------------
+
+function stripAbiDocs(abi: ContractAbi): ContractAbi {
+  return {
+    ...abi,
+    functions: abi.functions.map((fn) => ({
+      ...fn,
+      doc: undefined,
+      inputs: fn.inputs.map((input) => ({ ...input, doc: undefined })),
+      outputs: fn.outputs?.map((output) => ({ ...output, doc: undefined })),
+    })),
+    types: abi.types?.map((type) => ({ ...type, doc: undefined })),
+  };
+}
+
+function estimateAbiBytes(abi: ContractAbi): number {
+  return new TextEncoder().encode(JSON.stringify(abi)).length;
+}
+
+/**
+ * Caches Soroban contract ABIs, eliminating redundant network lookups for
+ * repeated invocations against the same contract (#1054).
+ */
+export class ContractAbiCache {
+  private readonly fetcher: ContractAbiFetcher | ((contractId: string) => Promise<ContractAbi>);
+  private readonly storage: AbiStorage;
+  private readonly ttlMs: number;
+  private readonly compact: boolean;
+  private hits = 0;
+  private misses = 0;
+
+  constructor(options: AbiCacheOptions) {
+    this.fetcher =
+      options.fetcher ??
+      (() => {
+        throw new Error("ContractAbiCache requires a fetcher");
+      });
+    this.storage =
+      options.storage ??
+      new MemoryAbiStorage({ maxEntries: options.maxEntries, maxBytes: options.maxStorageBytes });
+    this.ttlMs = options.ttlMs ?? 3_600_000;
+    this.compact = options.compact ?? false;
+  }
+
+  private async fetch(contractId: string): Promise<ContractAbi> {
+    return typeof this.fetcher === "function"
+      ? this.fetcher(contractId)
+      : this.fetcher.fetchAbi(contractId);
+  }
+
+  async get(contractId: string): Promise<ContractAbi> {
+    const existing = await this.storage.get(contractId);
+    if (existing && existing.expiresAt > Date.now()) {
+      this.hits++;
+      return existing.abi;
+    }
+
+    this.misses++;
+    const fetched = await this.fetch(contractId);
+    const abi = this.compact ? stripAbiDocs(fetched) : fetched;
+    const now = Date.now();
+    const entry: CachedAbiEntry = {
+      contractId,
+      abi,
+      cachedAt: now,
+      expiresAt: now + this.ttlMs,
+      lastAccessedAt: now,
+      accessCount: 1,
+      byteSize: estimateAbiBytes(abi),
+    };
+    await this.storage.set(contractId, entry);
+    return abi;
+  }
+
+  async has(contractId: string): Promise<boolean> {
+    const entry = await this.storage.get(contractId);
+    if (!entry) return false;
+    return entry.expiresAt > Date.now();
+  }
+
+  async invalidate(contractId: string): Promise<boolean> {
+    return this.storage.delete(contractId);
+  }
+
+  async invalidateByWasmHash(wasmHash: string): Promise<number> {
+    let removed = 0;
+    for (const key of await this.storage.keys()) {
+      const entry = await this.storage.get(key);
+      if (entry && entry.abi.wasmHash === wasmHash) {
+        await this.storage.delete(key);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
+  async invalidateExpired(): Promise<number> {
+    const now = Date.now();
+    let removed = 0;
+    for (const key of await this.storage.keys()) {
+      const entry = await this.storage.get(key);
+      if (entry && entry.expiresAt <= now) {
+        await this.storage.delete(key);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
+  async clear(): Promise<void> {
+    await this.storage.clear();
+  }
+
+  async getStats(): Promise<AbiCacheStats> {
+    const entryCount = await this.storage.size();
+    const storageBytes = await this.storage.getStorageBytes();
+    const total = this.hits + this.misses;
+    const storageWithEvictions = this.storage as unknown as { getEvictions?: () => number };
+    const evictions =
+      typeof storageWithEvictions.getEvictions === "function"
+        ? storageWithEvictions.getEvictions()
+        : 0;
+    return {
+      hits: this.hits,
+      misses: this.misses,
+      hitRate: total === 0 ? 0 : this.hits / total,
+      entryCount,
+      storageBytes,
+      evictions,
+    };
   }
 }

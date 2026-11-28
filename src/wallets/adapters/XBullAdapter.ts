@@ -64,6 +64,11 @@ export class XBullAdapter implements WalletAdapter {
   private unsubscribe: (() => void) | null = null;
   private currentPublicKey: string | null = null;
 
+  /** Check whether the xBull extension is available in the current environment. */
+  isAvailable(): boolean {
+    return typeof window !== "undefined" && !!window.xbull;
+  }
+
   async connect(): Promise<string> {
     if (!window.xbull) {
       throw new Error("xBull wallet not installed");

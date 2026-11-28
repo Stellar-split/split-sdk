@@ -866,6 +866,64 @@ export function isWaterfallInsufficientFundsError(err: unknown): err is Waterfal
 }
 
 // ---------------------------------------------------------------------------
+// Deadline-extension voting & invoice rating
+// ---------------------------------------------------------------------------
+
+/** Thrown when voting to extend a deadline from an address that has not contributed to the invoice. */
+export class NotEligibleToVoteError extends StellarSplitError {
+  readonly invoiceId: string;
+  readonly payer: string;
+
+  constructor(invoiceId: string, payer: string, context?: Record<string, unknown>) {
+    super(
+      `${payer} is not eligible to vote on invoice ${invoiceId}: no recorded contribution.`,
+      "NOT_ELIGIBLE_TO_VOTE",
+      { invoiceId, payer, ...context },
+    );
+    this.name = "NotEligibleToVoteError";
+    this.invoiceId = invoiceId;
+    this.payer = payer;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when rating an invoice that has not reached Released status. */
+export class InvoiceNotReleasedForRatingError extends StellarSplitError {
+  readonly invoiceId: string;
+  readonly status: string;
+
+  constructor(invoiceId: string, status: string, context?: Record<string, unknown>) {
+    super(
+      `Invoice ${invoiceId} cannot be rated until it is Released (current: ${status}).`,
+      "INVOICE_NOT_RELEASED_FOR_RATING",
+      { invoiceId, status, ...context },
+    );
+    this.name = "InvoiceNotReleasedForRatingError";
+    this.invoiceId = invoiceId;
+    this.status = status;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when the caller has already submitted a rating for the invoice. */
+export class AlreadyRatedError extends StellarSplitError {
+  readonly invoiceId: string;
+  readonly payer: string;
+
+  constructor(invoiceId: string, payer: string, context?: Record<string, unknown>) {
+    super(
+      `${payer} has already rated invoice ${invoiceId}.`,
+      "ALREADY_RATED",
+      { invoiceId, payer, ...context },
+    );
+    this.name = "AlreadyRatedError";
+    this.invoiceId = invoiceId;
+    this.payer = payer;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // #476 OperationBuilder errors
 // ---------------------------------------------------------------------------
 
@@ -2277,6 +2335,12 @@ export enum SdkErrorCode {
   DEADLINE_EXPIRED = "DEADLINE_EXPIRED",
   /** The invoice is frozen (active dispute or lock) and cannot be modified. */
   INVOICE_FROZEN = "INVOICE_FROZEN",
+  /** The invoice ID is malformed. */
+  INVALID_INVOICE_ID = "INVALID_INVOICE_ID",
+  /** The invoice deadline is invalid (not a future timestamp). */
+  INVALID_DEADLINE = "INVALID_DEADLINE",
+  /** The invoice status value is not recognized. */
+  INVALID_STATUS = "INVALID_STATUS",
 
   // --- Accounts & funds -----------------------------------------------
   /** The referenced Stellar account does not exist on the network. */
@@ -2297,6 +2361,10 @@ export enum SdkErrorCode {
   INVALID_RECIPIENT = "INVALID_RECIPIENT",
   /** The SDK configuration is invalid. */
   INVALID_CONFIG = "INVALID_CONFIG",
+  /** A required field is missing from the request. */
+  MISSING_REQUIRED_FIELD = "MISSING_REQUIRED_FIELD",
+  /** A provided value is outside its permitted range. */
+  VALUE_OUT_OF_RANGE = "VALUE_OUT_OF_RANGE",
 
   // --- Network / transport --------------------------------------------
   /** A generic network failure (DNS, TLS, connection reset, ...). */
@@ -2311,6 +2379,12 @@ export enum SdkErrorCode {
   SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE",
   /** The endpoint is rate limiting requests. */
   RATE_LIMITED = "RATE_LIMITED",
+  /** The connection to the endpoint was refused. */
+  CONNECTION_REFUSED = "CONNECTION_REFUSED",
+  /** The endpoint hostname could not be resolved. */
+  DNS_RESOLUTION_FAILED = "DNS_RESOLUTION_FAILED",
+  /** A TLS/SSL error occurred while contacting the endpoint. */
+  TLS_ERROR = "TLS_ERROR",
 
   // --- Transaction lifecycle ------------------------------------------
   /** The transaction was rejected or failed on-chain. */
@@ -2331,6 +2405,12 @@ export enum SdkErrorCode {
   MISSING_SIGNATURE = "MISSING_SIGNATURE",
   /** A signature present on the transaction failed cryptographic verification. */
   INVALID_SIGNATURE = "INVALID_SIGNATURE",
+  /** The transaction could not be found by hash. */
+  TRANSACTION_NOT_FOUND = "TRANSACTION_NOT_FOUND",
+  /** An identical transaction was already submitted. */
+  DUPLICATE_TRANSACTION = "DUPLICATE_TRANSACTION",
+  /** The transaction envelope is malformed. */
+  TRANSACTION_MALFORMED = "TRANSACTION_MALFORMED",
 
   // --- Soroban contract execution --------------------------------------
   /** The referenced contract does not exist on the network. */
@@ -2341,6 +2421,10 @@ export enum SdkErrorCode {
   SIMULATION_FAILED = "SIMULATION_FAILED",
   /** The invocation exceeded the Soroban CPU or memory budget. */
   OUT_OF_RESOURCE = "OUT_OF_RESOURCE",
+  /** The contract panicked during execution. */
+  CONTRACT_PANIC = "CONTRACT_PANIC",
+  /** The contract invocation failed. */
+  CONTRACT_INVOCATION_FAILED = "CONTRACT_INVOCATION_FAILED",
 
   // --- Authorization ---------------------------------------------------
   /** The caller is not authorized to perform the operation. */
@@ -2349,6 +2433,10 @@ export enum SdkErrorCode {
   WALLET_NOT_CONNECTED = "WALLET_NOT_CONNECTED",
   /** Wallet / signer authentication failed. */
   AUTHENTICATION_FAILED = "AUTHENTICATION_FAILED",
+  /** The action is forbidden for the current account. */
+  FORBIDDEN = "FORBIDDEN",
+  /** The authentication session has expired. */
+  SESSION_EXPIRED = "SESSION_EXPIRED",
 
   // --- Operational / state ---------------------------------------------
   /** Concurrent modification produced a state conflict (e.g. merge conflict). */
@@ -2361,6 +2449,12 @@ export enum SdkErrorCode {
   BATCH_TOO_LARGE = "BATCH_TOO_LARGE",
   /** An unexpected internal SDK error. */
   INTERNAL_ERROR = "INTERNAL_ERROR",
+  /** The feature is not implemented in the current SDK version. */
+  NOT_IMPLEMENTED = "NOT_IMPLEMENTED",
+  /** The configured network is not supported. */
+  UNSUPPORTED_NETWORK = "UNSUPPORTED_NETWORK",
+  /** The SDK is misconfigured. */
+  CONFIGURATION_ERROR = "CONFIGURATION_ERROR",
 }
 
 /** Generic SDK error carrying a typed {@link SdkErrorCode} and optional details. */
@@ -2435,6 +2529,24 @@ export const SDK_ERROR_CODE_DESCRIPTIONS: Record<SdkErrorCode, string> = {
   [SdkErrorCode.OPERATION_ABORTED]: "The operation was aborted before completion.",
   [SdkErrorCode.BATCH_TOO_LARGE]: "A batch exceeds the maximum permitted size.",
   [SdkErrorCode.INTERNAL_ERROR]: "An unexpected internal SDK error occurred.",
+  [SdkErrorCode.INVALID_INVOICE_ID]: "The invoice ID is malformed.",
+  [SdkErrorCode.INVALID_DEADLINE]: "The invoice deadline is invalid (not a future timestamp).",
+  [SdkErrorCode.INVALID_STATUS]: "The invoice status value is not recognized.",
+  [SdkErrorCode.MISSING_REQUIRED_FIELD]: "A required field is missing from the request.",
+  [SdkErrorCode.VALUE_OUT_OF_RANGE]: "A provided value is outside its permitted range.",
+  [SdkErrorCode.CONNECTION_REFUSED]: "The connection to the endpoint was refused.",
+  [SdkErrorCode.DNS_RESOLUTION_FAILED]: "The endpoint hostname could not be resolved.",
+  [SdkErrorCode.TLS_ERROR]: "A TLS/SSL error occurred while contacting the endpoint.",
+  [SdkErrorCode.TRANSACTION_NOT_FOUND]: "The transaction could not be found by hash.",
+  [SdkErrorCode.DUPLICATE_TRANSACTION]: "An identical transaction was already submitted.",
+  [SdkErrorCode.TRANSACTION_MALFORMED]: "The transaction envelope is malformed.",
+  [SdkErrorCode.CONTRACT_PANIC]: "The contract panicked during execution.",
+  [SdkErrorCode.CONTRACT_INVOCATION_FAILED]: "The contract invocation failed.",
+  [SdkErrorCode.FORBIDDEN]: "The action is forbidden for the current account.",
+  [SdkErrorCode.SESSION_EXPIRED]: "The authentication session has expired.",
+  [SdkErrorCode.NOT_IMPLEMENTED]: "This feature is not implemented in the current SDK version.",
+  [SdkErrorCode.UNSUPPORTED_NETWORK]: "The configured network is not supported.",
+  [SdkErrorCode.CONFIGURATION_ERROR]: "The SDK is misconfigured.",
 };
 
 /**
@@ -2480,6 +2592,30 @@ export function describeSdkErrorCode(code: SdkErrorCode | string): string {
  */
 export function isRetryableErrorCode(code: SdkErrorCode | string): boolean {
   return RETRYABLE_ERROR_CODES.has(code.toUpperCase() as SdkErrorCode);
+}
+
+/** Full lookup entry for an {@link SdkErrorCode}: its code, description, and retry eligibility. */
+export interface SdkErrorCodeDefinition {
+  code: SdkErrorCode;
+  description: string;
+  retryable: boolean;
+}
+
+/**
+ * Look up the full {@link SdkErrorCodeDefinition} for a code string, or
+ * `undefined` when the string doesn't match a known {@link SdkErrorCode}.
+ *
+ * @param code - An SdkErrorCode member or any code string (matched
+ *   case-insensitively).
+ */
+export function getErrorByCode(code: SdkErrorCode | string): SdkErrorCodeDefinition | undefined {
+  const normalized = code.toUpperCase() as SdkErrorCode;
+  if (!(normalized in SDK_ERROR_CODE_DESCRIPTIONS)) return undefined;
+  return {
+    code: normalized,
+    description: SDK_ERROR_CODE_DESCRIPTIONS[normalized],
+    retryable: RETRYABLE_ERROR_CODES.has(normalized),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -2873,8 +3009,8 @@ export function isDelegateLimitReachedError(err: unknown): err is DelegateLimitR
 
 /** Thrown when deadline validation fails. */
 export class DeadlineValidationError extends ValidationError {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, context?: Record<string, unknown>) {
+    super(message, context, "DEADLINE_VALIDATION_ERROR");
     this.name = "DeadlineValidationError";
     Object.setPrototypeOf(this, new.target.prototype);
   }
@@ -2886,8 +3022,8 @@ export function isDeadlineValidationError(err: unknown): err is DeadlineValidati
 
 /** Thrown when amount validation fails. */
 export class AmountValidationError extends ValidationError {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, context?: Record<string, unknown>) {
+    super(message, context, "AMOUNT_VALIDATION_ERROR");
     this.name = "AmountValidationError";
     Object.setPrototypeOf(this, new.target.prototype);
   }
@@ -2899,8 +3035,8 @@ export function isAmountValidationError(err: unknown): err is AmountValidationEr
 
 /** Thrown when address validation fails. */
 export class AddressValidationError extends ValidationError {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, context?: Record<string, unknown>) {
+    super(message, context, "ADDRESS_VALIDATION_ERROR");
     this.name = "AddressValidationError";
     Object.setPrototypeOf(this, new.target.prototype);
   }
@@ -2912,8 +3048,8 @@ export function isAddressValidationError(err: unknown): err is AddressValidation
 
 /** Thrown when signature validation fails. */
 export class SignatureValidationError extends ValidationError {
-  constructor(message: string) {
-    super(message);
+  constructor(message: string, context?: Record<string, unknown>) {
+    super(message, context, "SIGNATURE_VALIDATION_ERROR");
     this.name = "SignatureValidationError";
     Object.setPrototypeOf(this, new.target.prototype);
   }
@@ -3086,5 +3222,311 @@ export class KeyEncryptionError extends StellarSplitError {
 
 export function isKeyEncryptionError(err: unknown): err is KeyEncryptionError {
   return err instanceof KeyEncryptionError;
+}
+
+// ---------------------------------------------------------------------------
+// Invoice collaboration (issue #1053)
+// ---------------------------------------------------------------------------
+
+/** Thrown when a referenced invoice comment does not exist. */
+export class CommentNotFoundError extends StellarSplitError {
+  readonly commentId: string;
+
+  constructor(commentId: string) {
+    super(`Comment not found: ${commentId}`, "COMMENT_NOT_FOUND", { commentId });
+    this.name = "CommentNotFoundError";
+    this.commentId = commentId;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isCommentNotFoundError(err: unknown): err is CommentNotFoundError {
+  return err instanceof CommentNotFoundError;
+}
+
+/** Thrown when a referenced multi-approver approval request does not exist. */
+export class ApprovalRequestNotFoundError extends StellarSplitError {
+  readonly requestId: string;
+
+  constructor(requestId: string) {
+    super(`Approval request not found: ${requestId}`, "APPROVAL_REQUEST_NOT_FOUND", { requestId });
+    this.name = "ApprovalRequestNotFoundError";
+    this.requestId = requestId;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isApprovalRequestNotFoundError(err: unknown): err is ApprovalRequestNotFoundError {
+  return err instanceof ApprovalRequestNotFoundError;
+}
+
+/** Thrown when an actor attempts a collaboration action their role doesn't permit. */
+export class UnauthorizedCollaborationError extends StellarSplitError {
+  readonly actor: string;
+  readonly action: string;
+
+  constructor(actor: string, action: string, reason: string) {
+    super(
+      `${actor} is not authorized to ${action}: ${reason}`,
+      "UNAUTHORIZED_COLLABORATION",
+      { actor, action, reason },
+    );
+    this.name = "UnauthorizedCollaborationError";
+    this.actor = actor;
+    this.action = action;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isUnauthorizedCollaborationError(err: unknown): err is UnauthorizedCollaborationError {
+  return err instanceof UnauthorizedCollaborationError;
+}
+
+// ---------------------------------------------------------------------------
+// Fiat price oracle
+// ---------------------------------------------------------------------------
+
+/** Thrown when a price oracle's upstream request fails. */
+export class PriceOracleFetchError extends StellarSplitError {
+  constructor(message: string, context?: Record<string, unknown>) {
+    super(message, "PRICE_ORACLE_FETCH_FAILED", context);
+    this.name = "PriceOracleFetchError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isPriceOracleFetchError(err: unknown): err is PriceOracleFetchError {
+  return err instanceof PriceOracleFetchError;
+}
+
+/** Thrown when an upstream API rate limits a price oracle request. */
+export class RateLimitError extends StellarSplitError {
+  readonly retryAfterSeconds?: number;
+
+  constructor(message: string, retryAfterSeconds?: number) {
+    super(message, "RATE_LIMITED", { retryAfterSeconds });
+    this.name = "RateLimitError";
+    this.retryAfterSeconds = retryAfterSeconds;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isRateLimitError(err: unknown): err is RateLimitError {
+  return err instanceof RateLimitError;
+}
+
+/** Thrown when a currency/amount conversion would lose precision or is invalid. */
+export class PrecisionError extends StellarSplitError {
+  readonly from: string;
+  readonly to: string;
+
+  constructor(from: string, to: string, reason: string) {
+    super(`Precision error converting "${from}" to "${to}": ${reason}`, "PRECISION_ERROR", {
+      from,
+      to,
+      reason,
+    });
+    this.name = "PrecisionError";
+    this.from = from;
+    this.to = to;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+export function isPrecisionError(err: unknown): err is PrecisionError {
+  return err instanceof PrecisionError;
+}
+
+// ---------------------------------------------------------------------------
+// Contract ABI caching
+// ---------------------------------------------------------------------------
+
+/** Thrown when fetching a contract's ABI from the network fails. */
+export class AbiFetchError extends StellarSplitError {
+  constructor(contractId: string, cause: string) {
+    super(`Failed to fetch ABI for contract ${contractId}: ${cause}`, "ABI_FETCH_FAILED", {
+      contractId,
+      cause,
+    });
+    this.name = "AbiFetchError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a contract's ABI is not registered with the fetcher and not cached. */
+export class AbiNotFoundError extends StellarSplitError {
+  constructor(contractId: string) {
+    super(`No ABI found for contract ${contractId}`, "ABI_NOT_FOUND", { contractId });
+    this.name = "AbiNotFoundError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Invoice version tracking / rollback
+// ---------------------------------------------------------------------------
+
+/** Thrown when a requested invoice version does not exist. */
+export class InvoiceVersionNotFoundError extends StellarSplitError {
+  constructor(invoiceId: string, version: number) {
+    super(`Invoice ${invoiceId} has no version ${version}`, "INVOICE_VERSION_NOT_FOUND", {
+      invoiceId,
+      version,
+    });
+    this.name = "InvoiceVersionNotFoundError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when rolling back to a version would violate a safety check. */
+export class UnsafeRollbackError extends StellarSplitError {
+  constructor(invoiceId: string, version: number, reason: string) {
+    super(
+      `Rollback of invoice ${invoiceId} to version ${version} rejected: ${reason}`,
+      "UNSAFE_ROLLBACK",
+      { invoiceId, version, reason },
+    );
+    this.name = "UnsafeRollbackError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a version number is malformed or out of range. */
+export class InvalidVersionError extends StellarSplitError {
+  constructor(reason: string, version: number) {
+    super(`Invalid version ${version}: ${reason}`, "INVALID_VERSION", { reason, version });
+    this.name = "InvalidVersionError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Drips Wave issues #870-#873
+// ---------------------------------------------------------------------------
+
+/** Thrown when `releasePartial` is called with a basis-point value outside `[1, 10000]`. */
+export class InvalidBpsError extends StellarSplitError {
+  readonly bps: number;
+
+  constructor(bps: number) {
+    super(`Invalid basis points: ${bps}. Must be between 1 and 10000`, "INVALID_BPS", { bps });
+    this.name = "InvalidBpsError";
+    this.bps = bps;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a `releasePartial` call would push an invoice's cumulative released bps past 10000. */
+export class OverReleaseError extends StellarSplitError {
+  readonly invoiceId: string;
+  readonly currentTotalBps: number;
+  readonly requestedBps: number;
+
+  constructor(invoiceId: string, currentTotalBps: number, requestedBps: number) {
+    super(
+      `Invoice ${invoiceId}: releasing ${requestedBps} more bps would exceed 10000 total (currently ${currentTotalBps})`,
+      "OVER_RELEASE",
+      { invoiceId, currentTotalBps, requestedBps },
+    );
+    this.name = "OverReleaseError";
+    this.invoiceId = invoiceId;
+    this.currentTotalBps = currentTotalBps;
+    this.requestedBps = requestedBps;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when `cancelInvoice` is called on an invoice that has already received payment. */
+export class CannotCancelFundedInvoiceError extends StellarSplitError {
+  readonly invoiceId: string;
+  readonly paidAmount: bigint;
+
+  constructor(invoiceId: string, paidAmount: bigint) {
+    super(
+      `Invoice ${invoiceId} cannot be cancelled: it has already received ${paidAmount.toString()} stroops`,
+      "CANNOT_CANCEL_FUNDED_INVOICE",
+      { invoiceId, paidAmount },
+    );
+    this.name = "CannotCancelFundedInvoiceError";
+    this.invoiceId = invoiceId;
+    this.paidAmount = paidAmount;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when an operation that requires an active invoice is attempted on a terminal one. */
+export class InvoiceTerminatedError extends StellarSplitError {
+  readonly invoiceId: string;
+  readonly status: string;
+
+  constructor(invoiceId: string, status: string) {
+    super(`Invoice ${invoiceId} is already ${status} and cannot be modified`, "INVOICE_TERMINATED", {
+      invoiceId,
+      status,
+    });
+    this.name = "InvoiceTerminatedError";
+    this.invoiceId = invoiceId;
+    this.status = status;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Drips Wave issues #874-#877
+// ---------------------------------------------------------------------------
+
+/** Thrown when `addToWhitelist` is called but the invoice's whitelist is already at capacity. */
+export class WhitelistFullError extends StellarSplitError {
+  readonly invoiceId: string;
+  readonly limit: number;
+
+  constructor(invoiceId: string, limit: number) {
+    super(
+      `Whitelist for invoice ${invoiceId} is full (limit: ${limit})`,
+      "WHITELIST_FULL",
+      { invoiceId, limit },
+    );
+    this.name = "WhitelistFullError";
+    this.invoiceId = invoiceId;
+    this.limit = limit;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+/** Thrown when a note's content exceeds the maximum allowed byte length. */
+export class ContentTooLongError extends StellarSplitError {
+  readonly bytesUsed: number;
+  readonly bytesAllowed: number;
+
+  constructor(bytesUsed: number, bytesAllowed: number) {
+    super(
+      `Content is ${bytesUsed} bytes, which exceeds the maximum of ${bytesAllowed} bytes`,
+      "CONTENT_TOO_LONG",
+      { bytesUsed, bytesAllowed },
+    );
+    this.name = "ContentTooLongError";
+    this.bytesUsed = bytesUsed;
+    this.bytesAllowed = bytesAllowed;
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Error retryability taxonomy (#881)
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns whether `err` represents a transient condition worth retrying
+ * (network/RPC hiccups, unconfirmed transactions, an open circuit breaker,
+ * or an active payment cooldown) as opposed to a permanent/business-logic
+ * failure (not found, frozen, unauthorized, validation, etc).
+ */
+export function isRetryable(err: unknown): boolean {
+  return (
+    err instanceof RpcError ||
+    err instanceof TransactionNotConfirmedError ||
+    err instanceof CircuitOpenError ||
+    err instanceof PaymentCooldownActiveError
+  );
 }
 

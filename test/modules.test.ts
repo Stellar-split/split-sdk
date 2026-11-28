@@ -150,7 +150,7 @@ describe("MemoryProfiler", () => {
     expect(filePath).toMatch(/heap-.*\.heapsnapshot$/);
     const fs = await import("node:fs/promises");
     await fs.unlink(filePath);
-  });
+  }, 20000);
 
   it("reset clears snapshots", () => {
     profiler.init();

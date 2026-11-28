@@ -47,8 +47,9 @@ export interface LedgerAdapterOptions {
    */
   getFirmwareVersion?: (transport: Transport) => Promise<string>;
   /**
-   * Maximum number of idle transports kept in the pool. Defaults to `1`
-   * (a single Ledger device can only serve one transport at a time).
+   * Maximum number of idle transports kept in the pool. Defaults to `0`
+   * (close the transport after every call); set to `1`+ to keep a device
+   * connection open between calls.
    */
   maxPoolSize?: number;
   /**
@@ -125,7 +126,7 @@ export class LedgerAdapter implements WalletAdapter {
     this.skipFirmwareCheck = options.skipFirmwareCheck ?? false;
     this.getFirmwareVersion =
       options.getFirmwareVersion ?? ((transport) => this.queryFirmwareVersion(transport));
-    this.maxPoolSize = Math.max(1, options.maxPoolSize ?? 1);
+    this.maxPoolSize = Math.max(0, options.maxPoolSize ?? 0);
     this.maxIdleMs = Math.max(0, options.maxIdleMs ?? 30_000);
   }
 
@@ -148,6 +149,24 @@ export class LedgerAdapter implements WalletAdapter {
       const { publicKey } = await str.getPublicKey(this.path);
       return publicKey;
     });
+  }
+
+  /**
+   * Open a transport session and return the device's Stellar public key.
+   * Ledger has no separate "authorize" handshake distinct from reading the
+   * public key, so this is equivalent to {@link getAddress}.
+   */
+  async connect(): Promise<string> {
+    return this.getAddress();
+  }
+
+  /**
+   * Ledger's WebHID transport has no push notification channel for account
+   * switches (switching accounts means re-deriving a different `path`), so
+   * there is nothing to subscribe to. Returns a no-op unsubscribe function.
+   */
+  onAccountChange(_handler: (address: string) => void): () => void {
+    return () => {};
   }
 
   async signTransaction(xdr: string, _network: string): Promise<string> {

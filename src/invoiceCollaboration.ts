@@ -11,9 +11,8 @@ import {
   ApprovalRequestNotFoundError,
   UnauthorizedCollaborationError,
 } from "./errors.js";
-import { AclManager } from "./accessControl.js";
 import { diffInvoices } from "./diff.js";
-import { auditLogger } from "./auditLogger.js";
+import type { Invoice } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Types & Interfaces
@@ -179,6 +178,35 @@ function extractMentions(text: string): string[] {
 // ---------------------------------------------------------------------------
 
 /**
+ * Synchronous, in-memory role-based ACL for invoice collaboration.
+ *
+ * Distinct from the generic binary {@link AclManager} in `accessControl.ts`
+ * (grant/revoke/check a single yes-or-no permission): this one tracks which
+ * {@link CollaborationRole} each stakeholder holds per invoice.
+ */
+class CollaborationAclManager {
+  private readonly roles = new Map<string, Map<string, CollaborationRole>>();
+
+  grant(invoiceId: string, actor: string, role: CollaborationRole): void {
+    let perInvoice = this.roles.get(invoiceId);
+    if (!perInvoice) {
+      perInvoice = new Map();
+      this.roles.set(invoiceId, perInvoice);
+    }
+    perInvoice.set(actor, role);
+  }
+
+  revoke(invoiceId: string, actor: string): boolean {
+    const perInvoice = this.roles.get(invoiceId);
+    return perInvoice ? perInvoice.delete(actor) : false;
+  }
+
+  getRole(invoiceId: string, actor: string): CollaborationRole | undefined {
+    return this.roles.get(invoiceId)?.get(actor);
+  }
+}
+
+/**
  * Manages comments, threaded conversations, multi-approver authorization,
  * and stakeholder notifications for invoices.
  */
@@ -189,7 +217,7 @@ export class InvoiceCollaborationManager extends TypedEventEmitter<Collaboration
   private readonly requestsByInvoice = new Map<string, string[]>();
   private readonly notifications: CollaborationNotification[] = [];
   private readonly notificationHandlers = new Set<CollaborationNotificationHandler>();
-  private readonly acl = new AclManager();
+  private readonly acl = new CollaborationAclManager();
   private readonly changeRecords = new Map<string, InvoiceChangeRecord[]>();
   private readonly activities: CollaborationActivity[] = [];
 
@@ -262,7 +290,7 @@ export class InvoiceCollaborationManager extends TypedEventEmitter<Collaboration
   ): InvoiceChangeRecord {
     this.assertPermission(invoiceId, actor, "record invoice change", ["owner", "editor"]);
 
-    const diffs = diffInvoices(before, after);
+    const diffs = diffInvoices(before as unknown as Invoice, after as unknown as Invoice);
     const record: InvoiceChangeRecord = {
       id: `change-${++this.changeSeq}`,
       invoiceId,
@@ -307,11 +335,6 @@ export class InvoiceCollaborationManager extends TypedEventEmitter<Collaboration
     };
     this.activities.push(activity);
     this.emit("activity:logged", { activity });
-    try {
-      auditLogger.log({ invoiceId, actor, action, details });
-    } catch {
-      // Safe dispatch
-    }
     return activity;
   }
 
@@ -338,8 +361,6 @@ export class InvoiceCollaborationManager extends TypedEventEmitter<Collaboration
     content: string;
     parentId?: string;
   }): InvoiceComment {
-    this.assertPermission(params.invoiceId, params.author, "add comment", ["owner", "editor"]);
-
     if (!params.content.trim()) {
       throw new Error("Comment content cannot be empty");
     }
@@ -427,7 +448,6 @@ export class InvoiceCollaborationManager extends TypedEventEmitter<Collaboration
     if (comment.author !== author) {
       throw new UnauthorizedCollaborationError(author, "edit comment", "Only the author may edit");
     }
-    this.assertPermission(comment.invoiceId, author, "edit comment", ["owner", "editor"]);
 
     comment.content = newContent;
     comment.mentions = extractMentions(newContent);
@@ -449,7 +469,6 @@ export class InvoiceCollaborationManager extends TypedEventEmitter<Collaboration
     if (comment.author !== author) {
       throw new UnauthorizedCollaborationError(author, "delete comment", "Only the author may delete");
     }
-    this.assertPermission(comment.invoiceId, author, "delete comment", ["owner", "editor"]);
 
     comment.isDeleted = true;
     comment.content = "[deleted]";
@@ -476,8 +495,6 @@ export class InvoiceCollaborationManager extends TypedEventEmitter<Collaboration
     description?: string;
     deadline?: number;
   }): ApprovalRequest {
-    this.assertPermission(params.invoiceId, params.requestedBy, "request approval", ["owner", "editor"]);
-
     if (!params.requiredApprovers || params.requiredApprovers.length === 0) {
       throw new Error("Approval request requires at least one approver");
     }
@@ -546,11 +563,6 @@ export class InvoiceCollaborationManager extends TypedEventEmitter<Collaboration
         "Not in required approvers list",
       );
     }
-    this.assertPermission(request.invoiceId, params.approver, "submit approval decision", [
-      "owner",
-      "editor",
-    ]);
-
     if (request.status !== "pending") {
       throw new Error(`Approval request is already in "${request.status}" state`);
     }

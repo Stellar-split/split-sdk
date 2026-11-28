@@ -180,9 +180,10 @@ export class PersistentTxQueue {
         try {
           await fn(item);
         } catch (err) {
-          // Keep failed items queued so they can be resumed; record the failure.
+          // Keep failed items queued so they can be resumed; record the
+          // failure and propagate it so the caller sees processing failed.
           await this.markFailed(item.id, err);
-          continue;
+          throw err;
         }
         // Only remove after successful processing so no txns are lost.
         this.memory = this.memory.filter((i) => i.id !== item.id);

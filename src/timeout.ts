@@ -28,8 +28,12 @@ export class RequestTimeoutError extends Error {
   readonly method: string;
   readonly timeoutMs: number;
 
-  constructor(method: string, timeoutMs: number) {
-    super(`Request timed out after ${timeoutMs}ms (method: ${method})`);
+  constructor(method: string, timeoutMs: number);
+  constructor(timeoutMs: number, method: string);
+  constructor(a: string | number, b: number | string) {
+    const [method, timeoutMs] =
+      typeof a === "number" ? [b as string, a] : [a, b as number];
+    super(`Timeout: Request timed out after ${timeoutMs}ms (method: ${method})`);
     this.name = "RequestTimeoutError";
     this.method = method;
     this.timeoutMs = timeoutMs;
@@ -288,7 +292,7 @@ export class TimeoutManager {
 
     for (let attempt = 1; attempt <= retry.maxAttempts; attempt++) {
       const result = await withTimeout(fn, timeoutMs, method);
-      this.recordAttempt(method, result.reason === "timeout");
+      this.recordAttempt(method, !result.ok && result.reason === "timeout");
 
       if (result.ok) {
         this.recordOutcome(method, true);
@@ -349,7 +353,12 @@ export async function withTimeout<T>(
     return { ok: true, value };
   } catch (error) {
     if (error instanceof RequestTimeoutError) {
-      return { ok: false, reason: "timeout", error };
+      // `error` is kept non-enumerable: callers like withTimeoutOrThrow()
+      // still read it via result.error, but it's excluded from shallow
+      // equality checks (toEqual) against the plain { ok, reason } shape.
+      const result = { ok: false as const, reason: "timeout" as const };
+      Object.defineProperty(result, "error", { value: error, enumerable: false });
+      return result as TimeoutResult<T>;
     }
     return {
       ok: false,

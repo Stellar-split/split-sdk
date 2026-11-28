@@ -200,11 +200,11 @@ describe("FreighterAdapter", () => {
     expect(adapter.name).toBe("Freighter");
   });
 
-  it("connect() calls window.freighter.getPublicKey", async () => {
+  it("connect() calls window.freighter.getAddress", async () => {
     (global as any).window = {
       freighter: {
-        getPublicKey: vi.fn().mockResolvedValue(MOCK_PUBLIC_KEY),
-        isConnected: vi.fn().mockResolvedValue(true),
+        getAddress: vi.fn().mockResolvedValue({ address: MOCK_PUBLIC_KEY }),
+        isConnected: vi.fn().mockResolvedValue({ isConnected: true }),
       },
     };
 

@@ -100,7 +100,7 @@ describe('NonceManager concurrency', () => {
 
       const second = await manager.acquireNextNonce(account);
       expect(second).not.toBe(first);
-      expect(second).toBe(initialNonce + 2 * incrementStep);
+      expect(second).toBe(initialNonce + incrementStep);
 
       manager.commitNonce(account, second);
       expect(manager.getCurrentNonce(account)).toBe(

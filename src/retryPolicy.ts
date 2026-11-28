@@ -20,8 +20,12 @@ import {
   InvalidContractAddressError,
   TransactionVerificationError,
   isRetryableErrorCode,
+  RpcConnectionError,
+  RpcUnavailableError,
 } from "./errors.js";
 import type { RetryBudget } from "./retryBudget.js";
+
+export { RpcError };
 
 export interface RetryOptions {
   maxAttempts: number;
@@ -201,18 +205,14 @@ export function isRetryable(error: unknown): boolean {
     return error.statusCode === 429 || error.statusCode === 502 || error.statusCode === 503 || error.statusCode === 504;
   }
 
-  // Prefer the centralized error-code taxonomy when the error carries a code.
-  if (error instanceof Error) {
-    const code = (error as { code?: unknown }).code;
-    if (typeof code === "string" && code.length > 0) {
-      return isRetryableErrorCode(code);
-    }
-  }
-
-  // Fallback for uncoded errors: explicit classification by error type.
+  // Explicit classification by error type takes priority over the generic
+  // code-based taxonomy below, since some of these errors carry a code that
+  // isn't part of the generic SdkErrorCode retryable set.
   if (error instanceof PaymentCooldownActiveError) return true;
   if (error instanceof CircuitOpenError) return true;
   if (error instanceof TransactionNotConfirmedError) return true;
+  if (error instanceof RpcConnectionError) return true;
+  if (error instanceof RpcUnavailableError) return true;
   if (error instanceof InvoiceNotFoundError) return false;
   if (error instanceof ValidationError) return false;
   if (error instanceof WalletNotConnectedError) return false;
@@ -229,6 +229,14 @@ export function isRetryable(error: unknown): boolean {
   if (error instanceof DelegateLimitReachedError) return false;
   if (error instanceof InvalidContractAddressError) return false;
   if (error instanceof TransactionVerificationError) return false;
+
+  // Prefer the centralized error-code taxonomy when the error carries a code.
+  if (error instanceof Error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === "string" && code.length > 0) {
+      return isRetryableErrorCode(code);
+    }
+  }
 
   if (!(error instanceof Error)) return false;
 
@@ -267,16 +275,18 @@ export async function executeWithRetry<T>(
       lastError = error;
 
       const isLast = attempt === maxAttempts - 1;
-      if (!isRetryable(error)) break;
-      if (error instanceof Error && retryIf && !retryIf(error)) break;
+      const shouldRetry = retryIf ? retryIf(error as Error) : isRetryable(error);
+      if (!shouldRetry) break;
       if (isLast) {
         attemptsExhausted = true;
         break;
       }
       if (budget && !budget.hasRemaining()) break;
 
-      const jitter = Math.random() * baseDelayMs;
-      const delayMs = Math.min(baseDelayMs * 2 ** attempt + jitter, maxDelayMs);
+      const delayMs =
+        maxDelayMs !== undefined
+          ? Math.min(baseDelayMs * 2 ** attempt, maxDelayMs)
+          : baseDelayMs * 2 ** attempt;
       budget?.consume(delayMs);
       onRetry?.(attempt + 1, error, delayMs);
       await sleep(delayMs);

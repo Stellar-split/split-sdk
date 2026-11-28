@@ -2,14 +2,17 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Sep24Handler, resolveAnchorTransferServer } from "../src/sep/sep24Handler.js";
 import type { Sep24TransactionRecord } from "../src/types.js";
 
-// Mock StellarTomlResolver
-vi.mock("@stellar/stellar-sdk", () => ({
-  StellarTomlResolver: {
-    resolve: vi.fn(),
-  },
-}));
+// Mock StellarToml.Resolver
+vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@stellar/stellar-sdk")>();
+  return {
+    ...actual,
+    StellarToml: { ...actual.StellarToml, Resolver: { resolve: vi.fn() } },
+  };
+});
 
-import { StellarTomlResolver } from "@stellar/stellar-sdk";
+import { StellarToml } from "@stellar/stellar-sdk";
+const StellarTomlResolver = StellarToml.Resolver;
 
 describe("Sep24Handler", () => {
   let handler: Sep24Handler;

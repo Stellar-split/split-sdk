@@ -147,6 +147,10 @@ export interface LoggerOptions {
    */
   sink?: LogSink;
   /**
+   * Optional predicate to suppress entries even when their level passes.
+   */
+  filter?: LogFilter;
+  /**
    * Custom formatter for transforming log entries into strings.
    */
   formatter?: LogFormatter;

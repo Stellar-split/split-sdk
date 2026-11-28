@@ -9,6 +9,7 @@
 export type HealthStatus = 'healthy' | 'degraded' | 'unhealthy';
 
 export { StellarSplitClient } from "./client.js";
+export * from "./client/modules/index.js";
 export { FinalityChecker } from "./finalityChecker.js";
 export { buildPaymentMemo, parsePaymentMemo } from "./memoBuilder.js";
 export {
@@ -112,85 +113,37 @@ export {
   deserializeInvoiceTemplate,
 } from "./invoiceTemplate.js";
 
-// Invoice QR code generation (#1241)
-export {
-  generateInvoiceQRCode,
-  generateInvoiceQRCodeDataUrl,
-  generateInvoiceQRCodeSvg,
-  generateInvoiceQRCodeBuffer,
-  buildInvoiceQRPayload,
-  DEFAULT_QR_OPTIONS,
-  QR_SIZE_PRESETS,
-  QR_EXPORT_FORMATS,
-} from "./invoiceQrCode.js";
-export type {
-  InvoiceQRCodeOptions,
-  InvoiceQRCodeResult,
-  InvoiceQRCodePayload,
-  QRExportFormat,
-  QRSizePreset,
-  QRErrorCorrectionLevel,
-  QRColorOptions,
-} from "./invoiceQrCode.js";
-
-// Invoice templates (#1244)
-export {
-  InvoiceTemplateRegistry,
-  defaultInvoiceTemplateRegistry,
-  createInvoiceTemplate,
-  applyInvoiceTemplate,
-  shareInvoiceTemplate,
-  importSharedInvoiceTemplate,
-  getInvoiceTemplateUsage,
-  resetInvoiceTemplateUsage,
-} from "./invoiceTemplates.js";
-export type {
-  InvoiceTemplateDefinition,
-  InvoiceTemplateCustomization,
-  InvoiceTemplateUsageStats,
-  SharedInvoiceTemplate,
-  CreateInvoiceTemplateParams,
-  ApplyInvoiceTemplateParams,
-  ApplyInvoiceTemplateResult,
-} from "./invoiceTemplates.js";
+// NOTE: #1241 (invoice QR code generation) and #1244 (invoice template
+// registry/sharing) were referenced by a re-export block here but their
+// implementation files (./invoiceQrCode.ts, ./invoiceTemplates.ts) were
+// never added in this merge wave — removed rather than guessed at. The
+// lower-level QR primitives in ./qr/* and the template helpers in
+// ./invoiceTemplate.ts, ./templateManager.ts, ./templates.ts are separate,
+// unrelated features already present in this file; they're a different
+// shape than what #1241/#1244 intended, so not a drop-in replacement.
 
 // Recipient suggestions (#1245)
 export {
-  RecipientSuggestionEngine,
-  defaultRecipientSuggestionEngine,
   suggestRecipients,
-  recordRecipientSelection,
-  getRecipientSuggestionStats,
-  resetRecipientSuggestionStats,
+  recordSuggestionFeedback,
+  getSuggestionStats,
+  resetSuggestionStats,
+  interactionFromRecipient,
+  DEFAULT_SUGGESTION_LIMIT,
 } from "./recipientSuggestions.js";
 export type {
   RecipientSuggestion,
-  RecipientSuggestionOptions,
   RecipientSuggestionFilter,
-  RecipientSuggestionStats,
-  RecipientHistoryEntry,
+  RecipientInteraction,
+  RecipientFeedback,
+  RecipientMetadata,
+  SuggestionStats as RecipientSuggestionStats,
+  SuggestRecipientsOptions as RecipientSuggestionOptions,
 } from "./recipientSuggestions.js";
 
-// Payment reminders (#1246)
-export {
-  PaymentReminderScheduler,
-  defaultPaymentReminderScheduler,
-  schedulePaymentReminder,
-  cancelPaymentReminder,
-  getPaymentReminder,
-  listPaymentReminders,
-  getPaymentReminderStats,
-  resetPaymentReminderStats,
-} from "./paymentReminders.js";
-export type {
-  PaymentReminderConfig,
-  PaymentReminderScheduleOptions,
-  PaymentReminder,
-  PaymentReminderStatus,
-  PaymentReminderDelivery,
-  PaymentReminderStats,
-  PaymentReminderDeliveryHandler,
-} from "./paymentReminders.js";
+// NOTE: #1246 (payment reminders) was also referenced by a re-export block
+// here but ./paymentReminders.ts was never added. ./invoiceReminderScheduler.ts
+// is a separate, unrelated feature (not exported from here).
 export {
   validateBulkImport,
   SUPPORTED_SCHEMA_VERSIONS,
@@ -387,6 +340,33 @@ export {
   BatchTooLargeError,
   isBatchTooLargeError,
 } from "./errors.js";
+
+// Signing vault adapters (issues #586, #588, #589)
+export { KeypairSigner } from "./signing/adapters/KeypairSigner.js";
+export { EncryptedFileSigner, encryptSigningKeyToPem, writeEncryptedSigningKeyFile } from "./signing/adapters/EncryptedFileSigner.js";
+export type { EncryptedFileSignerOptions } from "./signing/adapters/EncryptedFileSigner.js";
+export { CloudKmsSigner, isRegionError } from "./signing/adapters/CloudKmsSigner.js";
+export type {
+  KmsClient,
+  KmsClientSignOptions,
+  CloudKmsSignerOptions,
+  CloudKmsSignerEventMap,
+} from "./signing/adapters/CloudKmsSigner.js";
+
+// Footprint optimizer utilities (issue #588)
+export { optimizeFootprint } from "./soroban/footprint.js";
+export { footprintDiff } from "./utils/footprintDiff.js";
+export { submitTransaction } from "./transaction/submit.js";
+
+// Invoice state subscriber, webhook client, and analytics tracker (#1034, #1035, #1036, #1037)
+export { InvoiceStateSubscriber, matchesFilter } from "./invoiceStateSubscription.js";
+export { WebhookClient, WebhookVerificationError } from "./webhookClient.js";
+export {
+  AnalyticsTracker,
+  AnalyticsCollector,
+  PrivacyController,
+  wrapClientWithAnalytics,
+} from "./analyticsTracking.js";
 
 // Invoice metadata JSON Schema validator (issue #533)
 export { InvoiceMetadataValidator } from "./validators/invoiceMetadataValidator.js";
@@ -597,21 +577,11 @@ export { MetaMaskAdapter } from "./wallets/adapters/MetaMaskAdapter.js";
 export { WalletConnectAdapter } from "./wallets/adapters/WalletConnectAdapter.js";
 export { LedgerAdapter } from "./wallets/adapters/LedgerAdapter.js";
 export { FreighterAdapter } from "./wallets/adapters/FreighterAdapter.js";
+export type { WalletAdapter } from "./types.js";
 export type {
-  WalletAdapter,
   WalletType,
   WalletDetectionResult,
-} from "./wallets/types.js";
-export {
-  WalletAdapterError,
-  isWalletAdapterError,
-  WalletNotDetectedError,
-  isWalletNotDetectedError,
-  WalletSwitchError,
-  isWalletSwitchError,
-  UnsupportedWalletError,
-  isUnsupportedWalletError,
-} from "./errors.js";
+} from "./adapters/types.js";
 
 export { checkRPCHealth } from "./health.js";
 export { FallbackChain, FallbackExhaustedError } from "./fallbackChain.js";
@@ -823,13 +793,11 @@ export {
 
 // Comprehensive error code registry and lookups (issue #1261)
 export {
-  SDK_ERROR_CODES,
+  SdkErrorCode as SDK_ERROR_CODES,
+  describeSdkErrorCode as getErrorMessage,
   getErrorByCode,
-  getErrorMessage,
 } from "./errors.js";
-export type {
-  SdkErrorCodeDefinition,
-} from "./errors.js";
+export type { SdkErrorCodeDefinition } from "./errors.js";
 
 // Soroban contract address validation (issue #1065)
 export {
@@ -847,10 +815,11 @@ export {
   validateContractAddressCached,
   clearContractAddressCache,
   getContractAddressValidationStats,
+  isSorobanContractAddress,
 } from "./contractAddressValidator.js";
 export type {
   ContractAddressValidatorOptions,
-  ContractAddressValidationStats,
+  ContractValidationStats as ContractAddressValidationStats,
 } from "./contractAddressValidator.js";
 
 // Pre-submit transaction verification (issue #1066)
@@ -874,8 +843,8 @@ export {
 } from "./transactionVerifier.js";
 export type {
   VerificationRule,
-  TransactionVerifierOptions,
-  TransactionVerificationStats,
+  TransactionVerificationOptions as TransactionVerifierOptions,
+  TransactionVerifierStats as TransactionVerificationStats,
 } from "./transactionVerifier.js";
 
 // Error recovery strategies (issue #1068)
@@ -899,7 +868,7 @@ export {
   resetRecoveryStats,
 } from "./errorRecovery.js";
 export type {
-  RecoveryHook,
+  RecoveryHooks as RecoveryHook,
   RecoveryStats,
   RecoveryRunnerOptions,
 } from "./errorRecovery.js";
@@ -1323,8 +1292,16 @@ export class Histogram {
 
 
 // Connection Pooling (#1136)
-export { RpcConnectionPool } from "./connectionPool.js";
-export type { ConnectionPoolConfig, PoolStats, ManagedConnection } from "./connectionPool.js";
+export { RpcConnectionPool, ConnectionPool, DEFAULT_POOL_SIZE, MAX_POOL_SIZE, DEFAULT_IDLE_TIMEOUT_MS } from "./connectionPool.js";
+export type {
+  ConnectionPoolConfig,
+  PoolStats,
+  ManagedConnection,
+  ConnectionPoolOptions,
+  ConnectionPoolStats,
+  ConnectionPoolSlotStats,
+  ConnectionLease,
+} from "./connectionPool.js";
 
 // Request Debouncing (#1137)
 export { RequestDebouncer } from "./requestDebouncer.js";
@@ -1382,3 +1359,12 @@ export type {
   PaymentAttemptRecord,
   PaymentFlowResult,
 } from "./paymentFlowRetry.js";
+
+// Lazy-loaded modules (#1175) — deferred until actually needed to keep the
+// base bundle small.
+export async function getProofModule() {
+  return import("./proof.js");
+}
+export async function getExportModule() {
+  return import("./export.js");
+}

@@ -1,5 +1,5 @@
-import { EventEmitter } from './events/eventEmitter';
-import type { TransactionEvent, TransactionEventType } from './events/types';
+import { EventEmitter } from 'node:events';
+import type { TransactionEvent, TransactionEventType } from './events/types.js';
 
 export interface TransactionRequest {
   id: string;

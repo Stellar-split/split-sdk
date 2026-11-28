@@ -420,7 +420,7 @@ export class CrossChainSettlementService {
 
     try {
       const statusResult = await adapter.getStatus(settlement.txId);
-      const previousStatus = settlement.status;
+      const previousStatus: SettlementStatus = settlement.status;
 
       settlement.status = statusResult.status;
       if (statusResult.error) {
@@ -429,9 +429,9 @@ export class CrossChainSettlementService {
       settlement.updatedAt = nowIso();
 
       // Emit transition events.
-      if (previousStatus !== "confirmed" && settlement.status === "confirmed") {
+      if ((previousStatus as string) !== "confirmed" && settlement.status === "confirmed") {
         this.emit("settlement:confirmed", { ...settlement });
-      } else if (previousStatus !== "failed" && settlement.status === "failed") {
+      } else if ((previousStatus as string) !== "failed" && settlement.status === "failed") {
         settlement.error ??= "Unknown failure";
         this.emit("settlement:failed", {
           ...(settlement as Settlement & { error: string }),
@@ -496,10 +496,11 @@ export class CrossChainSettlementService {
     event: K,
     listener: EventListener<CrossChainSettlementEvents[K]>,
   ): () => void {
-    let set = this.listeners[event];
+    let set = this.listeners[event] as Set<EventListener<CrossChainSettlementEvents[K]>> | undefined;
     if (!set) {
-      set = new Set();
-      this.listeners[event] = set as Set<EventListener<CrossChainSettlementEvents[K]>>;
+      set = new Set<EventListener<CrossChainSettlementEvents[K]>>();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (this.listeners as any)[event] = set;
     }
     (set as Set<EventListener<CrossChainSettlementEvents[K]>>).add(listener);
     return () => this.off(event, listener);

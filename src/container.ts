@@ -18,6 +18,10 @@ export interface ICacheStore<T> {
 export interface IWalletAdapter {
   getAddress(): Promise<string>;
   signTransaction(xdr: string, network: string): Promise<string>;
+  /** Human-readable adapter name (e.g. "Freighter", "Ledger"). */
+  name?: string;
+  /** Disconnect / revoke the wallet session, if the adapter supports it. */
+  disconnect?(): void | Promise<void>;
 }
 
 export interface DIContainerOptions {

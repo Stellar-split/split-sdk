@@ -123,7 +123,7 @@ export class PaymentGraphChecker {
     options?: { allowUnreachable?: boolean }
   ): Promise<GraphCheckResult> {
     const recipients = invoice.recipients || [];
-    const sourceAccount = invoice.creator || invoice.payer || "";
+    const sourceAccount = invoice.creator || "";
     const sourceAsset = this.extractAssetFromInvoice(invoice);
 
     const reachable: Recipient[] = [];

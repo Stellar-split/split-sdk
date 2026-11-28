@@ -1,10 +1,6 @@
 import { BaseClientModule } from "./BaseModule.js";
 import type { TxResult } from "../../client.js";
-import type {
-  Invoice,
-  CreateInvoiceParams,
-} from "../../types.js";
-import type { InvoiceTemplate } from "../../templateManager.js";
+import type { Invoice, InvoiceTemplate } from "../../types.js";
 
 /**
  * Module dedicated to Invoice Templates and Recurring Invoice operations.
@@ -13,23 +9,24 @@ export class TemplateModule extends BaseClientModule {
   /**
    * Saves an invoice template.
    */
-  async save(template: InvoiceTemplate): Promise<TxResult> {
-    return this.client.saveTemplate(template);
+  async save(creator: string, template: InvoiceTemplate): Promise<TxResult> {
+    return this.client.saveTemplate(creator, template);
   }
 
   /** Alias for `save`. */
-  async saveTemplate(template: InvoiceTemplate): Promise<TxResult> {
-    return this.save(template);
+  async saveTemplate(creator: string, template: InvoiceTemplate): Promise<TxResult> {
+    return this.save(creator, template);
   }
 
   /**
    * Creates a new invoice from a saved template.
    */
   async createFromTemplate(
+    creator: string,
     templateName: string,
-    overrides?: Partial<CreateInvoiceParams>
-  ): Promise<string> {
-    return this.client.createFromTemplate(templateName, overrides);
+    deadline: number
+  ): Promise<{ invoiceId: string; txHash: string }> {
+    return this.client.createFromTemplate(creator, templateName, deadline);
   }
 
   /**
@@ -69,8 +66,8 @@ export class TemplateModule extends BaseClientModule {
   async updateRecurringAmount(
     invoiceId: string,
     creator: string,
-    newAmount: bigint
+    newAmounts: bigint[]
   ): Promise<TxResult> {
-    return this.client.updateRecurringAmount(invoiceId, creator, newAmount);
+    return this.client.updateRecurringAmount(invoiceId, creator, newAmounts);
   }
 }

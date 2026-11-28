@@ -10,7 +10,7 @@
  * @see https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0012.md
  */
 
-import { StellarTomlResolver } from "@stellar/stellar-sdk";
+import { StellarToml } from "@stellar/stellar-sdk";
 import { KycNeedsInfoError } from "../types.js";
 import type { KycFields, KycDocument, KycStatus } from "../types.js";
 
@@ -101,7 +101,9 @@ export class Sep12Client {
 
     for (const doc of docs) {
       const blob =
-        doc.content instanceof Blob ? doc.content : new Blob([doc.content], { type: doc.contentType });
+        doc.content instanceof Blob
+          ? doc.content
+          : new Blob([new Uint8Array(doc.content)], { type: doc.contentType });
       form.append(doc.field, blob, doc.filename);
     }
 
@@ -185,7 +187,7 @@ export class Sep12Client {
   private async resolveKycServer(): Promise<string> {
     if (this.kycServerUrl) return this.kycServerUrl;
 
-    const toml = await StellarTomlResolver.resolve(this.homeDomain);
+    const toml = await StellarToml.Resolver.resolve(this.homeDomain);
     const kycServer = (toml.KYC_SERVER as string | undefined) ?? (toml.TRANSFER_SERVER_SEP0024 as string | undefined);
     if (!kycServer) {
       throw new Error(`No KYC_SERVER found in stellar.toml for ${this.homeDomain}`);

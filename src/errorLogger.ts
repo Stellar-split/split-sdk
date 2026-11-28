@@ -364,7 +364,7 @@ export class MultiLogStorage implements LogStorage {
 
   getLogs(filter?: LogFilter): LogEntry[] {
     if (this.sinks.length === 0) return [];
-    return this.sinks[0].getLogs(filter);
+    return this.sinks[0]!.getLogs(filter);
   }
 
   clear(): void {
@@ -374,12 +374,12 @@ export class MultiLogStorage implements LogStorage {
   }
 
   count(): number {
-    return this.sinks.length > 0 ? this.sinks[0].count() : 0;
+    return this.sinks.length > 0 ? this.sinks[0]!.count() : 0;
   }
 
   getStats(): ErrorLogStats {
     return this.sinks.length > 0
-      ? this.sinks[0].getStats()
+      ? this.sinks[0]!.getStats()
       : { total: 0, byLevel: { debug: 0, info: 0, warn: 0, error: 0, fatal: 0 }, oldestTimestamp: undefined, newestTimestamp: undefined, spanMs: 0 };
   }
 }

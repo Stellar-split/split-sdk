@@ -39,6 +39,11 @@ export class LobstrAdapter implements WalletAdapter {
     this.connectionTimeoutMs = options?.connectionTimeoutMs ?? 60_000;
   }
 
+  /** Check whether the LOBSTR extension is available in the current environment. */
+  isAvailable(): boolean {
+    return typeof window !== "undefined" && !!window.lobstr;
+  }
+
   async connect(): Promise<string> {
     if (!window.lobstr) {
       throw new Error("LOBSTR wallet not installed");

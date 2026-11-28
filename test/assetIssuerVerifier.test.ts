@@ -3,14 +3,18 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Mock @stellar/stellar-sdk at module level
 vi.mock("@stellar/stellar-sdk", () => {
   return {
-    Server: vi.fn(),
-    StellarTomlResolver: {
-      resolve: vi.fn(),
+    Horizon: { Server: vi.fn() },
+    StellarToml: {
+      Resolver: {
+        resolve: vi.fn(),
+      },
     },
   };
 });
 
-import { Server, StellarTomlResolver } from "@stellar/stellar-sdk";
+import { Horizon, StellarToml } from "@stellar/stellar-sdk";
+const Server = Horizon.Server;
+const StellarTomlResolver = StellarToml.Resolver;
 import { verifyAssetIssuer } from "../src/assetIssuerVerifier.js";
 
 const ISS = "GISSUER1234567890123456789012345678901234567";

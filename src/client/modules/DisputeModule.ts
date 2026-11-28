@@ -59,23 +59,17 @@ export class DisputeModule extends BaseClientModule {
   }
 
   /**
-   * Resolves a dispute with a final ruling.
+   * Resolves a dispute with a final ruling. Forwards all arguments as given
+   * to `client.resolveDispute` (supports both the positional
+   * `(invoiceId, arbiter)` form and legacy object-based callers).
    */
-  async resolve(params: {
-    invoiceId: string;
-    action: "release" | "refund";
-    caller: string;
-  }): Promise<DisputeResult> {
-    return this.client.resolveDispute(params);
+  async resolve(...args: unknown[]): Promise<DisputeResult> {
+    return (this.client.resolveDispute as (...a: unknown[]) => Promise<DisputeResult>)(...args);
   }
 
   /** Alias for `resolve`. */
-  async resolveDispute(params: {
-    invoiceId: string;
-    action: "release" | "refund";
-    caller: string;
-  }): Promise<DisputeResult> {
-    return this.resolve(params);
+  async resolveDispute(...args: unknown[]): Promise<DisputeResult> {
+    return this.resolve(...args);
   }
 
   /**
@@ -95,18 +89,18 @@ export class DisputeModule extends BaseClientModule {
    */
   async addEvidence(
     invoiceId: string,
-    evidenceUri: string,
-    submitter: string
-  ): Promise<DisputeResult> {
-    return this.client.addDisputeEvidence(invoiceId, evidenceUri, submitter);
+    evidenceCid: string,
+    fileName?: string
+  ): Promise<{ txHash: string; cid: string }> {
+    return this.client.addDisputeEvidence(invoiceId, evidenceCid, fileName);
   }
 
   /** Alias for `addEvidence`. */
   async addDisputeEvidence(
     invoiceId: string,
-    evidenceUri: string,
-    submitter: string
-  ): Promise<DisputeResult> {
-    return this.addEvidence(invoiceId, evidenceUri, submitter);
+    evidenceCid: string,
+    fileName?: string
+  ): Promise<{ txHash: string; cid: string }> {
+    return this.addEvidence(invoiceId, evidenceCid, fileName);
   }
 }

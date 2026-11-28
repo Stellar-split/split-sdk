@@ -410,7 +410,7 @@ export class EscrowVaultManager extends TypedEventEmitter<EscrowEventMap> {
   ): Promise<string> {
     try {
       const ops = await server.operations().forTransaction(txHash).call();
-      for (const op of ops.records as Array<Record<string, unknown>>) {
+      for (const op of ops.records as unknown as Array<Record<string, unknown>>) {
         if (
           typeof op["balance_id"] === "string" &&
           op["balance_id"].length > 0
@@ -432,7 +432,7 @@ export class EscrowVaultManager extends TypedEventEmitter<EscrowEventMap> {
   private async _checkClaimedOnChain(vault: EscrowVault): Promise<boolean> {
     const server = this._getServer();
     try {
-      await server.claimableBalance(vault.balanceId).call();
+      await server.claimableBalances().claimableBalance(vault.balanceId).call();
       // Balance still exists → not claimed
       return false;
     } catch {

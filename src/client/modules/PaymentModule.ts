@@ -4,14 +4,16 @@ import type {
   SimulationResult,
   SimulatePayResult,
   Payment,
-  PaymentReceipt,
   InvoiceReceipt,
   PaymentReconciliationReport,
-  ClaimableRefundEntry,
   BatchPayment,
-  PaymentValidationResult,
-  PaymentValidationOptions,
+  PayWithAttestationParams,
+  AttestationPaymentReceipt,
+  ReferralPayResult,
 } from "../../types.js";
+import type { PaymentReceipt } from "../../receipt.js";
+import type { PaymentValidation } from "../../paymentValidator.js";
+import type { ClaimableRefundEntry, ClaimableRefundResult } from "../../claimableBalanceFallback.js";
 import type { TxResult } from "../../client.js";
 import type { BatchVerificationResult } from "../../batchVerifier.js";
 import { withTrace } from "../../tracing.js";
@@ -57,18 +59,16 @@ export class PaymentModule extends BaseClientModule {
   async validate(
     invoiceId: string,
     amount: bigint,
-    options?: PaymentValidationOptions
-  ): Promise<PaymentValidationResult> {
-    return this.client.validatePayment(invoiceId, amount, options);
+  ): Promise<PaymentValidation> {
+    return this.client.validatePayment(invoiceId, amount);
   }
 
   /** Alias for `validate`. */
   async validatePayment(
     invoiceId: string,
     amount: bigint,
-    options?: PaymentValidationOptions
-  ): Promise<PaymentValidationResult> {
-    return this.validate(invoiceId, amount, options);
+  ): Promise<PaymentValidation> {
+    return this.validate(invoiceId, amount);
   }
 
   /**
@@ -102,31 +102,23 @@ export class PaymentModule extends BaseClientModule {
    */
   async refund(
     invoiceId: string,
-    caller?: string,
-    options?: { fallbackToClaimableBalance?: boolean }
-  ): Promise<TxResult>;
-  async refund(
-    invoiceId: string,
-    caller: string,
-    options: { fallbackToClaimableBalance: true }
-  ): Promise<TxResult | { txHash: string; claimableBalanceId: string }>;
-  async refund(
-    invoiceId: string,
-    caller?: string,
-    options?: { fallbackToClaimableBalance?: boolean }
-  ): Promise<TxResult | { txHash: string; claimableBalanceId: string }> {
+    creator: string,
+    payerAddress?: string,
+    options?: { simulate?: boolean }
+  ): Promise<SimulationResult | { txHash: string; fallback: false } | ClaimableRefundResult> {
     return withTrace("refund", () =>
-      this.client.refundInvoice(invoiceId, caller as any, options as any)
+      this.client.refundInvoice(invoiceId, creator, payerAddress, options as any)
     );
   }
 
   /** Alias for `refund`. */
   async refundInvoice(
     invoiceId: string,
-    caller?: string,
-    options?: { fallbackToClaimableBalance?: boolean }
-  ): Promise<TxResult | { txHash: string; claimableBalanceId: string }> {
-    return this.refund(invoiceId, caller as any, options as any);
+    creator: string,
+    payerAddress?: string,
+    options?: { simulate?: boolean }
+  ): Promise<SimulationResult | { txHash: string; fallback: false } | ClaimableRefundResult> {
+    return this.refund(invoiceId, creator, payerAddress, options);
   }
 
   /**
@@ -158,7 +150,7 @@ export class PaymentModule extends BaseClientModule {
   /**
    * Reroutes an invoice recipient to a new address.
    */
-  async rerouteRecipient(invoiceId: string, oldAddress: string, newAddress: string): Promise<TxResult> {
+  async rerouteRecipient(invoiceId: string, oldAddress: string, newAddress: string): Promise<void> {
     return this.client.rerouteRecipient(invoiceId, oldAddress, newAddress);
   }
 
@@ -177,25 +169,15 @@ export class PaymentModule extends BaseClientModule {
   /**
    * Submits a payment accompanied by an attestation.
    */
-  async payWithAttestation(params: {
-    invoiceId: string;
-    amount: bigint;
-    payer: string;
-    attestationStatement: string;
-  }): Promise<TxResult> {
+  async payWithAttestation(params: PayWithAttestationParams): Promise<AttestationPaymentReceipt> {
     return withTrace("payWithAttestation", () => this.client.payWithAttestation(params));
   }
 
   /**
    * Submits a payment with referral attribution.
    */
-  async payWithReferral(params: {
-    invoiceId: string;
-    amount: bigint;
-    payer: string;
-    referrer: string;
-  }): Promise<TxResult> {
-    return withTrace("payWithReferral", () => this.client.payWithReferral(params));
+  async payWithReferral(invoiceId: string, amount: bigint, referrer: string): Promise<ReferralPayResult> {
+    return withTrace("payWithReferral", () => this.client.payWithReferral(invoiceId, amount, referrer));
   }
 
   /**

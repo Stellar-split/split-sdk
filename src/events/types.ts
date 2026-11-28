@@ -71,3 +71,28 @@ export interface EventEmitter {
   /** Number of listeners registered for an event. */
   listenerCount(event: EventName): number;
 }
+
+/** Lifecycle step/event name for {@link TransactionBuilder} and {@link TransactionSigner}. */
+export type TransactionEventType =
+  | "created"
+  | "simulated"
+  | "signed"
+  | "submitted"
+  | "confirmed"
+  | "transaction.created"
+  | "transaction.simulated"
+  | "transaction.signed"
+  | "transaction.submitted"
+  | "transaction.confirmed"
+  | "transaction.error"
+  | "error";
+
+/** A single transaction lifecycle event, as emitted on the plain `EventEmitter` channel. */
+export interface TransactionEvent {
+  type: TransactionEventType;
+  transactionId: string;
+  timestamp: number | string;
+  success?: boolean;
+  error?: unknown;
+  details?: Record<string, unknown>;
+}

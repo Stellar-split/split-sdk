@@ -73,11 +73,11 @@ export async function executeInParallel<T>(
       })
     );
     for (let j = 0; j < settled.length; j++) {
-      const s = settled[j];
+      const s = settled[j]!;
       if (s.status === "fulfilled") {
-        results.push({ id: chunk[j].id, status: "fulfilled", value: s.value.value, durationMs: s.value.durationMs });
+        results.push({ id: chunk[j]!.id, status: "fulfilled", value: s.value.value, durationMs: s.value.durationMs });
       } else {
-        results.push({ id: chunk[j].id, status: "rejected", error: s.reason as Error, durationMs: 0 });
+        results.push({ id: chunk[j]!.id, status: "rejected", error: s.reason as Error, durationMs: 0 });
       }
     }
   }

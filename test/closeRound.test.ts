@@ -4,12 +4,28 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { Keypair, StrKey, nativeToScVal } from "@stellar/stellar-sdk";
 import { StellarSplitClient } from "../src/client.js";
+
+// `rpc.assembleTransaction` is a non-configurable getter on the real SDK
+// namespace, so it can't be `vi.spyOn`-ed directly; override it via a
+// partial module mock instead.
+vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@stellar/stellar-sdk")>();
+  return {
+    ...actual,
+    rpc: {
+      ...actual.rpc,
+      assembleTransaction: vi.fn(),
+    },
+  };
+});
 import {
   RoundNotEndedError,
   InvoiceNotFoundError,
   SimulationFailedError,
 } from "../src/errors.js";
 import type { RoundCloseResult, RoundInfo } from "../src/types.js";
+
+const FAKE_ACCOUNT_ID = Keypair.random().publicKey();
 
 function makeClient() {
   return new StellarSplitClient({
@@ -33,7 +49,7 @@ describe("closeRound (#878)", () => {
 
     vi.spyOn(client as any, "server", "get").mockReturnValue({
       getAccount: vi.fn().mockResolvedValue({
-        accountId: () => "GABC",
+        accountId: () => FAKE_ACCOUNT_ID,
         sequenceNumber: () => "1",
         incrementSequenceNumber: vi.fn(),
       }),
@@ -56,7 +72,7 @@ describe("closeRound (#878)", () => {
 
     // Mock assembleTransaction + signTransaction
     const { rpc: SorobanRpc } = await import("@stellar/stellar-sdk");
-    vi.spyOn(SorobanRpc, "assembleTransaction" as keyof typeof SorobanRpc).mockReturnValue({
+    (SorobanRpc.assembleTransaction as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
       build: () => ({ toXDR: () => "signed-xdr" }),
     } as any);
 
@@ -77,7 +93,7 @@ describe("closeRound (#878)", () => {
 
     vi.spyOn(client as any, "server", "get").mockReturnValue({
       getAccount: vi.fn().mockResolvedValue({
-        accountId: () => "GABC",
+        accountId: () => FAKE_ACCOUNT_ID,
         sequenceNumber: () => "1",
         incrementSequenceNumber: vi.fn(),
       }),
@@ -94,7 +110,7 @@ describe("closeRound (#878)", () => {
 
     vi.spyOn(client as any, "server", "get").mockReturnValue({
       getAccount: vi.fn().mockResolvedValue({
-        accountId: () => "GABC",
+        accountId: () => FAKE_ACCOUNT_ID,
         sequenceNumber: () => "1",
         incrementSequenceNumber: vi.fn(),
       }),
@@ -111,7 +127,7 @@ describe("closeRound (#878)", () => {
 
     vi.spyOn(client as any, "server", "get").mockReturnValue({
       getAccount: vi.fn().mockResolvedValue({
-        accountId: () => "GABC",
+        accountId: () => FAKE_ACCOUNT_ID,
         sequenceNumber: () => "1",
         incrementSequenceNumber: vi.fn(),
       }),
@@ -130,7 +146,7 @@ describe("getRoundInfo (#878)", () => {
 
     vi.spyOn(client as any, "server", "get").mockReturnValue({
       getAccount: vi.fn().mockResolvedValue({
-        accountId: () => "GABC",
+        accountId: () => FAKE_ACCOUNT_ID,
         sequenceNumber: () => "1",
         incrementSequenceNumber: vi.fn(),
       }),
@@ -157,7 +173,7 @@ describe("getRoundInfo (#878)", () => {
 
     vi.spyOn(client as any, "server", "get").mockReturnValue({
       getAccount: vi.fn().mockResolvedValue({
-        accountId: () => "GABC",
+        accountId: () => FAKE_ACCOUNT_ID,
         sequenceNumber: () => "1",
         incrementSequenceNumber: vi.fn(),
       }),

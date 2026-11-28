@@ -22,7 +22,7 @@
 
 import type { CollectionPage, HorizonPaginatorOptions } from "./types.js";
 import { buildCursorKey, getDefaultCursorStore } from "./cursorTracker.js";
-import { SdkError } from "./errors.js";
+import { SdkError, SdkErrorCode } from "./errors.js";
 
 /** Default namespace for cursor store keys. */
 const DEFAULT_NAMESPACE = "horizon";
@@ -194,7 +194,7 @@ export async function collectAll<T>(
  * @param items - The array to paginate.
  * @param opts - Pagination options: `page` (1-indexed) and `pageSize` (1-200).
  * @returns An object with the page data and pagination metadata.
- * @throws {SdkError} with code `INVALID_RECIPIENT` if `pageSize` is outside
+ * @throws {SdkError} with code `INVALID_INPUT` if `pageSize` is outside
  *   the range [1, 200].
  *
  * @example
@@ -218,7 +218,7 @@ export function paginateArray<T>(
   const { page, pageSize } = opts;
 
   if (pageSize < 1 || pageSize > 200) {
-    throw new SdkError("pageSize must be between 1 and 200", "INVALID_RECIPIENT");
+    throw new SdkError("pageSize must be between 1 and 200", SdkErrorCode.INVALID_INPUT);
   }
 
   const total = items.length;

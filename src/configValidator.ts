@@ -9,8 +9,6 @@ export interface ConfigValidationErrorType {
   severity: "error" | "warning";
 }
 
-export type ConfigValidationErrorType = ConfigValidationIssue;
-
 export interface ConfigValidation {
   valid: boolean;
   errors: ConfigValidationErrorType[];
@@ -51,6 +49,7 @@ const KNOWN_CONFIG_KEYS = new Set([
   "circuitBreaker",
   "optimisticCache",
   "offlineQueue",
+  "logger",
 ]);
 
 export class UnknownConfigKeyError extends StellarSplitError {

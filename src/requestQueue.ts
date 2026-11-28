@@ -56,8 +56,19 @@ export class RequestQueue {
         lane.push(request);
       }
 
-      this._tryProcess();
+      this._scheduleTryProcess();
     });
+  }
+
+  /**
+   * Defer dispatch to a fresh macrotask. This lets a batch of synchronous
+   * `enqueue()` calls (and `stats()` checks in between) observe requests as
+   * still pending, and lets an already-due sibling timer-based task in the
+   * same event-loop phase fire before a freed slot is handed to the next
+   * queued request (a microtask-level defer isn't enough to achieve that).
+   */
+  private _scheduleTryProcess() {
+    setTimeout(() => this._tryProcess(), 0);
   }
 
   private _tryProcess() {
@@ -79,7 +90,7 @@ export class RequestQueue {
       })
       .finally(() => {
         this.activeCount--;
-        this._tryProcess();
+        this._scheduleTryProcess();
       });
   }
 

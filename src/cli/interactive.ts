@@ -88,7 +88,7 @@ export function tokenize(input: string): string[] {
   let current = '';
   let quote: string | null = null;
   for (let i = 0; i < input.length; i++) {
-    const ch = input[i];
+    const ch = input[i]!;
     if (quote) {
       if (ch === quote) {
         quote = null;
@@ -143,7 +143,7 @@ export function buildCommands(): Command[] {
           ctx.out('Usage: call <method> [jsonArgs]');
           return;
         }
-        const [method, rawArgs] = args;
+        const [method, rawArgs] = args as [string, string | undefined];
         const fn = ctx.sdk[method];
         if (typeof fn !== 'function') {
           ctx.out(`Unknown SDK method: ${method}`);
