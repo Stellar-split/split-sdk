@@ -44,10 +44,11 @@ describe('withRetry', () => {
         baseDelayMs: 100,
         retryIf: (err) => !(err instanceof ValidationError),
       });
+      const assertion = expect(promise).rejects.toBe(error);
 
       await vi.runAllTimersAsync();
 
-      await expect(promise).rejects.toBe(error);
+      await assertion;
       expect(fn).toHaveBeenCalledTimes(1);
     });
   });
@@ -108,10 +109,11 @@ describe('withRetry', () => {
         .mockRejectedValueOnce(errors[2]);
 
       const promise = withRetry(fn, { maxAttempts: 3, baseDelayMs: 50 });
+      const assertion = expect(promise).rejects.toBe(errors[2]);
 
       await vi.runAllTimersAsync();
 
-      await expect(promise).rejects.toBe(errors[2]);
+      await assertion;
       expect(fn).toHaveBeenCalledTimes(3);
     });
   });
@@ -217,10 +219,11 @@ describe('executeWithRetry', () => {
         maxAttempts: 3,
         baseDelayMs: 50,
       });
+      const assertion = expect(promise).rejects.toBe(errors[2]);
 
       await vi.runAllTimersAsync();
 
-      await expect(promise).rejects.toBe(errors[2]);
+      await assertion;
       expect(fn).toHaveBeenCalledTimes(3);
     });
   });
@@ -300,10 +303,11 @@ describe('executeWithRetry', () => {
         baseDelayMs: 50,
         retryIf: () => true,
       });
+      const assertion = expect(promise).rejects.toBe(error);
 
       await vi.runAllTimersAsync();
 
-      await expect(promise).rejects.toBe(error);
+      await assertion;
       expect(fn).toHaveBeenCalledTimes(3);
     });
 
@@ -316,10 +320,11 @@ describe('executeWithRetry', () => {
         baseDelayMs: 50,
         retryIf: () => false,
       });
+      const assertion = expect(promise).rejects.toBe(error);
 
       await vi.runAllTimersAsync();
 
-      await expect(promise).rejects.toBe(error);
+      await assertion;
       expect(fn).toHaveBeenCalledTimes(1);
     });
   });
